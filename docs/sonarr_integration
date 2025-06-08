@@ -1,0 +1,190 @@
+# Sonarr Integration
+
+Episeerr integrates deeply with Sonarr through tags, webhooks, and release profiles to provide seamless episode management.
+
+## Required: Delayed Release Profile
+
+**Critical Setup:** Create a delayed release profile to prevent unwanted downloads during episode selection.
+
+### Creating the Delayed Release Profile
+
+1. **Go to Sonarr:** Settings → Profiles → Release Profiles
+2. **Add New Profile:**
+   - **Name:** "Episeerr Episode Selection Delay"
+   - **Delay:** Set to a very high number like `10519200` (about 20 years)
+   - **Tags:** Select `episeerr-select` tag
+   - **Must Not Contain:** Leave empty
+   - **Must Contain:** Leave empty
+
+3. **Save the profile**
+
+### Why This Is Needed
+
+When using episode selection (`episeerr_select` tag):
+1. Series is added to Sonarr with all episodes monitored
+2. Sonarr immediately tries to download everything
+3. Episeerr unmonitors episodes and cancels downloads
+4. **Race condition:** Downloads might start before Episeerr processes
+
+The delayed release profile **prevents any downloads** for series with the `episeerr_select` tag, giving Episeerr time to:
+- Unmonitor unwanted episodes
+- Cancel automatic downloads  
+- Wait for user episode selection
+
+### Profile Settings Explained
+
+- **High delay (10519200 minutes):** Effectively prevents all downloads
+- **episeerr-select tag:** Only applies to episode selection workflow
+- **No bypass:** Ensures the delay is always enforced
+
+## Episeerr Tags
+
+Episeerr uses specific tags to control automation:
+
+### episeerr_default
+**Purpose:** Force assignment to default rule  
+**Behavior:** 
+- Series is immediately assigned to the default rule
+- Episodes are managed according to default rule settings
+- Webhook processes the series automatically
+
+**When to Use:**
+- Request series that should follow standard automation
+- Override episode selection to use default rule instead
+- Ensure consistent rule application
+
+### episeerr_select  
+**Purpose:** Trigger episode selection workflow
+**Behavior:**
+- All episodes are unmonitored initially
+- Series appears in Episeerr pending requests
+- User manually selects specific episodes
+- Only selected episodes are monitored
+
+**When to Use:**
+- Want to choose specific episodes manually
+- Limited storage requiring precision
+- Testing new shows with just pilot episodes
+
+### No Tag
+**Purpose:** Standard Sonarr behavior
+**Behavior:** 
+- **No Episeerr management** - series is completely ignored
+- **Normal Sonarr automation** applies
+- **Must manually assign** in Episeerr if you want rule-based management
+
+**When to Use:**
+- Series you want managed purely by Sonarr
+- Shows you don't want Episeerr to touch
+- Standard media management without automation
+
+## Sonarr Webhook Setup
+
+The Sonarr webhook enables automatic tag processing:
+
+### Webhook Configuration
+1. **Sonarr:** Settings → Connect → Add Webhook
+2. **Settings:**
+   - **URL:** `http://your-episeerr:5002/sonarr-webhook`
+   - **Method:** POST
+   - **Triggers:** Enable "On Series Add"
+   - **Tags:** Leave empty (processes all series)
+
+### What the Webhook Does
+
+When a series is added to Sonarr:
+1. **Checks for Episeerr tags** (`episeerr_default`, `episeerr_select`)
+2. **Processes based on tag:**
+   - `episeerr_default` → Assigns to default rule, starts automation
+   - `episeerr_select` → Unmonitors episodes, creates selection request
+   - No tag → Assigns to default rule
+3. **Removes processed tags** to prevent reprocessing
+
+## Tag-Based Workflows
+
+### Standard Request (No Tag)
+```
+Jellyseerr Request → Sonarr → Normal Sonarr Behavior (No Episeerr Management)
+```
+
+### Forced Default (episeerr_default tag)  
+```
+Tagged Request → Sonarr → Webhook → Default Rule Assignment → Automation
+```
+
+### Episode Selection (episeerr_select tag)
+```
+Tagged Request → Sonarr → Webhook → Unmonitor All → Pending Request → User Selection
+```
+
+## Integration with Request Systems
+
+### Jellyseerr/Overseerr
+- **Normal requests:** Get default rule
+- **Requests with episeerr_select tag:** Trigger episode selection
+- **Automatic cancellation:** Original request cancelled after processing
+
+### Manual Sonarr Additions
+- **With tags:** Processed according to tag behavior
+- **Without tags:** Get default rule (if webhook configured)
+
+## Quality Profiles and Episeerr
+
+### Episeerr and Quality Settings
+- **Episeerr doesn't change** quality profiles
+- **Respects existing** Sonarr quality settings
+- **Works with any** quality profile configuration
+
+### Language Profiles
+- **No interference** with language settings
+- **Maintains** existing language profile assignments
+- **Compatible** with multi-language setups
+
+## Monitoring Behavior
+
+### How Episeerr Manages Monitoring
+- **Unmonitors** episodes outside the "keep" range
+- **Monitors** new episodes based on "get" setting
+- **Preserves** manual monitoring changes (until next rule application)
+
+### Manual Override
+- **Temporary:** Manual monitoring changes are respected until next webhook
+- **Permanent:** Remove series from Episeerr rules to prevent override
+
+## Import Lists and Episeerr
+
+### Compatibility
+- **Works with** Sonarr import lists
+- **Tags applied** during import list processing
+- **Default rule** assigned to import list additions
+
+### Best Practices
+- **Configure default rule** appropriately for bulk imports
+- **Use tags sparingly** with import lists (can create many pending requests)
+- **Monitor import** list behavior with Episeerr logs
+
+## Troubleshooting Integration
+
+### Tags Not Processing
+- **Check webhook** is configured and working
+- **Verify tag spelling** (case sensitive)
+- **Review Episeerr logs** for webhook events
+
+### Downloads Still Starting
+- **Check delayed release profile** is configured correctly
+- **Verify episeerr_select tag** is applied before adding to Sonarr
+- **Review Sonarr queue** for stuck downloads
+
+### Series Not Getting Default Rule
+- **Ensure default rule** is set in Episeerr
+- **Check webhook** is receiving series additions
+- **Verify no conflicting** manual assignments
+
+### Performance Issues
+- **Large libraries:** Consider more selective rule assignment
+- **High activity:** Reduce webhook processing frequency
+- **Resource limits:** Monitor Episeerr and Sonarr resource usage
+
+---
+
+**Next:** [Cleanup System Guide](cleanup-guide.md) - Automatic library maintenance
