@@ -5,6 +5,7 @@
 ## What Episeerr Does
 
 Episeerr gives you precise control over your TV episodes with three separate systems that work together or independently, plus a global storage gate that keeps your library size under control.
+It's like the difference between a public library (keep everything for everyone) vs. a personal reading list (just what you actually want when you want it.
 
 ### 🎯 **Three Solutions + Smart Storage**
 
@@ -12,9 +13,10 @@ Episeerr gives you precise control over your TV episodes with three separate sys
 |----------|---------|-------------|
 | **🎬 Granular Episode Requests** | Select exactly which episodes you want | Want specific episodes, not full seasons |
 | **⚡ Viewing-Based Rules** | Auto-manage episodes when you watch | Want next episode ready, cleanup watched ones |
-It's like the difference between a public library (keep everything for everyone) vs. a personal reading list (just what you actually want to read right now.
+
 | **⏰ Time-Based Cleanup** | Clean up based on age and activity | Want automatic library maintenance |
 | **💾 Global Storage Gate** | One threshold controls all cleanup | Want simple, safe storage management |
+
 
 **Use any combination** - or just one solution that fits your needs.
 
