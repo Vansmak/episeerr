@@ -1,6 +1,7 @@
 # Episeerr
 
 **Smart episode management system for Sonarr** - Three independent automation solutions with intelligent storage management.
+[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/vansmak)
 
 ## What Episeerr Does
 
