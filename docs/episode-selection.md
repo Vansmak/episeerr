@@ -148,4 +148,4 @@ If you select **multiple episodes** or **non-pilot episodes**:
 
 ---
 
-**Next:** [Cleanup System Guide](cleanup-guide.md) - Automatic library maintenance
+**Next:** [Cleanup System Guide](global_storage_gate_guide.md) - Automatic library maintenance
