@@ -401,15 +401,32 @@ def trigger_episode_search_in_sonarr(episode_ids):
     """Trigger a search for specified episodes in Sonarr."""
     if not episode_ids:
         return
-        
-    url = f"{SONARR_URL}/api/v3/command"
-    headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
-    data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
-    response = requests.post(url, json=data, headers=headers)
-    if response.ok:
-        logger.info("Episode search command sent to Sonarr successfully.")
+
+    check_url = f"{SONARR_URL}/api/v3/episode/{episode_ids}"
+    headers = {'X-Api-Key': SONARR_API_KEY}
+
+    try:
+        check_response = requests.get(check_url, headers=headers)
+        episode_data = check_response.json()
+
+        if episode_data.get('hasFile'):
+            logger.info(f"Episode with ID {episode_ids} already exists in Sonarr's library. Skipping search command.")
+            return
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error checking episode existence with Sonarr for ID {episode_ids}: {e}")
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during episode existence check for ID {episode_ids}: {e}")
+
+    search_url = f"{SONARR_URL}/api/v3/command"
+    search_data = {"name": "EpisodeSearch", "episodeIds": [episode_ids]}
+    search_headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
+
+    search_response = requests.post(search_url, json=search_data, headers=search_headers)
+    if search_response.ok:
+        logger.info(f"Episode search command sent to Sonarr successfully for episode ID {episode_ids}.")
     else:
-        logger.error(f"Failed to send episode search command. Response: {response.text}")
+        logger.error(f"Failed to send episode search command for ID {episode_ids}. Response: {search_response.text}")
 
 def unmonitor_episodes(episode_ids):
     """Unmonitor specified episodes in Sonarr."""
