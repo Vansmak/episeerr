@@ -52,6 +52,9 @@ os.makedirs(REQUESTS_DIR, exist_ok=True)
 LAST_PROCESSED_FILE = os.path.join(os.getcwd(), 'data', 'last_processed.json')
 os.makedirs(os.path.dirname(LAST_PROCESSED_FILE), exist_ok=True)
 
+LAST_PROCESSED_JELLYFIN_EPISODES = {}
+LAST_PROCESSED_LOCK = Lock()
+
 # Setup logging
 log_file = os.getenv('LOG_PATH', os.path.join(os.getcwd(), 'logs', 'app.log'))
 log_level = logging.INFO
@@ -1997,6 +2000,18 @@ def handle_jellyfin_webhook():
                         season = data.get('SeasonNumber')
                         episode = data.get('EpisodeNumber')
                         if all([series_name, season is not None, episode is not None]):
+                            episode_key = f"{series_name}|{season}|{episode}"
+                            current_time = time.time()
+                            five_minutes_ago = current_time - (5 * 60)
+
+                            with LAST_PROCESSED_LOCK:
+                                last_processed_time = LAST_PROCESSED_JELLYFIN_EPISODES.get(episode_key)
+
+                                if last_processed_time and last_processed_time > five_minutes_ago:
+                                    app.logger.info(f"Ignoring duplicate Jellyfin webhook for {series_name} S{season}E{episode} within 5 minutes.")
+                                else:
+                                    LAST_PROCESSED_JELLYFIN_EPISODES[episode_key] = current_time
+
                             app.logger.info(f"Processing Jellyfin episode: {series_name} S{season}E{episode}")
                             jellyfin_data = {
                                 "server_title": series_name,
