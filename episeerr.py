@@ -2009,6 +2009,7 @@ def handle_jellyfin_webhook():
 
                                 if last_processed_time and last_processed_time > five_minutes_ago:
                                     app.logger.info(f"Ignoring duplicate Jellyfin webhook for {series_name} S{season}E{episode} within 5 minutes.")
+                                    return jsonify({"status": "ignored", "reason": "duplicate within 5 minutes"}), 200
                                 else:
                                     LAST_PROCESSED_JELLYFIN_EPISODES[episode_key] = current_time
 
