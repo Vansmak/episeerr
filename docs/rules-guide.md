@@ -9,7 +9,7 @@ Automatic "next episode ready when you watch" system. **Assumes linear viewing**
 **Tautulli (Plex)**:
 1. Tautulli → Settings → Notification Agents → Webhook
 2. **URL**: `http://your-episeerr:5002/webhook`  
-3. **Triggers**: Playback Stop
+3. **Triggers**: Watched
 4. **JSON Data**:
 ```json
 {
@@ -97,3 +97,4 @@ Action: Search
 **Episodes not updating**: Check webhook setup and logs  
 **Wrong episodes**: Verify rule settings match your viewing pattern  
 **Series not managed**: Ensure series is assigned to a rule
+
