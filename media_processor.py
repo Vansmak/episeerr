@@ -362,16 +362,16 @@ def get_series_id(series_name):
                 return series['id']
         
         # 3. Find best partial match (longest title wins)
-    partial_matches = []
-    for series in series_list:
-        if better_partial_match(series_name, series['title']):
-            partial_matches.append(series)
-    
-    if partial_matches:
-        # Sort by title length descending - longer titles are more specific
-        best_match = max(partial_matches, key=lambda s: len(s['title']))
-        logger.info(f"Found best partial match: '{best_match['title']}' matches '{series_name}'")
-        return best_match['id']
+        partial_matches = []
+        for series in series_list:
+            if better_partial_match(series_name, series['title']):
+                partial_matches.append(series)
+        
+        if partial_matches:
+            # Sort by title length descending - longer titles are more specific
+            best_match = max(partial_matches, key=lambda s: len(s['title']))
+            logger.info(f"Found best partial match: '{best_match['title']}' matches '{series_name}'")
+            return best_match['id']
         
         # 4. Check alternate titles
         for series in series_list:
