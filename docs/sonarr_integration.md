@@ -11,7 +11,7 @@ Episeerr works with Sonarr through tags and webhooks. Most integration is automa
 2. **Settings:**
    - **Name:** "Episeerr Episode Selection Delay"
    - **Delay:** `10519200` (20 years - effectively prevents downloads)
-   - **Tags:** `episeerr-select`
+   - **Tags:** `episeerr_select`
 3. **Save**
 
 **Why needed:** Prevents Sonarr from downloading everything while you're selecting specific episodes.
@@ -78,5 +78,6 @@ Add with episeerr_select tag → Episodes unmonitored → Selection interface �
 - Check that webhook received the series addition
 
 ---
+
 
 **Next:** [Episode Selection Guide](episode-selection.md) - Choose specific episodes manually
