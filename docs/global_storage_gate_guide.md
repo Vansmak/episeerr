@@ -16,16 +16,19 @@ Automatic cleanup based on time and viewing activity. **Completely optional** - 
 **All optional - use any combination:**
 
 ### Grace Watched (Collection Rotation)
+
 - **Days before kept episodes expire**
 - Example: `7` = Your watched episodes expire after 7 days of no series activity
 - Use for: Making room for new content
 
-### Grace Unwatched (Watch Deadlines)  
+### Grace Unwatched (Watch Deadlines)
+
 - **Days before unwatched episodes expire**
 - Example: `14` = New episodes have 2 weeks to be watched or deleted
 - Use for: Staying current, preventing backlog
 
 ### Dormant (Abandoned Series)
+
 - **Days before complete series cleanup**
 - Example: `60` = If no activity for 2 months, clean when storage is low
 - Use for: Reclaiming space from shows you stopped watching
@@ -34,21 +37,24 @@ Automatic cleanup based on time and viewing activity. **Completely optional** - 
 ## Example Rule Configurations
 
 ### Standard Show
-```
+
+```log
 Grace Watched: 7 days
 Grace Unwatched: 14 days  
 Dormant: 30 days
 ```
 
 ### Important Show (Protected)
-```
+
+```log
 Grace Watched: empty
 Grace Unwatched: empty
 Dormant: empty
 ```
 
 ### Current Show (Pressure to Stay Current)
-```
+
+```log
 Grace Watched: empty
 Grace Unwatched: 7 days
 Dormant: 60 days

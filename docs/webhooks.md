@@ -5,11 +5,13 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 ## When You Need Webhooks
 
 ### ❌ **Skip Webhooks If:**
+
 - You only want episode selection
 - You prefer manual episode management
 - You don't want viewing-based automation
 
 ### ✅ **Use Webhooks If:**
+
 - You want next episode ready when you watch
 - You want automatic episode management
 - You want grace periods tied to viewing activity
@@ -31,7 +33,9 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 {
   "plex_title": "{show_name}",
   "plex_season_num": "{season_num}",
-  "plex_ep_num": "{episode_num}"
+  "plex_ep_num": "{episode_num}",
+  "thetvdb_id": "{thetvdb_id}",
+  "themoviedb_id": "{themoviedb_id}"
 }
 ```
 
@@ -65,11 +69,13 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 4. **Click Save**
 
 **Important Notes:**
+
 - Episeerr processes playback events when progress is between 45-55% of the episode (mid-point)
 - Make sure your server can reach your Episeerr instance on port 5002
 - Episeerr will automatically manage episodes according to your configured rules when playback events are received
 
 **Troubleshooting:**
+
 - If webhooks aren't being received, check your server logs for any webhook delivery errors
 - Verify the webhook URL is correctly pointing to your Episeerr instance
 - Ensure Episeerr logs show webhook events being received at `/app/logs/app.log`
@@ -105,11 +111,13 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 ## Testing Your Webhooks
 
 ### Verify Webhook Reception
+
 1. **Watch an episode** (for Tautulli/Jellyfin)
 2. **Check Episeerr logs:** `/logs/app.log`
 3. **Look for:** "Received webhook" or "Processing webhook"
 
 ### Verify Episode Processing
+
 1. **Ensure series is assigned** to a rule in Episeerr
 2. **Watch logs** for rule application
 3. **Check Sonarr** for episode changes (monitoring/searching)
@@ -119,18 +127,21 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 ## Troubleshooting
 
 ### Webhook Not Received
+
 - **Check URL format:** Ensure no trailing slashes
 - **Verify network:** Can Tautulli/Jellyfin reach Episeerr?
 - **Check ports:** Is port 5002 accessible?
 - **Review sender logs:** Any errors in Tautulli/Jellyfin?
 
 ### Webhook Received But Nothing Happens
+
 - **Check series assignment:** Is the series assigned to a rule?
 - **Verify rule configuration:** Does the rule have Get/Keep settings?
 - **Check series name matching:** Do names match between webhook and Sonarr?
 - **Review Episeerr logs:** Any processing errors?
 
 ### Wrong Episodes Being Managed
+
 - **Check rule settings:** Verify Get/Keep values are correct
 - **Review series assignment:** Ensure series is in the right rule
 - **Check webhook data:** Verify correct season/episode numbers
@@ -140,6 +151,7 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 ## Webhook Data Reference
 
 ### What Episeerr Expects
+
 | Field | Source | Purpose |
 |-------|--------|---------|
 | Series Name | `show_name`, `SeriesName` | Match to Sonarr series |
@@ -147,10 +159,12 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 | Episode Number | `episode_num`, `EpisodeNumber` | Current episode |
 
 ### Supported Formats
+
 - **Tautulli:** `plex_title`, `plex_season_num`, `plex_ep_num`
 - **Jellyfin:** `SeriesName`, `SeasonNumber`, `EpisodeNumber`
 - **Custom:** Any JSON with series/season/episode data
 
 ---
 
-**Next:** [Rules System Guide](rules-guide.md) - Configure how Episeerr responds to viewing events
+**Next:** [Rules System Guide](rules-guide.md) - Configure how Episeerr responds to
+viewing events

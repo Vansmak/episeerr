@@ -16,8 +16,8 @@ Episeerr automates your TV library with three simple features:
 
 ## Quick Start
 
-
 ### Full Setup (All Features)
+
 ```yaml
 version: '3.8'
 services:
@@ -53,10 +53,12 @@ services:
 ```
 
 ### Basic Setup (Works Immediately)
+
 1. **Start container** and go to `http://your-server:5002`
 2. **That's it!** You can now use episode selection
 
 ### Optional Additions (Add Only What You Want)
+
 - **Storage cleanup**: Set threshold in Scheduler page
 - **Smart rules**: Create rules for automatic management
 - **Viewing automation**: Add webhooks for next episode ready
@@ -66,34 +68,41 @@ services:
 ## How It Works
 
 ### Smart Rules (NEW!)
+
 Create rules with the new dropdown system:
 
 **Get Episodes:**
+
 - Type: Episodes/Seasons/All + Count
 - Example: "3 episodes" = next 3 episodes ready
 
-**Keep Episodes:**  
+**Keep Episodes:**
+
 - Type: Episodes/Seasons/All + Count
 - Example: "1 season" = keep current season after watching
 
 ### Grace Periods (NEW!)
+
 Create rules with two independent grace timers:
 
-**Grace Watched (Rotating Collection):**  
+**Grace Watched (Rotating Collection):**
+
 - Your kept episodes expire after X days of inactivity
 - Example: 14 days = watched rotate out after 2 weeks
 
 **Grace Unwatched (Watch Deadlines):**
+
 - New episodes get X days to be watched if no activity
 - Example: 10 days = pressure to watch new content
 
-
 **Dormant Timer (NEW!):**
-- Removes content from abandoned shows 
+
+- Removes content from abandoned shows
 - Example: 30 days = if no activity for a month, clean up the show
 
 ### Example: Popular Show Rule
-```
+
+```log
 Get: 5 episodes (next 5 episodes ready)
 Keep: 2 episodes (last 2 watched episodes)
 Grace: 7 days (keep last 2 watched episodes, delete after a week)
@@ -101,11 +110,13 @@ Dormant: 60 days (cleanup if abandoned for 2 months)
 ```
 
 **What happens:**
+
 1. Watch E10 → Get E11-E15, Keep E9-E10
 2. After 7 days → Delete E9-10 (grace expired)
 3. After 60 days no activity → Delete show (series abandoned)
 
 ### Storage Gate
+
 - Set one global threshold: "Keep 20GB free"
 - Cleanup only runs when below threshold
 - Stops immediately when back above threshold
@@ -116,20 +127,26 @@ Dormant: 60 days (cleanup if abandoned for 2 months)
 ## Three Ways to Use Episeerr (Pick What You Need)
 
 ### 🎯 **Just Episode Selection**
-Good for picking specific episodes. Even across seasons
+
+Good for picking specific episodes. Even across seasons.
+
 - **Setup**: Just the 3 required environment variables
 - **create sonarr and optional seer webhooks**
 - **No rules needed, no webhooks required**
 - **Use**: Manual episode selection interface only
 
 ### ⚡ **Add Viewing Automation**
+
 Next episode ready as you watch (optional upgrade).
+
 - **Setup**: Add Tautulli/Jellyfin webhook + create rules  
 - **No storage management required**
 - **Use**: Episodes managed automatically as you watch, get this many, keep this many
 
-### 💾 **Add Storage Management**  
+### 💾 **Add Storage Management**
+
 Automatic cleanup when storage gets low (optional upgrade).
+
 - **Setup**: Set storage threshold + add grace/dormant timers to rules
 - **No viewing automation required**
 - **Use**: Hands-off storage management
@@ -161,6 +178,7 @@ Automatic cleanup when storage gets low (optional upgrade).
 **[📚 Full Documentation](./docs/)** - Complete guides and setup
 
 **Quick Links:**
+
 - [Installation Guide](./docs/installation.md) - Docker setup and configuration
 - [Rules Guide](./docs/rules-guide.md) - Creating and managing rules
 - [Episode Selection](./docs/episode-selection.md) - Manual episode management
