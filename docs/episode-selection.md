@@ -10,7 +10,7 @@ Choose specific episodes manually across multiple seasons.
 2. **Settings:**
    - Name: `Episeerr Episode Selection Delay`
    - Delay: `10519200` (20 years)
-   - Tags: `episeerr-select`
+   - Tags: `episeerr_select`
 3. **Save**
 
 ## Sonarr Webhook (Optional but Recommended)
@@ -23,6 +23,7 @@ Choose specific episodes manually across multiple seasons.
 ## How to Use
 
 ### Method 1: Sonarr Tags
+
 1. Add series to Sonarr with `episeerr_select` tag
 2. Go to Episeerr → Pending Requests
 3. Click "Select Seasons" → Choose seasons
@@ -30,6 +31,7 @@ Choose specific episodes manually across multiple seasons.
 5. Submit
 
 ### Method 2: Jellyseerr/Overseerr Integration
+
 1. Set up Jellyseerr webhook:
    - **URL**: `http://your-episeerr:5002/seerr-webhook`
    - **Triggers**: Request Approved
