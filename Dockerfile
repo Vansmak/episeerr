@@ -1,5 +1,5 @@
 # Use official Python runtime as base image
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -37,3 +37,4 @@ EXPOSE 5002
 
 # Use Gunicorn to serve the application
 CMD ["gunicorn", "--workers", "2", "--bind", "0.0.0.0:5002", "--access-logfile", "-", "--error-logfile", "-", "episeerr:app"]
+
