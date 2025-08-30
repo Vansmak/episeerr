@@ -1,28 +1,28 @@
-
-1# Required
+# Required
 SONARR_URL=http://your-sonarr:8989
 SONARR_API_KEY=your_sonarr_api_key
 TMDB_API_KEY=your_tmdb_api_key
-      
+
 # Optional - Viewing-based rules
 TAUTULLI_URL=http://your-tautulli:8181
 TAUTULLI_API_KEY=your_tautulli_key
 # OR
 JELLYFIN_URL=http://your-jellyfin:8096
 JELLYFIN_API_KEY=your_jellyfin_key
-      
+
 # Optional - Request integration
 JELLYSEERR_URL=http://your-jellyseerr:5055
 JELLYSEERR_API_KEY=your_jellyseerr_key
-# OR  
+# OR
 OVERSEERR_URL=http://your-overseerr:5055
 OVERSEERR_API_KEY=your_overseerr_key
-      
+
 # Optional - Tag creation (defaults to false)
 EPISEERR_AUTO_CREATE_TAGS=false
-      
+
+# Optional - Hide series with these tags (IDs or names, comma-separated)
+# Examples: HIDE_TAGS=2, 7 or HIDE_TAGS=Watched, Hidden or mixed: HIDE_TAGS=2, Watched
+HIDE_TAGS=
 
 LOG_PATH=logs/app.log
 FLASK_DEBUG=false
-
-
