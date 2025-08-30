@@ -126,6 +126,7 @@ def get_external_ids(tmdb_id, media_type='tv'):
     """Get external IDs for a TV show or movie."""
     endpoint = f"{media_type}/{tmdb_id}/external_ids"
     return get_tmdb_endpoint(endpoint)
+
 def get_sonarr_stats():
     """Get comprehensive Sonarr statistics using existing sonarr_utils patterns."""
     try:
@@ -225,6 +226,7 @@ def get_sonarr_stats():
             'missing_stats': None,
             'recent_stats': None
         }
+
 # Scheduler
 class OCDarrScheduler:
     def __init__(self):
@@ -417,6 +419,148 @@ def get_sonarr_series():
         app.logger.error(f"Error fetching Sonarr series: {str(e)}")
         return []
 
+def get_sonarr_tags():
+    """Fetch tags from Sonarr and return a list of tag dicts.
+
+    Error handling:
+    - Adds request timeout and catches network/JSON errors.
+    - Validates payload shape and filters malformed entries.
+    - Logs details but returns a safe empty list on failure.
+    """
+    try:
+        sonarr_preferences = sonarr_utils.load_preferences()
+        headers = {
+            'X-Api-Key': sonarr_preferences['SONARR_API_KEY'],
+            'Content-Type': 'application/json'
+        }
+        sonarr_url = sonarr_preferences['SONARR_URL']
+        response = requests.get(f"{sonarr_url}/api/v3/tag", headers=headers, timeout=8)
+        if not response.ok:
+            body = None
+            try:
+                body = response.text[:500]
+            except Exception:
+                pass
+            app.logger.error(f"Failed to fetch tags from Sonarr: {response.status_code} body={body}")
+            return []
+
+        try:
+            data = response.json()
+        except Exception as e:
+            app.logger.error(f"Invalid JSON from Sonarr tags endpoint: {str(e)}")
+            return []
+
+        if not isinstance(data, list):
+            app.logger.error(f"Unexpected tags payload type: {type(data)}")
+            return []
+
+        cleaned = []
+        for t in data:
+            if isinstance(t, dict) and isinstance(t.get('id'), int):
+                cleaned.append(t)
+        return cleaned
+    except requests.RequestException as e:
+        app.logger.error(f"Network error fetching Sonarr tags: {str(e)}")
+        return []
+    except Exception as e:
+        app.logger.error(f"Error fetching Sonarr tags: {str(e)}")
+        return []
+
+def parse_hide_tags():
+    """
+    - Parse HIDE_TAGS env into a set of tag IDs (accepts IDs or names).
+    - Accepts comma-separated IDs or names (case-insensitive for names).
+    - Names are resolved via Sonarr /api/v3/tag (using tag 'label').
+
+    Error handling:
+    - Handles missing env, whitespace, stray quotes.
+    - Defensively accesses tag labels; logs once for unknown names.
+    - Never raises; returns best-effort set.
+    """
+    raw = os.getenv('HIDE_TAGS', '').strip()
+    if not raw:
+        return set()
+
+    tokens = [tok.strip().strip('"\'') for tok in re.split(r'[\s,]+', raw) if tok.strip()]
+
+    # Build name->id map and known id set from Sonarr tags for resolving names
+    name_to_id = {}
+    known_tag_ids = set()
+    try:
+        tags = get_sonarr_tags() or []
+        for t in tags:
+            tag_id = t.get('id') if isinstance(t, dict) else None
+            if isinstance(tag_id, int):
+                known_tag_ids.add(tag_id)
+            label = (t.get('label') or '').strip() if isinstance(t, dict) else ''
+            if label and isinstance(tag_id, int):
+                name_to_id[label.lower()] = tag_id
+    except Exception as e:
+        app.logger.warning(f"Proceeding with numeric-only HIDE_TAGS; failed to build tag name map: {str(e)}")
+
+    hide_tag_ids = set()
+    unknown_tokens = []
+    for token in tokens:
+        # Try numeric ID first
+        try:
+            tag_id_val = int(token)
+            # If we know Sonarr's tag IDs, validate membership; otherwise accept optimistically
+            if known_tag_ids and tag_id_val not in known_tag_ids:
+                unknown_tokens.append(token)
+            else:
+                hide_tag_ids.add(tag_id_val)
+            continue
+        except ValueError:
+            pass
+        # Resolve by name (case-insensitive)
+        tag_id = name_to_id.get(token.lower())
+        if tag_id is not None:
+            hide_tag_ids.add(tag_id)
+        else:
+            unknown_tokens.append(token)
+
+    if unknown_tokens:
+        app.logger.warning(f"HIDE_TAGS unknown tag names ignored: {', '.join(unknown_tokens)}")
+
+    return hide_tag_ids
+
+def get_sonarr_series_without_tags():
+    """
+    - Return Sonarr series excluding those that match any tag in HIDE_TAGS.
+    - Reads comma-separated tag IDs from env var HIDE_TAGS (e.g., "2,7,11").
+    - Filters out any series whose `tags` list intersects with HIDE_TAGS.
+    - If HIDE_TAGS is not set or empty, returns the full unfiltered list.
+    """
+    all_series = get_sonarr_series()
+    try:
+        hide_tags = parse_hide_tags()
+    except Exception as e:
+        app.logger.error(f"Unexpected error parsing HIDE_TAGS: {str(e)}; returning unfiltered list")
+        return all_series
+
+    if not hide_tags:
+        return all_series
+
+    filtered_series = []
+    for series in all_series:
+        try:
+            series_tags = series.get('tags', []) or []
+            series_tag_ids = set()
+            for t in series_tags:
+                try:
+                    series_tag_ids.add(int(t))
+                except Exception:
+                    continue
+            if series_tag_ids.isdisjoint(hide_tags):
+                filtered_series.append(series)
+        except Exception as e:
+            # If a series item is malformed, keep it rather than dropping it
+            app.logger.debug(f"Skipping filter for malformed series entry: {e}")
+            filtered_series.append(series)
+
+    #app.logger.debug(f"Filtered Sonarr series by HIDE_TAGS={sorted(hide_tags)}: kept {len(filtered)}/{len(all_series)}")
+    return filtered_series
+
 # ============================================================================
 # WEB UI ROUTES
 # ============================================================================
@@ -427,7 +571,7 @@ def get_sonarr_series():
 def index():
     """Main rules management page."""
     config = load_config()
-    all_series = get_sonarr_series()
+    all_series = get_sonarr_series_without_tags()
     sonarr_stats = get_sonarr_stats()
     
     # Get SONARR_URL for template links
@@ -825,7 +969,7 @@ def series_stats():
     """Get series statistics."""
     try:
         config = load_config()
-        all_series = get_sonarr_series()
+        all_series = get_sonarr_series_without_tags()
         rules_mapping = {}
         for rule_name, details in config['rules'].items():
             for series_id in details.get('series', {}):
@@ -1054,7 +1198,7 @@ def get_current_assignments():
     """Get current rule assignments for all series."""
     try:
         config = load_config()
-        all_series = get_sonarr_series()
+        all_series = get_sonarr_series_without_tags()
         
         assignments = {}
         
@@ -1081,7 +1225,7 @@ def get_quick_stats():
     """Get quick stats for change detection."""
     try:
         config = load_config()
-        all_series = get_sonarr_series()
+        all_series = get_sonarr_series_without_tags()
         
         # Count assigned series
         assigned_count = 0
