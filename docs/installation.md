@@ -11,7 +11,6 @@ Get Episeerr running in 5 minutes.
 ## Docker Setup
 
 ```yaml
-version: '3.8'
 services:
   episeerr:
     image: vansmak/episeerr:latest
@@ -46,18 +45,22 @@ Access: `http://your-server:5002`
 Episeerr has 3 independent features. Pick what you want:
 
 ### 1. Episode Selection Only
+
 **What**: Choose specific episodes manually, try pilots
 **Setup**: [Episode Selection Guide](episode-selection.md)
 
-### 2. Rule-Based Episode Management  
+### 2. Rule-Based Episode Management
+
 **What**: Next episode ready when you watch, automatic management
 **Setup**: [Rule-Based Management Guide](rules-guide.md)
 
 ### 3. Storage Cleanup
+
 **What**: Automatic cleanup based on time and viewing
 **Setup**: [Storage Cleanup Guide](global_storage_gate_guide.md)
 
 ### All Three Together
+
 Follow all three guides. Features work independently or together.
 
 ---
@@ -69,6 +72,3 @@ Follow all three guides. Features work independently or together.
 **TMDB errors**: Use the Read Access Token, not the API key
 
 **Next**: Choose your feature guide above
-
-
-
