@@ -2,6 +2,18 @@
 
 Episeerr works with Sonarr through tags and webhooks. Most integration is automatic.
 
+- [Sonarr Integration](#sonarr-integration)
+  - [Required: Delayed Release Profile](#required-delayed-release-profile)
+    - [Setup](#setup)
+  - [Episeerr Tags](#episeerr-tags)
+  - [Optional: Sonarr Webhook](#optional-sonarr-webhook)
+    - [Setup](#setup-1)
+  - [Tag Workflows](#tag-workflows)
+    - [Normal Request (No Tag)](#normal-request-no-tag)
+    - [Automatic Rule Assignment](#automatic-rule-assignment)
+    - [Episode Selection](#episode-selection)
+  - [Troubleshooting](#troubleshooting)
+
 ## Required: Delayed Release Profile
 
 **Critical for episode selection:** Create this profile to prevent unwanted downloads.

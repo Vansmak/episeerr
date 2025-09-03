@@ -2,6 +2,26 @@
 
 Webhooks enable viewing-based automation - Episeerr responds when you watch episodes to prepare next ones automatically.
 
+- [Webhook Setup](#webhook-setup)
+  - [When You Need Webhooks](#when-you-need-webhooks)
+    - [❌ **Skip Webhooks If:**](#-skip-webhooks-if)
+    - [✅ **Use Webhooks If:**](#-use-webhooks-if)
+  - [🔗 Media Server Integration](#-media-server-integration)
+    - [Plex (via Tautulli) Setup](#plex-via-tautulli-setup)
+    - [Jellyfin Setup](#jellyfin-setup)
+  - [Sonarr Setup (For Series Automation)](#sonarr-setup-for-series-automation)
+  - [Jellyseerr/Overseerr Webhook Setup](#jellyseerroverseerr-webhook-setup)
+  - [Testing Your Webhooks](#testing-your-webhooks)
+    - [Verify Webhook Reception](#verify-webhook-reception)
+    - [Verify Episode Processing](#verify-episode-processing)
+  - [Troubleshooting](#troubleshooting)
+    - [Webhook Not Received](#webhook-not-received)
+    - [Webhook Received But Nothing Happens](#webhook-received-but-nothing-happens)
+    - [Wrong Episodes Being Managed](#wrong-episodes-being-managed)
+  - [Webhook Data Reference](#webhook-data-reference)
+    - [What Episeerr Expects](#what-episeerr-expects)
+    - [Supported Formats](#supported-formats)
+
 ## When You Need Webhooks
 
 ### ❌ **Skip Webhooks If:**

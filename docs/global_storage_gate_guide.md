@@ -2,6 +2,21 @@
 
 Automatic cleanup based on time and viewing activity. **Completely optional** - only runs when storage is actually low.
 
+- [Storage Cleanup](#storage-cleanup)
+  - [Setup Storage Gate](#setup-storage-gate)
+  - [Add Grace Periods to Rules](#add-grace-periods-to-rules)
+    - [Grace Watched (Collection Rotation)](#grace-watched-collection-rotation)
+    - [Grace Unwatched (Watch Deadlines)](#grace-unwatched-watch-deadlines)
+    - [Dormant (Abandoned Series)](#dormant-abandoned-series)
+  - [Example Rule Configurations](#example-rule-configurations)
+    - [Standard Show](#standard-show)
+    - [Important Show (Protected)](#important-show-protected)
+    - [Current Show (Pressure to Stay Current)](#current-show-pressure-to-stay-current)
+  - [How Cleanup Works](#how-cleanup-works)
+  - [Testing (Important)](#testing-important)
+  - [Series Assignment](#series-assignment)
+  - [Troubleshooting](#troubleshooting)
+
 ## Setup Storage Gate
 
 1. **Episeerr** → Scheduler

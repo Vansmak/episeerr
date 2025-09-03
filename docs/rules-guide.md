@@ -2,6 +2,24 @@
 
 Automatic "next episode ready when you watch" system. **Assumes linear viewing** (S1E1 → S1E2 → S1E3).
 
+- [Rule-Based Episode Management](#rule-based-episode-management)
+  - [Required Setup](#required-setup)
+    - [1. Media Server Webhook](#1-media-server-webhook)
+    - [2. Optional: Sonarr Webhook for Auto-Assignment](#2-optional-sonarr-webhook-for-auto-assignment)
+  - [Create Rules](#create-rules)
+    - [Get Episodes (What to prepare next)](#get-episodes-what-to-prepare-next)
+    - [Keep Episodes (What to retain)](#keep-episodes-what-to-retain)
+    - [Action](#action)
+  - [Assign Series to Rules](#assign-series-to-rules)
+    - [Method 1: Manual Assignment](#method-1-manual-assignment)
+    - [Method 2: Sonarr Tags (with webhook)](#method-2-sonarr-tags-with-webhook)
+  - [How It Works](#how-it-works)
+  - [Common Rules](#common-rules)
+    - [Binge Watcher](#binge-watcher)
+    - [Current Shows](#current-shows)
+    - [Season Watcher](#season-watcher)
+  - [Troubleshooting](#troubleshooting)
+
 ## Required Setup
 
 ### 1. Media Server Webhook

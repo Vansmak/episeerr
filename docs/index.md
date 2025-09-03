@@ -2,6 +2,26 @@
 
 Welcome to the Episeerr documentation. Episeerr provides three independent automation solutions for managing TV episodes in Sonarr, plus intelligent storage management.
 
+- [Episeerr Documentation](#episeerr-documentation)
+  - [Getting Started](#getting-started)
+    - [New to Episeerr?](#new-to-episeerr)
+    - [Which Features Do You Want?](#which-features-do-you-want)
+      - [🎬 Episode Selection Only](#-episode-selection-only)
+      - [⚡ Viewing Automation Only](#-viewing-automation-only)
+      - [💾 Storage Management Only](#-storage-management-only)
+      - [🚀 Complete Automation](#-complete-automation)
+  - [Core Features](#core-features)
+    - [🎬 Episode Selection System](#-episode-selection-system)
+    - [⚡ Viewing-Based Automation](#-viewing-based-automation)
+    - [💾 Storage Management (NEW!)](#-storage-management-new)
+    - [🔧 Integration](#-integration)
+  - [Troubleshooting](#troubleshooting)
+  - [Understanding the System](#understanding-the-system)
+    - [Visual System Flow](#visual-system-flow)
+    - [Key Components](#key-components)
+    - [How Features Work Together](#how-features-work-together)
+    - [Rule Protection System](#rule-protection-system)
+
 ## Getting Started
 
 ### New to Episeerr?

@@ -2,6 +2,17 @@
 
 Choose specific episodes manually across multiple seasons.
 
+- [Episode Selection](#episode-selection)
+  - [Critical Sonarr Setup (Do This First)](#critical-sonarr-setup-do-this-first)
+  - [Sonarr Webhook (Optional but Recommended)](#sonarr-webhook-optional-but-recommended)
+  - [How to Use](#how-to-use)
+    - [Method 1: Sonarr Tags](#method-1-sonarr-tags)
+    - [Method 2: Jellyseerr/Overseerr Integration](#method-2-jellyseerroverseerr-integration)
+  - [What Happens](#what-happens)
+  - [Use Cases](#use-cases)
+  - [Special Behavior](#special-behavior)
+  - [Troubleshooting](#troubleshooting)
+
 ## Critical Sonarr Setup (Do This First)
 
 **Without this step, episodes download immediately instead of waiting for selection.**
