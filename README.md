@@ -184,14 +184,8 @@ Automatic cleanup when storage gets low (optional upgrade).
 ✅ **Storage-Aware**: Cleanup respects your storage limits
 
 ---
+Screenshot <img width="1856" height="1301" alt="Episeerr" src="https://github.com/user-attachments/assets/ddad6213-ea53-4af9-9997-2a1f605b827c" />
 
-## What's New in v2.2
-
-🎯 **New Dropdown UI**: Replace confusing text fields with clear dropdowns  
-   ** pick type, episodes or seasons and then the # of
-🧠 **Intuitive Grace Logic**: Grace periods now protect recent watches  
-🔧 **Fixed Season Bug**: Properly handles end-of-season transitions  
-💾 **Storage-Aware Dormant**: Dormant cleanup respects storage gates
 
 ---
 
