@@ -139,7 +139,7 @@ def setup_cleanup_logging():
 cleanup_logger = setup_cleanup_logging()
 
 # Define global variables based on environment settings
-SONARR_URL = os.getenv('SONARR_URL')
+SONARR_URL = normalize_url(os.getenv('SONARR_URL'))
 SONARR_API_KEY = os.getenv('SONARR_API_KEY')
 
 # Load settings from a JSON configuration file
@@ -242,7 +242,7 @@ def get_activity_date_with_hierarchy(series_id, series_title=None, return_comple
         # Check which external service is configured (user typically has one, not both)
         tautulli_url = normalize_url(os.getenv('TAUTULLI_URL'))
         tautulli_api_key = os.getenv('TAUTULLI_API_KEY')
-        jellyfin_url = os.getenv('JELLYFIN_URL')
+        jellyfin_url = normalize_url(os.getenv('JELLYFIN_URL'))
         jellyfin_api_key = os.getenv('JELLYFIN_API_KEY')
         
         # Prefer Tautulli if both are configured (since it's more accurate for watch tracking)

@@ -48,8 +48,21 @@ console_handler.setFormatter(file_formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
+# Remove leading and trailing whitespaces and trailing / from .env URLs if present
+# Otherwise URLs will look like url:port//series/name-of-series
+def normalize_url(url):
+    if url is None:
+        return None
+    print(f"URL: {url}")
+    cleaned = url.strip()
+    print(f"Stripped URL: {cleaned}")
+    if cleaned.endswith('/') and cleaned != '/':
+        cleaned = cleaned[:-1]
+        print(f"Final URL: {cleaned}")
+    return cleaned
+
 # Sonarr connection details
-SONARR_URL = os.getenv('SONARR_URL', 'http://sonarr:8989')
+SONARR_URL = normalize_url(os.getenv('SONARR_URL', 'http://sonarr:8989'))
 SONARR_API_KEY = os.getenv('SONARR_API_KEY')
 
 # episeerr_utils.py
@@ -510,7 +523,7 @@ def delete_overseerr_request(request_id):
     """
     try:
         # Try Overseerr URL first, then Jellyseerr URL as fallback
-        overseerr_url = os.getenv('OVERSEERR_URL') or os.getenv('JELLYSEERR_URL')
+        overseerr_url = normalize_url(os.getenv('OVERSEERR_URL')) or normalize_url(os.getenv('JELLYSEERR_URL'))
         
         # Check if URL is configured
         if not overseerr_url:

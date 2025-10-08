@@ -18,23 +18,13 @@ from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 import requests
 import episeerr_utils
-from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID
+from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url
 
 app = Flask(__name__)
 
 # Load environment variables
 load_dotenv()
 BASE_DIR = os.getcwd()
-
-# Remove leading and trailing whitespaces and trailing / from .env URLs if present
-# Otherwise URLs will look like url:port//series/name-of-series
-def normalize_url(url):
-    if url is None:
-        return None
-    cleaned_url = url.strip()
-    if cleaned_url.endswith('/') and cleaned_url != '/':
-        cleaned_url = cleaned_url[:-1]
-    return cleaned_url
 
 # Sonarr variables
 SONARR_URL = normalize_url(os.getenv('SONARR_URL'))

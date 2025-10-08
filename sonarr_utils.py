@@ -4,11 +4,13 @@ from datetime import datetime
 from dotenv import load_dotenv
 import logging
 
+from episeerr_utils import normalize_url
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Configuration settings from environment variables
-SONARR_URL = os.getenv('SONARR_URL')
+SONARR_URL = normalize_url(os.getenv('SONARR_URL'))
 SONARR_API_KEY = os.getenv('SONARR_API_KEY')
 
 MAX_SHOWS_ITEMS = int(os.getenv('MAX_SHOWS_ITEMS', 24))
