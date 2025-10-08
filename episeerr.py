@@ -26,14 +26,24 @@ app = Flask(__name__)
 load_dotenv()
 BASE_DIR = os.getcwd()
 
+# Remove leading and trailing whitespaces and trailing / from .env URLs if present
+# Otherwise URLs will look like url:port//series/name-of-series
+def normalize_url(url):
+    if url is None:
+        return None
+    cleaned_url = url.strip()
+    if cleaned_url.endswith('/') and cleaned_url != '/':
+        cleaned_url = cleaned_url[:-1]
+    return cleaned_url
+
 # Sonarr variables
-SONARR_URL = os.getenv('SONARR_URL')
+SONARR_URL = normalize_url(os.getenv('SONARR_URL'))
 SONARR_API_KEY = os.getenv('SONARR_API_KEY')
 
 # Jellyseerr/Overseerr variables
-JELLYSEERR_URL = os.getenv('JELLYSEERR_URL', '')
+JELLYSEERR_URL = normalize_url(os.getenv('JELLYSEERR_URL', ''))
 JELLYSEERR_API_KEY = os.getenv('JELLYSEERR_API_KEY')
-OVERSEERR_URL = os.getenv('OVERSEERR_URL')
+OVERSEERR_URL = normalize_url(os.getenv('OVERSEERR_URL'))
 OVERSEERR_API_KEY = os.getenv('OVERSEERR_API_KEY')
 SEERR_ENABLED = bool((JELLYSEERR_URL and JELLYSEERR_API_KEY) or (OVERSEERR_URL and OVERSEERR_API_KEY))
 

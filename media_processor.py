@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 import threading
 import subprocess
 
+from episeerr import normalize_url
+
 
 # Add these imports at the top if missing
 LAST_PROCESSED_JELLYFIN_EPISODES = {}
@@ -238,7 +240,7 @@ def get_activity_date_with_hierarchy(series_id, series_title=None, return_comple
     # Step 2: Check external services (only if title available)
     if series_title:
         # Check which external service is configured (user typically has one, not both)
-        tautulli_url = os.getenv('TAUTULLI_URL')
+        tautulli_url = normalize_url(os.getenv('TAUTULLI_URL'))
         tautulli_api_key = os.getenv('TAUTULLI_API_KEY')
         jellyfin_url = os.getenv('JELLYFIN_URL')
         jellyfin_api_key = os.getenv('JELLYFIN_API_KEY')
@@ -555,7 +557,7 @@ def get_tautulli_last_watched(series_title, return_complete=False):
                         If False, returns just timestamp (existing behavior)
     """
     try:
-        tautulli_url = os.getenv('TAUTULLI_URL')
+        tautulli_url = normalize_url(os.getenv('TAUTULLI_URL'))
         tautulli_api_key = os.getenv('TAUTULLI_API_KEY')
         
         if not tautulli_url or not tautulli_api_key:
