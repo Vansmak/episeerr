@@ -53,13 +53,8 @@ logger.addHandler(console_handler)
 def normalize_url(url):
     if url is None:
         return None
-    print(f"URL: {url}")
-    cleaned = url.strip()
-    print(f"Stripped URL: {cleaned}")
-    if cleaned.endswith('/') and cleaned != '/':
-        cleaned = cleaned[:-1]
-        print(f"Final URL: {cleaned}")
-    return cleaned
+    normalized_url = url.rstrip('/')
+    return normalized_url
 
 # Sonarr connection details
 SONARR_URL = normalize_url(os.getenv('SONARR_URL', 'http://sonarr:8989'))
