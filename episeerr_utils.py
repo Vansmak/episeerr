@@ -53,7 +53,7 @@ logger.addHandler(console_handler)
 def normalize_url(url):
     if url is None:
         return None
-    normalized_url = url.rstrip('/')
+    normalized_url = url.strip().rstrip('/')
     return normalized_url
 
 # Sonarr connection details
