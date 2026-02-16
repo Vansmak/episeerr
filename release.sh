@@ -5,30 +5,28 @@ VERSION=${1}
 
 # Check if version was provided
 if [ -z "$VERSION" ]; then
-    echo "Usage: ./release.sh <version>"
+    echo "Usage: ./release_dev.sh <version>"
     echo "Examples:"
-    echo "  ./release.sh test           (test/dev build - no git operations)"
-    echo "  ./release.sh custom         (custom build - Docker only, no git)"
-    echo "  ./release.sh 1.0.0          (stable release)"
-    echo "  ./release.sh beta-1.0.0     (beta release)"
-    echo "  ./release.sh 1.0.0-beta.1   (beta release)"
-    echo "  ./release.sh 1.0.0-rc.1     (release candidate)"
+    echo "  ./release_dev.sh custom         (dev branch build - recommended)"
+    echo "  ./release_dev.sh test           (test build - no git operations)"
+    echo "  ./release_dev.sh 1.0.0-dev      (dev release with git tag)"
+    echo "  ./release_dev.sh beta-1.0.0     (beta release)"
     echo ""
     echo "This will:"
+    echo "  CUSTOM MODE (recommended for dev):"
+    echo "    - Skip all git operations (no commits, no tags)"
+    echo "    - Build and push vansmak/episeerr:custom"
+    echo "    - For dev branch features without affecting git history"
+    echo ""
     echo "  TEST MODE:"
     echo "    - Skip all git operations (no commits, no tags)"
     echo "    - Build and push only vansmak/episeerr:test"
     echo "    - Perfect for testing changes quickly"
     echo ""
-    echo "  CUSTOM MODE:"
-    echo "    - Skip all git operations (no commits, no tags)"
-    echo "    - Build and push vansmak/episeerr:custom"
-    echo "    - For your personal builds without affecting git history"
-    echo ""
     echo "  RELEASE MODES:"
     echo "    1. Handle any merge conflicts automatically"
     echo "    2. Create git commit and tag"
-    echo "    3. Push to GitHub"
+    echo "    3. Push to GitHub (dev branch)"
     echo "    4. Build multi-arch Docker image with cleanup"
     echo "    5. Push to Docker Hub"
     echo "    Note: Beta/RC versions won't be tagged as 'latest'"
@@ -80,9 +78,9 @@ if [ "$IS_TEST" = false ] && [ "$IS_CUSTOM" = false ]; then
 
     # Get current branch
     BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    if [ "$BRANCH" != "main" ]; then
+    if [ "$BRANCH" != "dev" ]; then
         echo "⚠️  Warning: You're on branch '$BRANCH'"
-        echo "   Consider switching to 'main' branch for releases"
+        echo "   Consider switching to 'dev' branch for dev releases"
     fi
     echo "Current branch: $BRANCH"
 

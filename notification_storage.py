@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from logging_config import main_logger as logger
 
 NOTIFICATION_STORAGE = '/config/pending_notifications.json'
 

@@ -28,6 +28,7 @@ from settings_db import (
     update_service_test_result, get_all_services,
     set_setting, get_setting
 )
+from logging_config import main_logger as logger
 # Import plugin system
 from integrations import get_integration, get_all_integrations
 from integrations import register_integration_blueprints
@@ -77,32 +78,6 @@ os.makedirs(os.path.dirname(LAST_PROCESSED_FILE), exist_ok=True)
 LAST_PROCESSED_JELLYFIN_EPISODES = {}
 LAST_PROCESSED_LOCK = Lock()
 
-# Setup logging
-log_file = os.getenv('LOG_PATH', os.path.join(os.getcwd(), 'logs', 'app.log'))
-log_level = logging.INFO
-os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
-file_handler = RotatingFileHandler(
-    log_file,
-    maxBytes=1*1024*1024,
-    backupCount=2,
-    encoding='utf-8'
-)
-file_handler.setLevel(log_level)
-file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-file_handler.setFormatter(file_formatter)
-
-logging.basicConfig(
-    level=log_level,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[file_handler]
-)
-
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.DEBUG if os.getenv('FLASK_DEBUG', 'false').lower() == 'true' else logging.INFO)
-formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(message)s')
-stream_handler.setFormatter(formatter)
-app.logger.addHandler(stream_handler)
 
 def reload_module_configs():
     """Reload configuration in all modules after saving to database"""
@@ -253,8 +228,7 @@ def setup():
         emby_url=emby['url'] if emby else None,
         emby_apikey=emby['api_key'] if emby else None,
         emby_userid=emby['config'].get('user_id') if emby and emby.get('config') else None,
-        emby_poll_interval=emby['config'].get('poll_interval', 5) if emby and emby.get('config') else 5,
-        emby_trigger_percent=emby['config'].get('trigger_percentage', 50.0) if emby and emby.get('config') else 50.0,
+        emby_poll_interval=emby['config'].get('poll_interval', 900) if emby and emby.get('config') else 900,emby_trigger_percent=emby['config'].get('trigger_percentage', 50.0) if emby and emby.get('config') else 50.0,
         tautulli_connected=tautulli is not None,
         tautulli_url=tautulli['url'] if tautulli else None,
         tautulli_apikey=tautulli['api_key'] if tautulli else None,

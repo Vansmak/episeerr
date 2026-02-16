@@ -13,7 +13,7 @@ import subprocess
 import pending_deletions
 from episeerr import normalize_url
 from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
-
+from logging_config import main_logger as logger
 # Load environment variables
 load_dotenv()
 
@@ -147,27 +147,7 @@ logging.basicConfig(
     ]
 )
 
-# Create main logger for general logs
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-logger.handlers.clear()  # Clear any inherited handlers
 
-# Add handler for main app log
-app_handler = RotatingFileHandler(
-    LOG_PATH,  # /app/logs/app.log
-    maxBytes=10*1024*1024,  # 10 MB
-    backupCount=3,
-    encoding='utf-8'
-)
-app_handler.setLevel(logging.INFO)
-app_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-logger.addHandler(app_handler)
-
-# Add console handler for main logger
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-logger.addHandler(console_handler)
 
 # Create missing logger for missing series
 missing_logger = logging.getLogger('missing')
@@ -182,7 +162,11 @@ missing_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 missing_logger.addHandler(missing_handler)
 
 # Add console handler for missing logger
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 missing_logger.addHandler(console_handler)
+
 
 
 # Enhanced logging setup for cleanup operations

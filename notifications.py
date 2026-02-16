@@ -7,7 +7,7 @@ import requests
 import logging
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from logging_config import main_logger as logger
 
 # Config will be passed in from episeerr.py
 NOTIFICATIONS_ENABLED = False

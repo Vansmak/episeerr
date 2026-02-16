@@ -9,7 +9,7 @@ import time
 import logging
 import requests
 
-logger = logging.getLogger(__name__)
+from logging_config import main_logger as logger
 
 ACTIVITY_DIR = '/app/data/activity'
 os.makedirs(ACTIVITY_DIR, exist_ok=True)
