@@ -10,3 +10,5 @@ python-dotenv>=1.0.0
 
 # Production server
 gunicorn>=21.0.0
+
+spotipy==2.25.2

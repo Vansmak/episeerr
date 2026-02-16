@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}{{ service.name }} - Episeerr{% endblock %}
+
+{% block content %}
+<style>
+    /* Desktop: Hide Episeerr sidebar and make iframe full width */
+    @media (min-width: 992px) {
+        .episeerr-sidebar {
+            display: none !important;
+        }
+        
+        .iframe-container {
+            left: 0;  /* Full width since sidebar is hidden */
+        }
+    }
+    
+    /* Mobile: Sidebar already hidden by default, iframe gets full width */
+    @media (max-width: 991px) {
+        .iframe-container {
+            left: 0;
+            top: 56px; /* Account for mobile navbar */
+        }
+    }
+    
+    /* Common iframe styles */
+    .iframe-container {
+        position: fixed;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        padding: 0;
+        margin: 0;
+        background: #000;
+        z-index: 1000;
+    }
+    
+    .iframe-container iframe {
+        width: 100%;
+        height: 100%;
+        border: none;
+    }
+    
+    /* Hide default container padding */
+    .container-fluid {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
+    }
+    
+    /* Floating back button */
+    .back-to-episeerr {
+        position: fixed;
+        bottom: 80px;  /* Changed from top to bottom, with padding */
+        left: 20px;    /* Changed from right to left */
+        z-index: 10000;
+        background: rgba(99, 102, 241, 0.95);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 8px;
+        text-decoration: none;
+        font-weight: 600;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        transition: all 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.2);
+    }
+    
+    .back-to-episeerr:hover {
+        background: rgba(99, 102, 241, 1);
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.4);
+        color: white;
+        text-decoration: none;
+    }
+    
+    .back-to-episeerr i {
+        font-size: 16px;
+    }
+</style>
+
+<!-- Back button -->
+<a href="javascript:history.back()" class="back-to-episeerr">
+    <i class="fas fa-arrow-left"></i>
+    <span>Back to Episeerr</span>
+</a>
+
+<div class="iframe-container">
+    <iframe src="{{ service.url }}" 
+            title="{{ service.name }}"
+            allow="fullscreen; autoplay; encrypted-media"
+            sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals">
+    </iframe>
+</div>
+{% endblock %}

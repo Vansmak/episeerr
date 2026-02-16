@@ -82,18 +82,13 @@ class RadarrIntegration(ServiceIntegration):
         """Get Radarr library statistics for dashboard"""
         try:
             # Get all movies
-            movies = self._make_request(
-                url, api_key,
-                '/api/v3/movie',
-                headers={'X-Api-Key': api_key}
+            response = requests.get(
+                f"{url}/api/v3/movie",
+                headers={'X-Api-Key': api_key},
+                timeout=10
             )
-            
-            if not movies:
-                return {
-                    'configured': True,
-                    'error': True,
-                    'error_message': 'Failed to fetch movies'
-                }
+            response.raise_for_status()
+            movies = response.json()
             
             # Calculate stats
             movies_with_files = sum(1 for m in movies if m.get('hasFile', False))
@@ -126,7 +121,7 @@ class RadarrIntegration(ServiceIntegration):
             'pill': {
                 'icon': 'fas fa-video',
                 'icon_color': 'text-info',
-                'template': '{total_movies} movies ({size_gb} GB)',
+                'template': '{total_movies} ({size_gb} GB)',
                 'fields': ['total_movies', 'size_gb']
             }
         }

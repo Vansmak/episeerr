@@ -30,9 +30,13 @@ from settings_db import (
 )
 # Import plugin system
 from integrations import get_integration, get_all_integrations
-
+from integrations import register_integration_blueprints
 app = Flask(__name__)
+
+register_integration_blueprints(app)
 app.register_blueprint(dashboard_bp)
+
+
 
 # Load environment variables
 load_dotenv()
@@ -106,39 +110,50 @@ def reload_module_configs():
         import importlib
         import sonarr_utils
         import media_processor
-        from routes import dashboard
         
         # Reload the modules to pick up new database config
         importlib.reload(sonarr_utils)
         importlib.reload(media_processor)
-        importlib.reload(dashboard)
         
         app.logger.info("Reloaded module configurations from database")
     except Exception as e:
         app.logger.error(f"Failed to reload module configs: {e}")
 
-def auto_add_quick_link(name, url, icon):
-    """Automatically add a service to quick links if it doesn't exist"""
-    from settings_db import get_all_quick_links, add_quick_link
+def auto_add_quick_link(name, url, icon, open_in_iframe=False):
+    """Automatically add or update a service quick link"""
+    from settings_db import get_all_quick_links, add_quick_link, delete_quick_link
     
-    # Check if link already exists (by URL, not just name)
+    # Check if link already exists (by URL)
     existing_links = get_all_quick_links()
     
-    # Check both by name AND url to avoid duplicates
+    # Normalize URLs for comparison
+    normalized_url = url.rstrip('/').lower()
+    
     for link in existing_links:
-        if link['name'].lower() == name.lower() or link['url'] == url:
-            app.logger.debug(f"Quick link for {name} already exists, skipping")
-            return  # Already exists, don't add
+        link_url = link['url'].rstrip('/').lower()
+        
+        if link_url == normalized_url:
+            app.logger.debug(f"Quick link for {name} already exists (ID: {link['id']})")
+            
+            # UPDATE: Check if open_in_iframe setting changed
+            if link.get('open_in_iframe') != open_in_iframe:
+                # Need to update the quick link with new iframe setting
+                delete_quick_link(link['id'])
+                new_id = add_quick_link(name, url, icon, open_in_iframe)
+                app.logger.info(f"Updated quick link {name} - iframe: {open_in_iframe} (ID: {new_id})")
+            
+            return  # Already exists (and updated if needed)
     
     # Add new link
-    add_quick_link(name, url, icon)
-    app.logger.info(f"Auto-added {name} to quick links")
+    add_quick_link(name, url, icon, open_in_iframe)
+    app.logger.info(f"Auto-added {name} to quick links - iframe: {open_in_iframe}")
 
 @app.before_request
 def check_first_run():
     # Skip check for setup page itself, static files, and API routes
     if request.endpoint in ['setup', 'static', 'test_connection', 'save_service_config', 
-                            'manage_quick_links', 'delete_quick_link_route', 'handle_emby_webhook']:
+                            'manage_quick_links', 'delete_quick_link_route', 'handle_emby_webhook',
+                            'iframe_view', 'services_sidebar', 'iframe_service_view']:  # ADD THESE TWO
         return
     
     # Check if Sonarr is configured (required service)
@@ -160,15 +175,58 @@ def setup():
     jellyseerr = get_service('jellyseerr', 'default')
     tmdb = get_service('tmdb', 'default')
     
-    # NEW: Get integration configurations
+        # NEW: Get integration configurations with guaranteed fields
     integration_configs = {}
     for integration in get_all_integrations():
         config = get_service(integration.service_name, 'default')
+        
+        # Force fallback fields — ignore whatever get_setup_fields() returns for now
+        setup_fields = [
+            {
+                'name': 'url',
+                'label': 'Service URL',
+                'type': 'url',
+                'placeholder': f'http://localhost:{getattr(integration, "default_port", 80)}',
+                'required': True,
+                'help': 'Full base URL including http(s):// and port'
+            },
+            {
+                'name': 'apikey',
+                'label': 'API Key / Token',
+                'type': 'text',
+                'placeholder': 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+                'required': True,
+                'help': f'From {integration.display_name} settings'
+            }
+        ]
+        
+        # If the integration actually defines custom fields, use them instead
+        try:
+            custom = integration.get_setup_fields()
+            if isinstance(custom, list) and len(custom) > 0:
+                setup_fields = custom
+                print(f"Using CUSTOM fields for {integration.service_name} ({len(custom)} fields)")
+            else:
+                print(f"Using FALLBACK fields for {integration.service_name} (2 fields)")
+        except Exception as e:
+            print(f"Error reading custom fields for {integration.service_name}: {e} — using fallback")
+        
+        # Pre-fill values — flatten everything into one dict
+        saved_values = {}
+        if config:
+            saved_values['url'] = config.get('url')
+            saved_values['apikey'] = config.get('api_key')
+            # Merge any old-style config dict
+            if isinstance(config.get('config'), dict):
+                saved_values.update(config['config'])
+        
         integration_configs[integration.service_name] = {
             'connected': config is not None,
-            'url': config['url'] if config else None,
-            'apikey': config['api_key'] if config else None,
-            'integration': integration  # Pass the integration object too
+            'url': saved_values.get('url'),
+            'apikey': saved_values.get('apikey'),
+            'integration': integration,
+            'setup_fields': setup_fields,
+            'saved_values': saved_values  # for template pre-fill
         }
     
     # Check if setup is complete
@@ -187,10 +245,11 @@ def setup():
         jellyfin_url=jellyfin['url'] if jellyfin else None,
         jellyfin_apikey=jellyfin['api_key'] if jellyfin else None,
         jellyfin_userid=jellyfin['config'].get('user_id') if jellyfin and jellyfin.get('config') else None,
+        jellyfin_method=jellyfin['config'].get('method', 'polling') if jellyfin and jellyfin.get('config') else 'polling',
         jellyfin_trigger_min=jellyfin['config'].get('trigger_min', 50.0) if jellyfin and jellyfin.get('config') else 50.0,
         jellyfin_trigger_max=jellyfin['config'].get('trigger_max', 55.0) if jellyfin and jellyfin.get('config') else 55.0,
         jellyfin_poll_interval=jellyfin['config'].get('poll_interval', 900) if jellyfin and jellyfin.get('config') else 900,
-        emby_connected=emby is not None,
+        jellyfin_trigger_percent=jellyfin['config'].get('trigger_percentage', 50.0) if jellyfin and jellyfin.get('config') else 50.0,emby_connected=emby is not None,
         emby_url=emby['url'] if emby else None,
         emby_apikey=emby['api_key'] if emby else None,
         emby_userid=emby['config'].get('user_id') if emby and emby.get('config') else None,
@@ -204,282 +263,335 @@ def setup():
         jellyseerr_apikey=jellyseerr['api_key'] if jellyseerr else None,
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
-        # NEW: Pass integration configs
         integrations=get_all_integrations(),
         integration_configs=integration_configs,
         quick_links=quick_links
     )
 
+# Replace test_connection in episeerr.py with this version:
+
 @app.route('/api/test-connection/<service>', methods=['POST'])
 def test_connection(service):
-    """Test connection to a service"""
     data = request.json
     
+    # Try integration first
+    integration = get_integration(service)
+    if integration:
+        try:
+            # Extract ALL fields prefixed with {service}-
+            integration_data = {}
+            for key, value in data.items():
+                if key.startswith(f'{service}-'):
+                    field_name = key[len(f'{service}-'):]
+                    integration_data[field_name] = value.strip() if isinstance(value, str) else value
+            
+            # Smart field detection
+            url = (integration_data.get('url') or 
+                   integration_data.get('service_url') or 
+                   integration_data.get('base_url') or
+                   '')
+            
+            api_key = (integration_data.get('apikey') or 
+                       integration_data.get('api_key') or 
+                       integration_data.get('token') or
+                       integration_data.get('key') or
+                       integration_data.get('path') or
+                       '')
+            
+            if api_key:  # Only test if we have an API key
+                success, message = integration.test_connection(url, api_key)
+                
+                if success:
+                    update_service_test_result(service, 'default', 'success')
+                    return jsonify({'status': 'success', 'message': message or 'Connection successful'})
+                else:
+                    update_service_test_result(service, 'default', 'failed')
+                    return jsonify({'status': 'error', 'message': message or 'Connection failed'}), 400
+        except Exception as e:
+            app.logger.error(f"Integration test error for {service}: {e}")
+            # Fall through to legacy handlers
+    
+    # Legacy service handlers (keep existing code for sonarr, jellyfin, etc.)
     try:
-        # NEW: Check if it's a plugin integration FIRST
-        integration = get_integration(service)
-        if integration:
-            url = data.get(f'{service}-url')
-            api_key = data.get(f'{service}-apikey')
-            
-            if not url or not api_key:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'URL and API key are required'
-                }), 400
-            
-            # Call the integration's test method
-            success, message = integration.test_connection(url, api_key)
-            
-            if success:
-                update_service_test_result(service, 'default', 'success')
-                return jsonify({'status': 'success', 'message': message})
-            else:
-                update_service_test_result(service, 'default', 'failed')
-                return jsonify({'status': 'error', 'message': message}), 400
         if service == 'sonarr':
             url = data.get('sonarr-url')
             api_key = data.get('sonarr-apikey')
-            print(f"[TEST CONNECTION] Sonarr URL: {url}")
-            print(f"[TEST CONNECTION] API Key present: {bool(api_key)}")
             
             if not url or not api_key:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'URL and API key are required'
-                }), 400
+                return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
             
             response = requests.get(f"{url}/api/v3/system/status", 
                                   headers={'X-Api-Key': api_key}, timeout=10)
-            print(f"[TEST CONNECTION] Response status: {response.status_code}")
+            response.raise_for_status()
             
-            if response.ok:
-                system_status = response.json()
-                update_service_test_result('sonarr', 'default', 'success')
-                return jsonify({
-                    'status': 'success',
-                    'message': f"Connected to Sonarr v{system_status.get('version', 'unknown')}"
-                })
-            else:
-                return jsonify({
-                    'status': 'error',
-                    'message': f'Sonarr returned status {response.status_code}: {response.text[:200]}'
-                }), 400
-        
-        elif service == 'jellyfin':
-            url = data.get('jellyfin-url')
-            api_key = data.get('jellyfin-apikey')
-            response = requests.get(f"{url}/System/Info", 
-                                  headers={'X-Emby-Token': api_key}, timeout=10)
-            if response.ok:
-                info = response.json()
-                update_service_test_result('jellyfin', 'default', 'success')
-                return jsonify({
-                    'status': 'success',
-                    'message': f"Connected to Jellyfin v{info.get('Version', 'unknown')}"
-                })
-        
-        elif service == 'emby':
-            url = data.get('emby-url')
-            api_key = data.get('emby-apikey')
-            response = requests.get(f"{url}/System/Info", 
-                                  headers={'X-Emby-Token': api_key}, timeout=10)
-            if response.ok:
-                info = response.json()
-                update_service_test_result('emby', 'default', 'success')
-                return jsonify({
-                    'status': 'success',
-                    'message': f"Connected to Emby v{info.get('Version', 'unknown')}"
-                })
+            update_service_test_result('sonarr', 'default', 'success')
+            return jsonify({'status': 'success', 'message': 'Connected to Sonarr successfully'})
         
         elif service == 'tautulli':
             url = data.get('tautulli-url')
             api_key = data.get('tautulli-apikey')
-            response = requests.get(f"{url}/api/v2", 
-                                  params={'apikey': api_key, 'cmd': 'get_server_info'}, timeout=10)
-            if response.ok:
-                result = response.json()
-                if result.get('response', {}).get('result') == 'success':
-                    update_service_test_result('tautulli', 'default', 'success')
-                    return jsonify({
-                        'status': 'success',
-                        'message': 'Connected to Tautulli successfully'
-                    })
-        
-        elif service == 'jellyseerr':
-            url = data.get('jellyseerr-url')
-            api_key = data.get('jellyseerr-apikey')
-            response = requests.get(f"{url}/api/v1/status", 
-                                  headers={'X-Api-Key': api_key}, timeout=10)
-            if response.ok:
-                update_service_test_result('jellyseerr', 'default', 'success')
-                return jsonify({
-                    'status': 'success',
-                    'message': 'Connected to Jellyseerr/Overseerr successfully'
-                })
-        
-        elif service == 'tmdb':
-            api_key = data.get('tmdb-apikey')
-            response = requests.get('https://api.themoviedb.org/3/configuration',
-                                  headers={'Authorization': f'Bearer {api_key}'}, timeout=10)
-            if response.ok:
-                update_service_test_result('tmdb', 'default', 'success')
-                return jsonify({
-                    'status': 'success',
-                    'message': 'TMDB API key is valid'
-                })
-            else:
-                update_service_test_result('tmdb', 'default', 'failed')  # Add this
-                return jsonify({
-                    'status': 'error',
-                    'message': f'TMDB returned status {response.status_code}'  # Fixed!
-                }), 400
             
-        # If we get here, service wasn't recognized or connection failed
-        update_service_test_result(service, 'default', 'failed')
-        return jsonify({
-            'status': 'error',
-            'message': f'Service {service} not configured or connection failed'
-        }), 400
-    
-    except requests.exceptions.Timeout:
-        print(f"[TEST CONNECTION] Timeout error")
-        update_service_test_result(service, 'default', 'failed')
-        return jsonify({
-            'status': 'error',
-            'message': 'Connection timeout - check URL and network'
-        }), 400
-    
-    except requests.exceptions.ConnectionError as e:
-        print(f"[TEST CONNECTION] Connection error: {e}")
-        update_service_test_result(service, 'default', 'failed')
-        return jsonify({
-            'status': 'error',
-            'message': f'Cannot reach server at {data.get(f"{service}-url", "URL")} - check URL and network'
-        }), 400
-    
-    except requests.exceptions.RequestException as e:
-        print(f"[TEST CONNECTION] Request error: {e}")
-        update_service_test_result(service, 'default', 'failed')
-        return jsonify({
-            'status': 'error',
-            'message': f'Request error: {str(e)}'
-        }), 400
-    
+            if not url or not api_key:
+                return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
+            
+            response = requests.get(f"{url}/api/v2",
+                                  params={'apikey': api_key, 'cmd': 'get_server_info'},
+                                  timeout=10)
+            response.raise_for_status()
+            
+            update_service_test_result('tautulli', 'default', 'success')
+            return jsonify({'status': 'success', 'message': 'Connected to Tautulli successfully'})
+        
+        elif service == 'jellyfin':
+            url = data.get('jellyfin-url')
+            api_key = data.get('jellyfin-apikey')
+            
+            if not url or not api_key:
+                return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
+            
+            response = requests.get(f"{url}/System/Info",
+                                  headers={'X-Emby-Token': api_key},
+                                  timeout=10)
+            response.raise_for_status()
+            
+            update_service_test_result('jellyfin', 'default', 'success')
+            return jsonify({'status': 'success', 'message': 'Connected to Jellyfin successfully'})
+        
+        # Add other legacy services as needed...
+        
+        else:
+            return jsonify({'status': 'error', 'message': f'Unknown service: {service}'}), 400
+            
     except Exception as e:
-        print(f"[TEST CONNECTION] Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
+        app.logger.error(f"Test connection error for {service}: {e}")
         update_service_test_result(service, 'default', 'failed')
-        return jsonify({
-            'status': 'error',
-            'message': f'Error: {str(e)}'
-        }), 400
+        return jsonify({'status': 'error', 'message': f'Connection failed: {str(e)}'}), 400
+
+# Replace save_service_config in episeerr.py with this:
+
+# Replace save_service_config in episeerr.py:
 
 @app.route('/api/save-service/<service>', methods=['POST'])
 def save_service_config(service):
-    """Save service configuration"""
     data = request.json
     
-    try:
-        # NEW: Check if it's a plugin integration FIRST
-        integration = get_integration(service)
-        if integration:
-            url = data.get(f'{service}-url')
-            api_key = data.get(f'{service}-apikey')
+    # Try integration first
+    integration = get_integration(service)
+    if integration:
+        try:
+            # Extract ALL fields prefixed with {service}-
+            integration_data = {}
+            for key, value in data.items():
+                if key.startswith(f'{service}-'):
+                    field_name = key[len(f'{service}-'):]
+                    integration_data[field_name] = value.strip() if isinstance(value, str) else value
             
-            if not url or not api_key:
+            # Smart field detection
+            url = (integration_data.get('url') or 
+                   integration_data.get('service_url') or 
+                   integration_data.get('base_url') or 
+                   '')
+            
+            api_key = (integration_data.get('apikey') or 
+                       integration_data.get('api_key') or 
+                       integration_data.get('token') or
+                       integration_data.get('key') or
+                       integration_data.get('path') or
+                       '')
+            
+            # Check if we got any data at all
+            if not integration_data:
+                # No integration fields found, this might be a legacy service
+                # Fall through to legacy handlers
+                pass
+            elif not api_key:
+                # Integration data exists but no API key - this is an error
                 return jsonify({
                     'status': 'error',
-                    'message': 'URL and API key are required'
+                    'message': 'API key/token/path is required'
                 }), 400
-            
-            # Save to database
-            save_service(service, 'default', url, api_key)
-            
-            # Call integration's on_save hook (adds to quick links)
-            integration.on_save(url, api_key)
-            
-            # Reload configs so they work immediately
-            reload_module_configs()  # ← ADD THIS LINE
-            
+            else:
+                # We have valid integration data - save it
+                # Normalize field names for storage
+                normalized_data = integration_data.copy()
+                if 'apikey' in normalized_data and 'api_key' not in normalized_data:
+                    normalized_data['api_key'] = normalized_data['apikey']
+                elif 'api_key' in normalized_data and 'apikey' not in normalized_data:
+                    normalized_data['apikey'] = normalized_data['api_key']
+                
+                # Save to database
+                save_service(
+                    service_type=service,  # Changed from service_name
+                    name='default',        # Changed from instance
+                    url=url,
+                    api_key=api_key,
+                    config=normalized_data
+                )
+                
+                # Auto-add/update quick links if URL provided
+                if url and url.startswith('http'):
+                    try:
+                        # Get the open_in_iframe setting from normalized_data
+                        open_in_iframe = normalized_data.get('open_in_iframe', False)
+                        
+                        auto_add_quick_link(
+                            integration.display_name,
+                            url,
+                            integration.icon,
+                            open_in_iframe  # Pass the iframe setting
+                        )
+                    except Exception as e:
+                        app.logger.warning(f"Failed to add/update quick link: {e}")
+                
+                reload_module_configs()
+                
+                return jsonify({
+                    'status': 'success',
+                    'message': f'{integration.display_name} saved successfully'
+                })
+                
+        except Exception as e:
+            app.logger.error(f"Integration save error for {service}: {e}")
             return jsonify({
-                'status': 'success',
-                'message': f'{integration.display_name} saved successfully'
-            })
+                'status': 'error',
+                'message': f'Error saving: {str(e)}'
+            }), 500
+    
+    # Legacy service handlers (if no integration found or integration had no data)
+    try:
         if service == 'sonarr':
-            save_service('sonarr', 'default', 
-                        data.get('sonarr-url'),
-                        data.get('sonarr-apikey'))
-            # Auto-add to quick links
-            auto_add_quick_link('Sonarr', data.get('sonarr-url'), 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png')
+            url = data.get('sonarr-url')
+            apikey = data.get('sonarr-apikey')
+            open_in_iframe = data.get('sonarr-open_in_iframe', False)
+
+            if not url or not apikey:
+                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
+            
+            save_service('sonarr', 'default', url, apikey)
+            auto_add_quick_link('Sonarr', url, 
+                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png', open_in_iframe)
             
             return jsonify({
                 'status': 'success',
-                'message': 'Sonarr saved successfully. Please restart the container for changes to take effect.'
+                'message': 'Sonarr saved successfully'
             })
         
         elif service == 'jellyfin':
+            url = data.get('jellyfin-url')
+            apikey = data.get('jellyfin-apikey')
+            open_in_iframe = data.get('jellyfin-open_in_iframe', False)
+            if not url or not apikey:
+                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
+            
+            method = data.get('jellyfin-method', 'polling')  # Changed: read 'jellyfin-method' and default to 'polling'
+            
             config = {
                 'user_id': data.get('jellyfin-userid'),
-                'method': data.get('method', 'progress'),
-                'trigger_min': float(data.get('jellyfin-trigger-min', 50.0)),
-                'trigger_max': float(data.get('jellyfin-trigger-max', 55.0)),
-                'poll_interval': int(data.get('jellyfin-poll-interval', 900)),
-                'trigger_percentage': float(data.get('jellyfin-trigger-percent', 50.0))
+                'method': method
             }
-            save_service('jellyfin', 'default',
-                        data.get('jellyfin-url'),
-                        data.get('jellyfin-apikey'),
-                        config)
-            # Auto-add to quick links
-            auto_add_quick_link('Jellyfin', data.get('jellyfin-url'), 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png')
+            
+            # Only save relevant fields based on method
+            if method == 'polling':
+                config.update({
+                    'poll_interval': int(data.get('jellyfin-poll-interval', 900)),
+                    'trigger_percentage': float(data.get('jellyfin-trigger-percent', 50.0))
+                })
+            else:  # progress
+                config.update({
+                    'trigger_min': float(data.get('jellyfin-trigger-min', 50.0)),
+                    'trigger_max': float(data.get('jellyfin-trigger-max', 55.0))
+                })
+            
+            save_service('jellyfin', 'default', url, apikey, config)
+            auto_add_quick_link('Jellyfin', url,
+                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png', open_in_iframe)
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Jellyfin saved successfully'
+            })
         
         elif service == 'emby':
+            url = data.get('emby-url')
+            apikey = data.get('emby-apikey')
+            open_in_iframe = data.get('emby-open_in_iframe', False)
+
+            if not url or not apikey:
+                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
+            
             config = {
                 'user_id': data.get('emby-userid'),
-                'poll_interval': int(data.get('emby-poll-interval', 900)),
+                'poll_interval': int(data.get('emby-poll-interval', 5)),
                 'trigger_percentage': float(data.get('emby-trigger-percent', 50.0))
             }
-            save_service('emby', 'default',
-                        data.get('emby-url'),
-                        data.get('emby-apikey'),
-                        config)
-            # Auto-add to quick links
-            auto_add_quick_link('Emby', data.get('emby-url'), 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/emby.png')
+            save_service('emby', 'default', url, apikey, config)
+            auto_add_quick_link('Emby', url,
+                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/emby.png', open_in_iframe)
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Emby saved successfully'
+            })
         
         elif service == 'tautulli':
-            save_service('tautulli', 'default',
-                        data.get('tautulli-url'),
-                        data.get('tautulli-apikey'))
-            # Auto-add to quick links
-            auto_add_quick_link('Tautulli', data.get('tautulli-url'), 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png')
+            url = data.get('tautulli-url')
+            apikey = data.get('tautulli-apikey')
+            open_in_iframe = data.get('tautulli-open_in_iframe', False)
+
+            if not url or not apikey:
+                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
+            
+            save_service('tautulli', 'default', url, apikey)
+            auto_add_quick_link('Tautulli', url,
+                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png', open_in_iframe)
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Tautulli saved successfully'
+            })
         
         elif service == 'jellyseerr':
-            save_service('jellyseerr', 'default',
-                        data.get('jellyseerr-url'),
-                        data.get('jellyseerr-apikey'))
-            # Auto-add to quick links
-            auto_add_quick_link('Jellyseerr', data.get('jellyseerr-url'), 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyseerr.png')
+            url = data.get('jellyseerr-url')
+            apikey = data.get('jellyseerr-apikey')
+            open_in_iframe = data.get('jellyseerr-open_in_iframe', False)
+
+            if not url or not apikey:
+                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
+            
+            save_service('jellyseerr', 'default', url, apikey)
+            auto_add_quick_link('Jellyseerr', url,
+                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyseerr.png', open_in_iframe)
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'Jellyseerr saved successfully'
+            })
         
         elif service == 'tmdb':
-            save_service('tmdb', 'default',
-                        'https://api.themoviedb.org',
-                        data.get('tmdb-apikey'))
+            apikey = data.get('tmdb-apikey')
+            
+            if not apikey:
+                return jsonify({'status': 'error', 'message': 'API key required'}), 400
+            
+            save_service('tmdb', 'default', '', apikey)
+            
+            return jsonify({
+                'status': 'success',
+                'message': 'TMDB saved successfully'
+            })
         
-        # Reload configs so they work immediately (for Sonarr, Jellyfin, etc.)
-        reload_module_configs()  # ← ADD THIS LINE
-        
-        return jsonify({
-            'status': 'success',
-            'message': 'Settings saved successfully'
-        })
-    
+        else:
+            return jsonify({
+                'status': 'error',
+                'message': f'Unknown service: {service}'
+            }), 400
+            
     except Exception as e:
+        app.logger.error(f"Save service error for {service}: {e}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
-        }), 400
+            'message': f'Error saving: {str(e)}'
+        }), 500
 
 @app.route('/api/quick-links', methods=['GET', 'POST'])
 def manage_quick_links():
@@ -495,9 +607,133 @@ def manage_quick_links():
         link_id = add_quick_link(
             data.get('name'),
             data.get('url'),
-            data.get('icon', 'fas fa-link')
+            data.get('icon', 'fas fa-link'),
+            data.get('open_in_iframe', False)  # NEW: Accept iframe flag
         )
         return jsonify({'status': 'success', 'id': link_id})
+
+# 2. ADD this NEW route after delete_quick_link_route (around line 586)
+
+@app.route('/iframe/<int:service_id>')
+def iframe_view(service_id):
+    """Display a service in an iframe"""
+    from settings_db import get_quick_link_by_id
+    
+    service = get_quick_link_by_id(service_id)
+    
+    if not service:
+        return "Service not found", 404
+    
+    if not service.get('open_in_iframe'):
+        # If not configured for iframe, redirect to external URL
+        return redirect(service['url'])
+    
+    return render_template('iframe_view.html', service=service)
+
+
+@app.route('/api/services-sidebar')
+def services_sidebar():
+    """Get all configured services for sidebar display with iframe settings
+    Also auto-manages quick links for integrations"""
+    from settings_db import get_service, get_all_quick_links, add_quick_link, delete_quick_link
+    from integrations import get_all_integrations
+    
+    services = []
+    existing_links = get_all_quick_links()
+    integration_urls = set()
+    
+    # Get all integrations
+    for integration in get_all_integrations():
+        config = get_service(integration.service_name, 'default')
+        if config:  # Only include if configured
+            # Check if open_in_iframe is in config
+            open_in_iframe = False
+            if config.get('config'):
+                open_in_iframe = config['config'].get('open_in_iframe', False)
+            
+            service_url = config['url'].rstrip('/')
+            integration_urls.add(service_url.lower())
+            
+            # Check if a quick link already exists for this service
+            existing_link = None
+            for link in existing_links:
+                if link['url'].rstrip('/').lower() == service_url.lower():
+                    existing_link = link
+                    break
+            
+            if existing_link:
+                # Use the existing quick link ID
+                services.append({
+                    'id': existing_link['id'],
+                    'name': integration.display_name,
+                    'url': config['url'],
+                    'icon': integration.icon,
+                    'service_type': integration.service_name,
+                    'open_in_iframe': open_in_iframe
+                })
+            else:
+                # Auto-create a quick link for this integration
+                link_id = add_quick_link(
+                    name=integration.display_name,
+                    url=config['url'],
+                    icon=integration.icon,
+                    open_in_iframe=open_in_iframe
+                )
+                
+                services.append({
+                    'id': link_id,
+                    'name': integration.display_name,
+                    'url': config['url'],
+                    'icon': integration.icon,
+                    'service_type': integration.service_name,
+                    'open_in_iframe': open_in_iframe
+                })
+                
+                app.logger.info(f"Auto-created quick link for {integration.display_name}")
+    
+    # Clean up orphaned quick links that match integration URLs but service is no longer configured
+    for link in existing_links:
+        link_url = link['url'].rstrip('/').lower()
+        # If this link's URL matches an integration URL but wasn't processed above, delete it
+        # (This happens when you unconfigure a service)
+        if link_url in integration_urls:
+            # Check if this link was included in services
+            found = False
+            for service in services:
+                if service.get('id') == link['id']:
+                    found = True
+                    break
+            
+            if not found:
+                # Orphaned integration link - remove it
+                delete_quick_link(link['id'])
+                app.logger.info(f"Removed orphaned quick link: {link['name']}")
+    
+    return jsonify({'status': 'success', 'services': services})
+
+@app.route('/iframe-service/<service_type>')
+def iframe_service_view(service_type):
+    """Display a configured service in an iframe"""
+    from settings_db import get_service
+    
+    service = get_service(service_type, 'default')
+    
+    if not service:
+        return "Service not found", 404
+    
+    # Check if this service is configured for iframe
+    open_in_iframe = False
+    if service.get('config'):
+        open_in_iframe = service['config'].get('open_in_iframe', False)
+    
+    if not open_in_iframe:
+        # If not configured for iframe, redirect to external URL
+        return redirect(service['url'])
+    
+    return render_template('iframe_view.html', service={
+        'name': service_type.replace('_', ' ').title(),
+        'url': service['url']
+    })
 
 @app.route('/api/quick-links/<int:link_id>', methods=['DELETE'])
 def delete_quick_link_route(link_id):
@@ -1678,7 +1914,12 @@ def documentation():
 
 @app.route('/')
 def index():
-    """Main rules management page."""
+    """Redirect to dashboard as main page."""
+    return redirect(url_for('dashboard.dashboard'))
+
+@app.route('/series')  # or whatever you want to call it
+def series_management():  # Changed from index to avoid confusion
+    """Main series/rules management page."""
     config = load_config()
     all_series = get_sonarr_series()
     sonarr_stats = get_sonarr_stats()
@@ -1702,7 +1943,6 @@ def index():
                          sonarr_stats=sonarr_stats,
                          SONARR_URL=sonarr_url,
                          SONARR_API_KEY=sonarr_preferences['SONARR_API_KEY'],
-                         
                          current_rule=request.args.get('rule', list(config['rules'].keys())[0] if config['rules'] else 'default'))
 
 # Add new API route for real-time stats updates

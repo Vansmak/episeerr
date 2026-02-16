@@ -11,6 +11,7 @@ services:
       - ./config:/app/config
       - ./data:/app/data
       - ./temp:/app/temp
+      - /home/joe/projects/spotify_shuffle:/spotify_shuffle
     ports:
       - "5002:5002"
     restart: unless-stopped

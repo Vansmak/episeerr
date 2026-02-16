@@ -10,30 +10,20 @@
         <div class="d-flex flex-wrap gap-3 justify-content-start align-items-center" id="stats-pills-container">
         <!-- Sonarr (Core - Always Visible) -->
         <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start">
-            <i class="fas fa-tv me-2 text-primary"></i>
-            <strong id="sonarr-series">--</strong> series
-            <small class="text-muted ms-2 d-none d-sm-inline" id="sonarr-size">(-- GB)</small>
+            <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-2" style="width: 20px; height: 20px;">
+            <strong id="sonarr-series">--</strong>
+            <small class="text-muted ms-2" id="sonarr-size">(-- GB)</small>
+            <small class="text-muted ms-2">•</small>
+            <small class="text-muted ms-1"><strong id="episodes-count">--</strong> eps</small>
         </div>
 
         <!-- Sonarr Queue (Core - Always Visible) -->
         <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start">
             <i class="fas fa-list me-2 text-info"></i>
-            <strong id="sonarr-queue">--</strong> queued
+            <strong id="sonarr-queue">--</strong>
         </div>
 
         <!-- Integration Pills will be inserted here by JavaScript -->
-
-        <!-- Rules (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start">
-            <i class="fas fa-cog me-2 text-purple"></i>
-            <strong id="rules-count">--</strong> rules
-        </div>
-
-        <!-- Episodes (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start d-none d-md-flex">
-            <i class="fas fa-film me-2 text-warning"></i>
-            <strong id="episodes-count">--</strong> episodes
-        </div>
         </div>
     </div>
     </div>
@@ -77,15 +67,18 @@
                 <div id="downloaded-container" class="p-3"></div>
             </div>
 
-            <!-- Recent Activity – slim -->
-            <div class="col-12 col-lg-4">  <!-- or col-lg-3 if you want it even slimmer -->
+            <!-- Recent Activity column -->
+            <div class="col-12 col-lg-4">
                 <h6 class="bg-dark p-3 mb-0 border-bottom text-center text-lg-start">
-                <i class="fas fa-stream me-2"></i>Recent Activity
+                    <i class="fas fa-stream me-2"></i>Recent Activity
                 </h6>
                 <div id="activity-feed-mini" class="p-3 activity-feed" style="max-height: 600px; overflow-y: auto;"></div>
+                
+                <!-- Integration Widgets Container - DYNAMIC -->
+                <div id="integration-widgets-container" class="mt-3">
+                    <!-- Widgets loaded dynamically via AJAX -->
+                </div>
             </div>
-            </div>
-
           <!-- Empty State -->
           <div id="calendar-empty" class="text-center py-5 text-muted" style="display: none;">
             <i class="fas fa-calendar-times fa-3x mb-3"></i>
@@ -179,10 +172,12 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDashboardStats();
         loadCalendar();
         loadActivitySlim();
-        
+        loadIntegrationWidgets();
         // Set intervals
         statsInterval = setInterval(loadDashboardStats, 30000);
         activityInterval = setInterval(loadActivitySlim, 60000);
+        // Auto-refresh widgets every 30 seconds
+        setInterval(loadIntegrationWidgets, 30000);
     });
 });
 
@@ -194,7 +189,6 @@ function loadIntegrations() {
             if (!data.success || !data.integrations) return;
             
             const container = document.getElementById('stats-pills-container');
-            const rulesEl = container.querySelector('.stat-pill:has(#rules-count)');
             
             data.integrations.forEach(integration => {
                 // Store metadata for later use
@@ -210,19 +204,49 @@ function loadIntegrations() {
                 pill.style.display = 'none';  // Hidden until stats load
                 
                 pill.innerHTML = `
-                    <i class="${integration.widget.pill.icon} me-2 ${integration.widget.pill.icon_color}"></i>
+                    <img src="${integration.icon}" class="me-2" style="width: 20px; height: 20px;" onerror="this.style.display='none'">
                     <span id="${integration.service_name}-content">--</span>
                 `;
                 
-                // Insert before "Rules" pill
-                container.insertBefore(pill, rulesEl);
+                // Append to end of container
+                container.appendChild(pill);
             });
         })
         .catch(err => {
             console.error('Error loading integrations:', err);
         });
 }
-
+// Load integration widgets (generic - works for any integration)
+function loadIntegrationWidgets() {
+    const container = document.getElementById('integration-widgets-container');
+    if (!container) return;
+    
+    fetch('/api/dashboard/integrations')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success || !data.integrations) return;
+            
+            container.innerHTML = '';
+            
+            // Check each integration for custom widget
+            data.integrations.forEach(integration => {
+                if (integration.widget && integration.widget.has_custom_widget) {
+                    fetch(`/api/integration/${integration.service_name}/widget`)
+                        .then(r => r.json())
+                        .then(widgetData => {
+                            if (widgetData.success && widgetData.html) {
+                                const div = document.createElement('div');
+                                div.className = 'mb-3';
+                                div.innerHTML = widgetData.html;
+                                container.appendChild(div);
+                            }
+                        })
+                        .catch(() => {}); // Widget unavailable - that's fine
+                }
+            });
+        })
+        .catch(err => console.error('Widget load error:', err));
+}
 // Stats (top pills)
 function loadDashboardStats() {
     fetch('/api/dashboard/stats')
@@ -266,11 +290,6 @@ function loadDashboardStats() {
                     document.getElementById(`${serviceName}-content`).innerHTML = content;
                     document.getElementById(`${serviceName}-pill`).style.display = 'flex';
                 });
-                
-                // Episeerr stats
-                if (stats.episeerr) {
-                    document.getElementById('rules-count').textContent = stats.episeerr.rule_count || '--';
-                }
             }
         })
         .catch(err => console.error('Stats error:', err));

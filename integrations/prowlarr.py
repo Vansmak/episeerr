@@ -129,7 +129,7 @@ class ProwlarrIntegration(ServiceIntegration):
             'pill': {
                 'icon': 'fas fa-search-plus',
                 'icon_color': 'text-primary',
-                'template': '{enabled_indexers}/{total_indexers} indexers',
+                'template': '{enabled_indexers}/{total_indexers}',
                 'fields': ['enabled_indexers', 'total_indexers']
             }
         }

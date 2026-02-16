@@ -8,6 +8,7 @@ if [ -z "$VERSION" ]; then
     echo "Usage: ./release.sh <version>"
     echo "Examples:"
     echo "  ./release.sh test           (test/dev build - no git operations)"
+    echo "  ./release.sh custom         (custom build - Docker only, no git)"
     echo "  ./release.sh 1.0.0          (stable release)"
     echo "  ./release.sh beta-1.0.0     (beta release)"
     echo "  ./release.sh 1.0.0-beta.1   (beta release)"
@@ -18,6 +19,11 @@ if [ -z "$VERSION" ]; then
     echo "    - Skip all git operations (no commits, no tags)"
     echo "    - Build and push only vansmak/episeerr:test"
     echo "    - Perfect for testing changes quickly"
+    echo ""
+    echo "  CUSTOM MODE:"
+    echo "    - Skip all git operations (no commits, no tags)"
+    echo "    - Build and push vansmak/episeerr:custom"
+    echo "    - For your personal builds without affecting git history"
     echo ""
     echo "  RELEASE MODES:"
     echo "    1. Handle any merge conflicts automatically"
@@ -31,11 +37,15 @@ fi
 
 # Detect build type
 IS_TEST=false
+IS_CUSTOM=false
 IS_PRERELEASE=false
 
 if [[ $VERSION == "test" ]]; then
     IS_TEST=true
     echo "🧪 TEST MODE: Skipping git operations, building Docker image only"
+elif [[ $VERSION == "custom" ]]; then
+    IS_CUSTOM=true
+    echo "🔧 CUSTOM MODE: Skipping git operations, building custom Docker image"
 elif [[ $VERSION == *"beta"* ]] || [[ $VERSION == *"alpha"* ]] || [[ $VERSION == *"rc"* ]] || [[ $VERSION == *"-"* ]]; then
     IS_PRERELEASE=true
 fi
@@ -43,6 +53,8 @@ fi
 echo "🚀 Starting Episeerr release process for version: $VERSION"
 if [ "$IS_TEST" = true ]; then
     echo "🧪 Test build - no git operations, Docker only"
+elif [ "$IS_CUSTOM" = true ]; then
+    echo "🔧 Custom build - no git operations, Docker only"
 elif [ "$IS_PRERELEASE" = true ]; then
     echo "🧪 Pre-release detected - will NOT tag as 'latest'"
 else
@@ -50,8 +62,8 @@ else
 fi
 echo "=================================================="
 
-# Step 1: Git operations (SKIP if test mode)
-if [ "$IS_TEST" = false ]; then
+# Step 1: Git operations (SKIP if test or custom mode)
+if [ "$IS_TEST" = false ] && [ "$IS_CUSTOM" = false ]; then
     echo ""
     echo "📝 Step 1: Git operations with conflict resolution"
     echo "-------------------------------------------------"
@@ -199,7 +211,11 @@ Features:
     echo "✅ Git operations completed"
 else
     echo ""
-    echo "⏭️  Step 1: Skipped (Test Mode - no git operations)"
+    if [ "$IS_TEST" = true ]; then
+        echo "⏭️  Step 1: Skipped (Test Mode - no git operations)"
+    else
+        echo "⏭️  Step 1: Skipped (Custom Mode - no git operations)"
+    fi
     echo "-------------------------------------------------"
 fi
 
@@ -269,6 +285,23 @@ if [ "$IS_TEST" = true ]; then
         echo "❌ Docker build failed!"
         exit 1
     fi
+elif [ "$IS_CUSTOM" = true ]; then
+    echo "Building Episeerr CUSTOM image (Docker only, no releases)..."
+    if docker buildx build \
+      --builder $BUILDER_NAME \
+      --platform linux/amd64,linux/arm64,linux/arm/v7 \
+      -t vansmak/episeerr:custom \
+      --push \
+      .; then
+        
+        echo "🔧 Custom image built and pushed:"
+        echo "  - vansmak/episeerr:custom"
+        echo ""
+        echo "Pull with: docker pull vansmak/episeerr:custom"
+    else
+        echo "❌ Docker build failed!"
+        exit 1
+    fi
 elif [ "$IS_PRERELEASE" = true ]; then
     echo "Building Episeerr pre-release multi-arch image (no 'latest' tag)..."
     if docker buildx build \
@@ -327,6 +360,22 @@ if [ "$IS_TEST" = true ]; then
     echo "  - Pull with: docker pull vansmak/episeerr:test"
     echo "  - Test your changes"
     echo "  - When ready, run: ./release.sh <version> for official release"
+elif [ "$IS_CUSTOM" = true ]; then
+    echo "Type: 🔧 CUSTOM BUILD"
+    echo "Docker image: vansmak/episeerr:custom"
+    echo ""
+    echo "🔧 Episeerr CUSTOM build completed successfully!"
+    echo ""
+    echo "✅ What was done:"
+    echo "  - Built multi-arch Docker image"
+    echo "  - Pushed to Docker Hub as 'custom' tag"
+    echo "  - No git commits or tags created"
+    echo "  - No changes to stable releases or git history"
+    echo ""
+    echo "Next steps:"
+    echo "  - Pull with: docker pull vansmak/episeerr:custom"
+    echo "  - Use for your personal testing/deployment"
+    echo "  - Git history remains clean - make commits manually if needed"
 elif [ "$IS_PRERELEASE" = true ]; then
     echo "Type: 🧪 PRE-RELEASE"
     echo "Git tag: v$VERSION"

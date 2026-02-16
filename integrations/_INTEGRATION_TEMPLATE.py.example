@@ -210,6 +210,10 @@ class YourServiceIntegration(ServiceIntegration):
         The 'template' field uses {field_name} syntax to reference 
         fields from get_dashboard_stats() return value.
         
+        BEST PRACTICE: Keep pills compact - icons make words unnecessary!
+        ✅ Good: '{count} ({size_gb} GB)'  - numbers only, icon shows context
+        ❌ Avoid: '{count} items ({size_gb} gigabytes)'  - too verbose
+        
         Icon classes (Font Awesome 6):
         - fas fa-music (music)
         - fas fa-video (video)
@@ -232,7 +236,7 @@ class YourServiceIntegration(ServiceIntegration):
             'pill': {
                 'icon': 'fas fa-circle',  # Choose icon
                 'icon_color': 'text-info',  # Choose color
-                'template': '{some_count} items',  # Must match get_dashboard_stats() fields
+                'template': '{some_count}',  # Keep compact! Must match get_dashboard_stats() fields
                 'fields': ['some_count']  # List all fields used in template
             }
         }
@@ -296,7 +300,7 @@ def get_dashboard_widget(self):
         'pill': {
             'icon': 'fas fa-music',  # or fa-book, fa-image
             'icon_color': 'text-success',
-            'template': '{total_items} artists ({size_gb} GB)',
+            'template': '{total_items} ({size_gb} GB)',  # Compact: no words, just numbers
             'fields': ['total_items', 'size_gb']
         }
     }
@@ -339,7 +343,7 @@ def get_dashboard_widget(self):
         'pill': {
             'icon': 'fas fa-download',
             'icon_color': 'text-info',
-            'template': '{active}/{total} active (↓{speed_mb} MB/s)',
+            'template': '{active}/{total} (↓{speed_mb} MB/s)',  # Compact format
             'fields': ['active', 'total', 'speed_mb']
         }
     }
@@ -375,7 +379,7 @@ def get_dashboard_widget(self):
         'pill': {
             'icon': 'fas fa-search',
             'icon_color': 'text-warning',
-            'template': '{enabled}/{total} indexers',
+            'template': '{enabled}/{total}',  # Compact: icon makes it obvious
             'fields': ['enabled', 'total']
         }
     }

@@ -426,17 +426,18 @@
 
         <!-- Navigation -->
         <nav class="sidebar-nav">
-            <!-- Series (Main Page) -->
-            <a href="{{ url_for('index') }}" class="sidebar-nav-item {% if request.endpoint == 'index' %}active{% endif %}">
-                <i class="fas fa-tv"></i>
-                <span>Series</span>
-            </a>
-
             <!-- Dashboard -->
             <a href="{{ url_for('dashboard.dashboard') }}" class="sidebar-nav-item {% if request.endpoint == 'dashboard.dashboard' %}active{% endif %}">
                 <i class="fas fa-chart-line"></i>
                 <span>Dashboard</span>
             </a>
+            <!-- Series (Main Page) -->
+            <a href="{{ url_for('series_management') }}" class="sidebar-nav-item {% if request.endpoint == 'series_management' %}active{% endif %}">
+                <i class="fas fa-tv"></i>
+                <span>Series</span>
+            </a>
+            
+            
 
             <!-- Rules Section (Expandable) -->
             <div class="sidebar-section">
@@ -759,23 +760,50 @@ function populateSystemLinks() {
     const container = document.getElementById('systemLinksContainer');
     if (!container) return;
 
-    // Show loading state
     container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>';
 
-    // Fetch from database
-    fetch('/api/quick-links')
-        .then(res => res.json())
-        .then(data => {
-            if (data.status === 'success' && data.links && data.links.length > 0) {
-                // Display links from database
-                container.innerHTML = data.links.map(link => {
-                    // Check if icon is a URL (dashboard icon) or Font Awesome class
-                    const isImageIcon = link.icon && (link.icon.startsWith('http') || link.icon.startsWith('/'));
-                    
-                    const iconHtml = isImageIcon 
-                        ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
-                        : `<i class="${link.icon || 'fas fa-link'}"></i>`;
-                    
+    // Fetch both services and custom links
+    Promise.all([
+        fetch('/api/services-sidebar').then(r => r.json()).catch(() => ({status: 'error', services: []})),
+        fetch('/api/quick-links').then(r => r.json()).catch(() => ({status: 'error', links: []}))
+    ])
+    .then(([servicesData, linksData]) => {
+        const allLinks = [];
+        const serviceIds = new Set(); // Track IDs to prevent duplicates
+        
+        // Add configured integration services
+        if (servicesData.status === 'success' && servicesData.services) {
+            servicesData.services.forEach(service => {
+                allLinks.push(service);
+                serviceIds.add(service.id); // Track by ID not URL
+            });
+        }
+        
+        // Add custom quick links that aren't already in services (by ID)
+        if (linksData.status === 'success' && linksData.links) {
+            linksData.links.forEach(link => {
+                if (!serviceIds.has(link.id)) {
+                    allLinks.push(link);
+                }
+            });
+        }
+        
+        if (allLinks.length > 0) {
+            container.innerHTML = allLinks.map(link => {
+                const isImageIcon = link.icon && (link.icon.startsWith('http') || link.icon.startsWith('/'));
+                const iconHtml = isImageIcon 
+                    ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
+                    : `<i class="${link.icon || 'fas fa-link'}"></i>`;
+                
+                if (link.open_in_iframe) {
+                    // Use the quick link ID route
+                    return `
+                        <a href="/iframe/${link.id}" class="sidebar-rule-item" title="${link.name}">
+                            ${iconHtml}
+                            <span class="sidebar-rule-name">${link.name}</span>
+                        </a>
+                    `;
+                } else {
                     return `
                         <a href="${link.url}" target="_blank" class="sidebar-rule-item" title="${link.name}">
                             ${iconHtml}
@@ -783,23 +811,21 @@ function populateSystemLinks() {
                             <i class="fas fa-external-link-alt ms-1" style="font-size: 0.7rem; opacity: 0.6;"></i>
                         </a>
                     `;
-                }).join('');
-            } else {
-                // No links configured
-                container.innerHTML = `
-                    <div class="sidebar-rule-item text-muted small py-2">
-                        No services configured
-                        
-
-                        <a href="/setup" style="color: var(--accent-color);">Configure in Setup</a>
-                    </div>
-                `;
-            }
-        })
-        .catch(err => {
-            console.error('Error loading quick links:', err);
-            container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2">Error loading links</div>';
-        });
+                }
+            }).join('');
+        } else {
+            container.innerHTML = `
+                <div class="sidebar-rule-item text-muted small py-2">
+                    No services configured
+                    <a href="/setup" style="color: var(--accent-color);">Configure in Setup</a>
+                </div>
+            `;
+        }
+    })
+    .catch(err => {
+        console.error('Error loading quick links:', err);
+        container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2">Error loading links</div>';
+    });
 }
     
 // Delete Rule Function

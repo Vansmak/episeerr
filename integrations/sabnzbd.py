@@ -117,8 +117,8 @@ class SABnzbdIntegration(ServiceIntegration):
             'pill': {
                 'icon': 'fas fa-download',
                 'icon_color': 'text-success',
-                'template': '{queue_count} downloading • {speed}',  # ← ADD COMMA HERE
-                'fields': ['queue_count', 'speed']  # ← Also add 'speed' to fields!
+                'template': '{queue_count} • {speed}',
+                'fields': ['queue_count', 'speed']
             }
         }
 # Export the integration instance

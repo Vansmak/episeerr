@@ -1,120 +1,111 @@
 """
-Integration Plugin System
-Automatically discovers and loads all integration plugins from this directory
+Integration discovery and auto-registration system
 """
 
 import os
 import importlib
 import logging
-from typing import Dict, List, Optional
-from pathlib import Path
+import traceback
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
-# Storage for discovered integrations
-_integrations: Dict[str, 'ServiceIntegration'] = {}
+# Storage
+_integrations = {}
+_integration_blueprints = []
 
 
 def discover_integrations():
     """
-    Auto-discover all integration plugins in this directory
-    
-    Looks for .py files that export an 'integration' variable
+    Discover all integration modules in the integrations directory
+    Automatically registers their blueprints if they have custom routes
     """
-    integrations_dir = Path(__file__).parent
-    logger.info("🔍 Discovering integration plugins...")
+    global _integrations, _integration_blueprints
     
-    # Find all .py files except __init__ and base
-    for file in integrations_dir.glob('*.py'):
-        if file.stem in ['__init__', 'base']:
-            continue
+    _integrations.clear()
+    _integration_blueprints.clear()
+    
+    integrations_dir = os.path.dirname(__file__)
+    logger.info(f"Scanning integrations directory: {integrations_dir}")
+    
+    py_files = [f for f in os.listdir(integrations_dir) if f.endswith('.py') and not f.startswith('_')]
+    logger.info(f"Found {len(py_files)} potential integration files: {', '.join(py_files) or 'NONE'}")
+    
+    if not py_files:
+        logger.warning("No .py files found in integrations/ (excluding __init__ and _*)")
+        return
+    
+    for filename in py_files:
+        module_name = filename[:-3]
+        full_path = os.path.join(integrations_dir, filename)
         
-        module_name = file.stem
+        logger.debug(f"Attempting to load: {module_name} ({full_path})")
+        
         try:
             # Import the module
             module = importlib.import_module(f'integrations.{module_name}')
             
-            # Look for 'integration' variable
+            # Look for 'integration' instance
             if hasattr(module, 'integration'):
                 integration = module.integration
+                
+                # Basic validation
+                if not hasattr(integration, 'service_name') or not integration.service_name:
+                    logger.error(f"✗ {module_name}: Missing or empty service_name")
+                    continue
+                
                 service_name = integration.service_name
+                display_name = getattr(integration, 'display_name', 'Unnamed')
                 
-                # Validate required properties
-                if not service_name:
-                    logger.error(f"❌ {module_name}.py: service_name is empty")
-                    continue
-                
-                if not integration.display_name:
-                    logger.error(f"❌ {module_name}.py: display_name is empty")
-                    continue
-                
-                # Store the integration
                 _integrations[service_name] = integration
-                logger.info(f"✅ Loaded integration: {integration.display_name} ({service_name})")
+                logger.info(f"✓ Loaded integration: {display_name} ({service_name})")
+                
+                # Blueprint support
+                if hasattr(integration, 'create_blueprint'):
+                    try:
+                        blueprint = integration.create_blueprint()
+                        if blueprint:
+                            _integration_blueprints.append(blueprint)
+                            logger.info(f"  → Blueprint registered for {service_name}")
+                    except Exception as bp_err:
+                        logger.error(f"  → Failed to create blueprint for {service_name}: {bp_err}")
             else:
-                logger.warning(f"⚠️  {module_name}.py has no 'integration' variable - skipping")
-        
-        except ImportError as e:
-            logger.error(f"❌ Failed to import {module_name}.py: {e}")
-        except AttributeError as e:
-            logger.error(f"❌ {module_name}.py missing required property: {e}")
+                logger.warning(f"⚠️ {module_name}.py exists but has no 'integration' variable - skipping")
+                
+        except ImportError as ie:
+            logger.error(f"✗ ImportError loading {module_name}: {ie}")
         except Exception as e:
-            logger.error(f"❌ Error loading {module_name}.py: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"✗ Unexpected error loading {module_name}: {e}")
+            traceback.print_exc()   # ← This shows the full stack trace!
     
-    count = len(_integrations)
-    if count > 0:
-        logger.info(f"🎉 Successfully loaded {count} integration(s): {', '.join(_integrations.keys())}")
+    logger.info(f"Final count: {_integrations and len(_integrations) or 0} integrations loaded")
+    if _integrations:
+        logger.info(f"Loaded services: {', '.join(_integrations.keys())}")
     else:
-        logger.info("📭 No integrations found")
+        logger.warning("No integrations were successfully loaded!")
+
+
+def register_integration_blueprints(app):
+    for blueprint in _integration_blueprints:
+        app.register_blueprint(blueprint)
+        logger.info(f"Registered blueprint: {blueprint.name}")
 
 
 def get_integration(service_name: str):
-    """
-    Get a specific integration by service name
-    
-    Args:
-        service_name: Service identifier (e.g., 'radarr', 'sabnzbd')
-        
-    Returns:
-        ServiceIntegration instance or None
-    """
     return _integrations.get(service_name)
 
 
 def get_all_integrations() -> List:
-    """
-    Get all loaded integrations
-    
-    Returns:
-        List of ServiceIntegration instances
-    """
     return list(_integrations.values())
 
 
 def get_integrations_by_category(category: str) -> List:
-    """
-    Get integrations filtered by category
-    
-    Args:
-        category: Category name ('dashboard', 'media_server', etc.)
-        
-    Returns:
-        List of ServiceIntegration instances in that category
-    """
-    return [i for i in _integrations.values() if i.category == category]
+    return [i for i in _integrations.values() if getattr(i, 'category', None) == category]
 
 
 def reload_integrations():
-    """
-    Reload all integrations (useful for development)
-    Clears cache and re-discovers
-    """
-    global _integrations
-    _integrations = {}
     discover_integrations()
 
 
-# Auto-discover integrations when this module is imported
+# Run discovery immediately
 discover_integrations()

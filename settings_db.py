@@ -66,6 +66,12 @@ def init_settings_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    
+    # Migration: Add open_in_iframe column if it doesn't exist
+    try:
+        cursor.execute('SELECT open_in_iframe FROM quick_links LIMIT 1')
+    except sqlite3.OperationalError:
+        cursor.execute('ALTER TABLE quick_links ADD COLUMN open_in_iframe BOOLEAN DEFAULT 0')
 
     conn.commit()
     conn.close()
@@ -245,27 +251,54 @@ def get_jellyfin_config() -> Optional[Dict[str, Any]]:
     """Get Jellyfin config from DB or env"""
     service = get_service('jellyfin', 'default')
     if service and service.get('config'):
-        return {
+        config = service['config']
+        method = config.get('method', 'polling')  # Changed default from 'progress' to 'polling'
+        
+        # Base config
+        base = {
             'url': service['url'],
             'api_key': service['api_key'],
-            'user_id': service['config'].get('user_id'),
-            'method': service['config'].get('method', 'progress'),
-            'trigger_min': service['config'].get('trigger_min', 50.0),
-            'trigger_max': service['config'].get('trigger_max', 55.0),
-            'poll_interval': service['config'].get('poll_interval', 900)
+            'user_id': config.get('user_id'),
+            'method': method
         }
+        
+        # Add method-specific fields
+        if method == 'polling':
+            trigger_percent = config.get('trigger_percentage', config.get('trigger_percent', 50.0))
+            base.update({
+                'poll_interval': config.get('poll_interval', 900),
+                'trigger_percentage': trigger_percent
+            })
+        else:  # progress mode
+            base.update({
+                'trigger_min': config.get('trigger_min', 50.0),
+                'trigger_max': config.get('trigger_max', 55.0)
+            })
+        
+        return base
     
     # Fallback to env
     if os.getenv('JELLYFIN_URL'):
-        return {
+        method = 'progress' if os.getenv('JELLYFIN_TRIGGER_MIN') else 'polling'
+        base_config = {
             'url': os.getenv('JELLYFIN_URL'),
             'api_key': os.getenv('JELLYFIN_API_KEY'),
             'user_id': os.getenv('JELLYFIN_USER_ID'),
-            'method': 'progress' if os.getenv('JELLYFIN_TRIGGER_MIN') else 'polling',
-            'trigger_min': float(os.getenv('JELLYFIN_TRIGGER_MIN', '50.0')),
-            'trigger_max': float(os.getenv('JELLYFIN_TRIGGER_MAX', '55.0')),
-            'poll_interval': int(os.getenv('JELLYFIN_POLL_INTERVAL', '900'))
+            'method': method
         }
+        
+        if method == 'polling':
+            base_config.update({
+                'poll_interval': int(os.getenv('JELLYFIN_POLL_INTERVAL', '900')),
+                'trigger_percentage': float(os.getenv('JELLYFIN_TRIGGER_PERCENTAGE', os.getenv('JELLYFIN_TRIGGER_PERCENT', '50.0')))
+            })
+        else:
+            base_config.update({
+                'trigger_min': float(os.getenv('JELLYFIN_TRIGGER_MIN', '50.0')),
+                'trigger_max': float(os.getenv('JELLYFIN_TRIGGER_MAX', '55.0'))
+            })
+        
+        return base_config
     return None
 
 def get_emby_config() -> Optional[Dict[str, Any]]:
@@ -299,7 +332,7 @@ def get_all_quick_links():
     cursor = conn.cursor()
     
     cursor.execute('''
-        SELECT id, name, url, icon, created_at
+        SELECT id, name, url, icon, open_in_iframe, created_at
         FROM quick_links
         ORDER BY created_at ASC
     ''')
@@ -311,21 +344,22 @@ def get_all_quick_links():
             'name': row['name'],
             'url': row['url'],
             'icon': row['icon'],
+            'open_in_iframe': bool(row['open_in_iframe']) if 'open_in_iframe' in row.keys() else False,
             'created_at': row['created_at']
         })
     
     conn.close()
     return links
 
-def add_quick_link(name, url, icon='fas fa-link'):
+def add_quick_link(name, url, icon='fas fa-link', open_in_iframe=False):
     """Add a new quick link"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
     cursor.execute('''
-        INSERT INTO quick_links (name, url, icon)
-        VALUES (?, ?, ?)
-    ''', (name, url, icon))
+        INSERT INTO quick_links (name, url, icon, open_in_iframe)
+        VALUES (?, ?, ?, ?)
+    ''', (name, url, icon, 1 if open_in_iframe else 0))
     
     link_id = cursor.lastrowid
     conn.commit()
@@ -344,6 +378,20 @@ def delete_quick_link(link_id):
     conn.close()
     
     return True
+
+def get_quick_link_by_id(link_id):
+    """Get a single quick link by ID"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM quick_links WHERE id = ?', (link_id,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    if row:
+        return dict(row)
+    return None
 
 
 

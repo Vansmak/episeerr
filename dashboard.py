@@ -336,13 +336,17 @@ def dashboard_stats():
         
         
         # Auto-collect stats from all integrations (plugins)
+        from settings_db import get_service
+        
         for integration in get_all_integrations():
             try:
-                config = integration.get_config()
+                # Get config from database
+                config = get_service(integration.service_name, 'default')
+                
                 if config:
                     service_stats = integration.get_dashboard_stats(
-                        config['url'],
-                        config['api_key']
+                        config.get('url', ''),
+                        config.get('api_key', '')
                     )
                     stats[integration.service_name] = service_stats
                 else:
@@ -350,6 +354,7 @@ def dashboard_stats():
             except Exception as e:
                 logger.error(f"Error fetching {integration.display_name} stats: {e}")
                 stats[integration.service_name] = {'configured': True, 'error': True}
+
         
         # Episeerr stats
         from episeerr import load_config
