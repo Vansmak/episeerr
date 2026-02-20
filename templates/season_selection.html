@@ -136,7 +136,10 @@
                     <select name="rule_name" id="rule-select" class="form-control form-control-sm" style="background: #343a40; color: #f8f9fa; border-color: #6c757d; flex: 1;">
                         {% if rules %}
                             {% for rule in rules %}
-                            <option value="{{ rule.name }}" {% if rule.is_default %}selected{% endif %}>
+                            <option value="{{ rule.name }}"
+                                {% if current_rule and rule.name == current_rule %}selected
+                                {% elif not current_rule and rule.is_default %}selected
+                                {% endif %}>
                                 {{ rule.name }}{% if rule.is_default %} (default){% endif %} — {{ rule.description }}
                             </option>
                             {% endfor %}
@@ -173,7 +176,7 @@
         
         <div class="bottom-actions">
     <div class="button-row">
-        <button class="btn btn-secondary" onclick="window.history.back()">Cancel</button>
+        <button class="btn btn-secondary" onclick="cancelSelection()">Cancel</button>
         <button class="btn btn-info" onclick="selectAll()">Select All</button>
         <button class="btn btn-info" onclick="selectNone()">Clear All</button>
     </div>
@@ -219,6 +222,16 @@
         window.location.href = url;
     }
     
+    function cancelSelection() {
+        const requestId = '{{ request_id }}';
+        if (requestId) {
+            fetch(`/api/delete-request/${requestId}`, { method: 'POST' })
+                .finally(() => window.history.back());
+        } else {
+            window.history.back();
+        }
+    }
+
     // Add click handlers when page loads
     document.addEventListener('DOMContentLoaded', function() {
         // Make sure all season checkboxes have the right data attributes

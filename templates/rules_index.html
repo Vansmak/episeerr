@@ -110,6 +110,7 @@
           <th class="sortable" data-sort="status" style="cursor: pointer;">
             Status <i class="fas fa-sort ms-1"></i>
           </th>
+          <th width="60" class="text-center">Actions</th>
         </tr>
       </thead>
       <tbody id="series-table-body"></tbody>
@@ -241,6 +242,28 @@
 .status-continuing { color: #10b981; }
 .status-ended { color: #ef4444; }
 .status-upcoming { color: #3b82f6; }
+
+.series-select-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 10;
+  background: rgba(0, 0, 0, 0.55);
+  color: #a5b4fc;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-size: 0.8rem;
+  transition: background 0.15s, color 0.15s;
+}
+.series-select-btn:hover {
+  background: rgba(99, 102, 241, 0.85);
+  color: #fff;
+}
 </style>
 {% endblock %}
 
@@ -381,7 +404,9 @@ function renderGridView(series) {
         <div class="card series-grid-card">
           <div class="series-poster-container">
             <img src="${poster}" class="series-poster" alt="${s.title}" loading="lazy" onerror="this.src='/static/placeholder.png'">
-            
+            <a href="/api/send-to-selection/${s.id}" class="series-select-btn" title="Select">
+              <i class="fas fa-th-list"></i>
+            </a>
           </div>
           <div class="series-info">
             <div class="series-title">${s.title}</div>
@@ -406,7 +431,7 @@ function renderTableView(series) {
   tbody.innerHTML = '';
 
   if (!series.length) {
-    tbody.innerHTML = '<tr><td colspan="4" class="text-center py-4 text-muted">No series match your filters</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No series match your filters</td></tr>';
     return;
   }
 
@@ -428,6 +453,11 @@ function renderTableView(series) {
         </td>
         <td><span class="badge ${ruleCls}">${rule}</span></td>
         <td><span class="status-${s.status || 'unknown'}">${getStatusText(s)}</span></td>
+        <td class="text-center">
+          <a href="/api/send-to-selection/${s.id}" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Select">
+            <i class="fas fa-th-list"></i>
+          </a>
+        </td>
       </tr>
     `;
   }).join('');

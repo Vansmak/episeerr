@@ -143,19 +143,20 @@ class PlexIntegration(ServiceIntegration):
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <div class="form-check form-switch">
-                        <input type="checkbox" class="form-check-input" id="plex-sync-enabled" {enabled_checked}>
+                        <input type="checkbox" class="form-check-input" id="plex-sync-enabled"
+                               name="plex-sync-enabled" {enabled_checked}>
                         <label class="form-check-label" for="plex-sync-enabled">Enable automatic sync</label>
                     </div>
                     <small class="text-muted">Periodically check your Plex watchlist and add new items to Sonarr/Radarr</small>
                 </div>
                 <div class="col-md-6 mb-3">
                     <label class="form-label">Sync Interval</label>
-                    <select class="form-select form-select-sm" id="plex-sync-interval">
+                    <select class="form-select form-select-sm" id="plex-sync-interval" name="plex-sync-interval">
                         {interval_options}
                     </select>
                 </div>
             </div>
-            
+
             <div style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 10px; padding-top: 15px;">
                 <h6 class="mb-2" style="font-size: 14px;">
                     <i class="fas fa-film text-warning me-2"></i>Movie Cleanup
@@ -163,69 +164,61 @@ class PlexIntegration(ServiceIntegration):
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         <div class="form-check form-switch">
-                            <input type="checkbox" class="form-check-input" id="plex-movie-cleanup" {mc_checked}>
+                            <input type="checkbox" class="form-check-input" id="plex-movie-cleanup"
+                                   name="plex-movie-cleanup" {mc_checked}>
                             <label class="form-check-label" for="plex-movie-cleanup">Delete movies after watched</label>
                         </div>
                         <small class="text-muted">Automatically remove watched movies from Radarr after the grace period</small>
                     </div>
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Grace Period (days)</label>
-                        <input type="number" class="form-control form-control-sm" id="plex-grace-days" 
-                               value="{grace_days}" min="0" max="90" style="max-width: 100px;">
+                        <input type="number" class="form-control form-control-sm" id="plex-grace-days"
+                               name="plex-grace-days" value="{grace_days}" min="0" max="90" style="max-width: 100px;">
                         <small class="text-muted">Days to keep after watching before deleting</small>
                     </div>
                 </div>
             </div>
-            
-            <div class="d-flex justify-content-end mt-2">
-                <button type="button" class="btn btn-outline-info btn-sm" onclick="savePlexSyncSettings()">
-                    <i class="fas fa-save me-1"></i>Save Sync Settings
-                </button>
-            </div>
-            
-            <div id="plex-sync-save-result" class="mt-2" style="display: none;"></div>
         </div>
-        
-        <script>
-        function savePlexSyncSettings() {{
-            const data = {{
-                enabled: document.getElementById('plex-sync-enabled').checked,
-                interval_minutes: parseInt(document.getElementById('plex-sync-interval').value),
-                movie_cleanup: {{
-                    enabled: document.getElementById('plex-movie-cleanup').checked,
-                    grace_days: parseInt(document.getElementById('plex-grace-days').value) || 7
-                }}
-            }};
-            
-            fetch('/api/integration/plex/sync/config', {{
-                method: 'POST',
-                headers: {{'Content-Type': 'application/json'}},
-                body: JSON.stringify(data)
-            }})
-            .then(r => r.json())
-            .then(result => {{
-                const el = document.getElementById('plex-sync-save-result');
-                if (result.success) {{
-                    el.innerHTML = '<div class="alert alert-success py-2 mb-0"><i class="fas fa-check me-1"></i>Sync settings saved</div>';
-                }} else {{
-                    el.innerHTML = '<div class="alert alert-danger py-2 mb-0">' + (result.message || 'Save failed') + '</div>';
-                }}
-                el.style.display = 'block';
-                setTimeout(() => el.style.display = 'none', 3000);
-            }})
-            .catch(err => {{
-                const el = document.getElementById('plex-sync-save-result');
-                el.innerHTML = '<div class="alert alert-danger py-2 mb-0">Error: ' + err + '</div>';
-                el.style.display = 'block';
-            }});
-        }}
-        </script>
         '''
     
+    def preprocess_save_data(self, normalized_data: dict) -> None:
+        """Called by save_service_config before writing to DB.
+        Pulls flat sync fields out of normalized_data and nests them
+        under watchlist_sync, preserving any existing fields not in the form.
+        """
+        from settings_db import get_service
+        existing_sync = ((get_service('plex') or {}).get('config') or {}).get('watchlist_sync', {})
+
+        sync_enabled   = normalized_data.pop('sync-enabled',   existing_sync.get('enabled', False))
+        sync_interval  = int(normalized_data.pop('sync-interval', existing_sync.get('interval_minutes', 120)) or 120)
+        movie_cleanup  = normalized_data.pop('movie-cleanup',  existing_sync.get('movie_cleanup', {}).get('enabled', False))
+        grace_days     = int(normalized_data.pop('grace-days', existing_sync.get('movie_cleanup', {}).get('grace_days', 7)) or 7)
+
+        normalized_data['watchlist_sync'] = {
+            **existing_sync,
+            'enabled': sync_enabled,
+            'interval_minutes': sync_interval,
+            'movie_cleanup': {
+                **existing_sync.get('movie_cleanup', {}),
+                'enabled': movie_cleanup,
+                'grace_days': grace_days,
+            }
+        }
+
+    def on_after_save(self, normalized_data: dict) -> None:
+        """Called by save_service_config after writing to DB.
+        Starts or stops the watchlist sync scheduler to match the saved config.
+        """
+        sync_config = normalized_data.get('watchlist_sync', {})
+        if sync_config.get('enabled') and not self._sync_running:
+            self.start_sync_scheduler()
+        elif not sync_config.get('enabled') and self._sync_running:
+            self.stop_sync_scheduler()
+
     # ==========================================
     # Required Methods from ServiceIntegration
     # ==========================================
-    
+
     def test_connection(self, url: str, api_key: str) -> Tuple[bool, str]:
         """Test Plex connection"""
         try:
@@ -1525,10 +1518,11 @@ class PlexIntegration(ServiceIntegration):
                 # POST - update config
                 data = request.json or {}
                 plex_config = get_service('plex') or {}
-                
-                # Merge new sync config
-                current_sync = plex_config.get('watchlist_sync', {})
-                
+
+                # Merge new sync config - watchlist_sync lives inside the config JSON field
+                service_config = plex_config.get('config') or {}
+                current_sync = service_config.get('watchlist_sync', {})
+
                 # Only update provided fields
                 for key in ('enabled', 'interval_minutes',
                            'tv_quality_profile', 'tv_root_folder',
@@ -1536,16 +1530,23 @@ class PlexIntegration(ServiceIntegration):
                            'auto_remove_watched'):
                     if key in data:
                         current_sync[key] = data[key]
-                
+
                 # Movie cleanup sub-config
                 if 'movie_cleanup' in data:
                     current_sync['movie_cleanup'] = {
                         **current_sync.get('movie_cleanup', {}),
                         **data['movie_cleanup']
                     }
-                
-                plex_config['watchlist_sync'] = current_sync
-                save_service('plex', plex_config)
+
+                service_config['watchlist_sync'] = current_sync
+                save_service(
+                    service_type='plex',
+                    name=plex_config.get('name', 'default'),
+                    url=plex_config.get('url', ''),
+                    api_key=plex_config.get('api_key'),
+                    config=service_config,
+                    enabled=plex_config.get('enabled', True)
+                )
                 
                 # Start/stop scheduler based on enabled state
                 if current_sync.get('enabled') and not integration._sync_running:

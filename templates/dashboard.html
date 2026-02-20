@@ -215,10 +215,10 @@ document.addEventListener('DOMContentLoaded', function() {
         loadIntegrationWidgets();
         loadPlexWatchlist();
         // Set intervals
-        statsInterval = setInterval(loadDashboardStats, 30000);
+        statsInterval = setInterval(loadDashboardStats, 60000);
         activityInterval = setInterval(loadActivitySlim, 60000);
-        // Auto-refresh widgets every 30 seconds
-        setInterval(loadIntegrationWidgets, 30000);
+        
+        setInterval(loadIntegrationWidgets, 60000);
     });
 });
 

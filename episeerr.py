@@ -393,6 +393,10 @@ def save_service_config(service):
                 elif 'api_key' in normalized_data and 'apikey' not in normalized_data:
                     normalized_data['apikey'] = normalized_data['api_key']
                 
+                # Allow integration to reshape data before saving (e.g. nest sync fields)
+                if hasattr(integration, 'preprocess_save_data'):
+                    integration.preprocess_save_data(normalized_data)
+
                 # Save to database
                 save_service(
                     service_type=service,  # Changed from service_name
@@ -418,7 +422,11 @@ def save_service_config(service):
                         app.logger.warning(f"Failed to add/update quick link: {e}")
                 
                 reload_module_configs()
-                
+
+                # Allow integration to react post-save (e.g. start/stop scheduler)
+                if hasattr(integration, 'on_after_save'):
+                    integration.on_after_save(normalized_data)
+
                 return jsonify({
                     'status': 'success',
                     'message': f'{integration.display_name} saved successfully'
@@ -2477,10 +2485,12 @@ def series_stats():
     try:
         config = load_config()
         all_series = get_sonarr_series()
+        all_series_ids = set(str(s['id']) for s in all_series)
         rules_mapping = {}
         for rule_name, details in config['rules'].items():
             for series_id in details.get('series', {}):
-                rules_mapping[str(series_id)] = rule_name
+                if str(series_id) in all_series_ids:  # ignore stale config entries
+                    rules_mapping[str(series_id)] = rule_name
         stats = {
             'total_series': len(all_series),
             'assigned_series': len(rules_mapping),
@@ -2489,7 +2499,8 @@ def series_stats():
             'rule_breakdown': {}
         }
         for rule_name, details in config['rules'].items():
-            stats['rule_breakdown'][rule_name] = len(details.get('series', {}))
+            count = sum(1 for sid in details.get('series', {}) if str(sid) in all_series_ids)
+            stats['rule_breakdown'][rule_name] = count
         return jsonify(stats)
     except Exception as e:
         app.logger.error(f"Error getting series stats: {str(e)}")
@@ -3082,6 +3093,101 @@ def episeerr_index():
     
     return render_template('episeerr_index.html', deletions=deletion_summary)
 
+@app.route('/api/send-to-selection/<int:series_id>')
+def send_to_selection(series_id):
+    """Create a pending selection request for a Sonarr series and redirect to season selection."""
+    try:
+        # Check if a pending request already exists for this series — reuse it if so
+        os.makedirs(REQUESTS_DIR, exist_ok=True)
+        for filename in os.listdir(REQUESTS_DIR):
+            if not filename.endswith('.json'):
+                continue
+            try:
+                with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
+                    existing = json.load(f)
+                if str(existing.get('series_id')) == str(series_id) and existing.get('tmdb_id'):
+                    config = load_config()
+                    current_rule = ''
+                    for rule_name_iter, rule_data in config.get('rules', {}).items():
+                        if str(series_id) in rule_data.get('series', {}):
+                            current_rule = rule_name_iter
+                            break
+                    app.logger.info(f"Reusing existing pending request for series {series_id}")
+                    return redirect(url_for('select_seasons', tmdb_id=existing['tmdb_id'], current_rule=current_rule))
+            except Exception:
+                continue
+
+        sonarr_preferences = sonarr_utils.load_preferences()
+        headers = {
+            'X-Api-Key': sonarr_preferences['SONARR_API_KEY'],
+            'Content-Type': 'application/json'
+        }
+        sonarr_url = sonarr_preferences['SONARR_URL']
+
+        # Get series info from Sonarr
+        resp = requests.get(f"{sonarr_url}/api/v3/series/{series_id}", headers=headers, timeout=10)
+        if not resp.ok:
+            return render_template('error.html', message=f"Could not find series in Sonarr (ID: {series_id})")
+
+        series = resp.json()
+        series_title = series.get('title', 'Unknown')
+        tvdb_id = series.get('tvdbId')
+        tmdb_id = series.get('tmdbId')  # Sonarr v4+ provides this
+
+        # Look up TMDB ID via TMDB find-by-external-id if Sonarr didn't give us one
+        if not tmdb_id and tvdb_id:
+            try:
+                find_result = get_tmdb_endpoint(f"find/{tvdb_id}", {'external_source': 'tvdb_id'})
+                tv_results = (find_result or {}).get('tv_results', [])
+                if tv_results:
+                    tmdb_id = tv_results[0]['id']
+                else:
+                    search_results = search_tv_shows(series_title)
+                    if (search_results or {}).get('results'):
+                        tmdb_id = search_results['results'][0]['id']
+            except Exception as e:
+                app.logger.error(f"Error finding TMDB ID for {series_title}: {e}")
+
+        if not tmdb_id:
+            return render_template('error.html', message=f"Could not determine TMDB ID for \"{series_title}\"")
+
+        # Create a selection request file (same format as the Sonarr webhook handler)
+        request_id = f"sonarr-select-{series_id}-{int(time.time())}"
+        pending_request = {
+            "id": request_id,
+            "series_id": series_id,
+            "title": series_title,
+            "needs_season_selection": True,
+            "tmdb_id": tmdb_id,
+            "tvdb_id": tvdb_id,
+            "source": "sonarr",
+            "source_name": "Sonarr Episode Selection",
+            "needs_attention": True,
+            "jellyseerr_request_id": None,
+            "created_at": int(time.time())
+        }
+        os.makedirs(REQUESTS_DIR, exist_ok=True)
+        with open(os.path.join(REQUESTS_DIR, f"{request_id}.json"), 'w') as f:
+            json.dump(pending_request, f, indent=2)
+
+        app.logger.info(f"✓ Created manual selection request for {series_title} (TMDB: {tmdb_id})")
+
+        # Find which rule this series is currently assigned to
+        config = load_config()
+        current_rule = ''
+        series_id_str = str(series_id)
+        for rule_name_iter, rule_data in config.get('rules', {}).items():
+            if series_id_str in rule_data.get('series', {}):
+                current_rule = rule_name_iter
+                break
+
+        return redirect(url_for('select_seasons', tmdb_id=tmdb_id, current_rule=current_rule))
+
+    except Exception as e:
+        app.logger.error(f"Error in send_to_selection for series {series_id}: {e}")
+        return render_template('error.html', message=f"Error: {str(e)}")
+
+
 @app.route('/select-seasons/<tmdb_id>')
 def select_seasons(tmdb_id):
     """Show season selection page."""
@@ -3121,11 +3227,32 @@ def select_seasons(tmdb_id):
                 'description': f"{rule_data.get('get_type', 'episodes')} × {rule_data.get('get_count', 1)}"
             })
         
-        return render_template('season_selection.html', 
-                            show=formatted_show, 
+        current_rule = request.args.get('current_rule', '')
+
+        # Look up the pending request ID for this tmdb_id so the template can delete it on cancel
+        request_id = ''
+        try:
+            for filename in os.listdir(REQUESTS_DIR):
+                if not filename.endswith('.json'):
+                    continue
+                try:
+                    with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
+                        req_data = json.load(f)
+                    if str(req_data.get('tmdb_id')) == str(tmdb_id):
+                        request_id = req_data.get('id', '')
+                        break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        return render_template('season_selection.html',
+                            show=formatted_show,
                             tmdb_id=tmdb_id,
                             rules=rules,
-                            default_rule=default_rule)
+                            default_rule=default_rule,
+                            current_rule=current_rule,
+                            request_id=request_id)
 
     except Exception as e:
         app.logger.error(f"Error in select_seasons: {str(e)}", exc_info=True)
@@ -3169,14 +3296,18 @@ def apply_rule_to_selection():
         if rule_name not in config.get('rules', {}):
             return redirect(url_for('episeerr_index', message=f"Rule '{rule_name}' not found"))
         
-        # Assign series to rule in config
+        # Remove series from any rule it was previously in
         series_id_str = str(series_id)
+        for rname, rdata in config['rules'].items():
+            if rname != rule_name and series_id_str in rdata.get('series', {}):
+                del rdata['series'][series_id_str]
+                app.logger.info(f"✓ Removed series {series_id} from rule '{rname}'")
+
+        # Assign series to the chosen rule
         target_rule = config['rules'][rule_name]
         target_rule.setdefault('series', {})
-        
-        if series_id_str not in target_rule['series']:
-            target_rule['series'][series_id_str] = {'activity_date': None}
-            save_config(config)
+        target_rule['series'][series_id_str] = {'activity_date': None}
+        save_config(config)
         
         # Sync the rule tag to Sonarr
         try:

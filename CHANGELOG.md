@@ -7,6 +7,7 @@
 
 
 ---
+added ability to make requests straignt from episeerr by selecting a series, useful if you want to grab a previous season or episode for and existing show, can choose to change the rule or not
 added plex integration, includinmg watchlist syncing
   - reuestes in not already in sonarr\radarr
   - creates pendiing select for shows
