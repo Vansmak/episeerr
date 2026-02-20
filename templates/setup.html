@@ -579,6 +579,10 @@
                                 </div>
                             </div>
                             
+                            {% if integration.get_custom_setup_html is defined %}
+                                {{ integration.get_custom_setup_html(integration_configs[integration.service_name].saved_values) | safe }}
+                            {% endif %}
+                            
                             <div class="d-flex justify-content-between">
                                 <button type="button" class="btn btn-secondary" onclick="testConnection('{{ integration.service_name }}')">
                                     <i class="fas fa-plug me-1"></i>Test Connection

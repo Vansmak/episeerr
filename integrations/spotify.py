@@ -188,15 +188,14 @@ class SpotifyIntegration(ServiceIntegration):
             
             if playback_response.status_code == 200 and playback_response.text:
                 playback = playback_response.json()
-                if playback and playback.get('is_playing'):
+                if playback and playback.get('item'):  # Show current track even if paused
                     track = playback.get('item', {})
                     now_playing = {
-                        'is_playing': True,
+                        'is_playing': playback.get('is_playing', False),  # CHANGED - use actual state
                         'track_name': track.get('name', 'Unknown'),
                         'artist_name': ', '.join([a['name'] for a in track.get('artists', [])]),
                         'album_art': track.get('album', {}).get('images', [{}])[0].get('url') if track.get('album', {}).get('images') else None
                     }
-            
             # If nothing playing, get last played
             if not now_playing:
                 recent_response = requests.get(
@@ -211,7 +210,7 @@ class SpotifyIntegration(ServiceIntegration):
                         last_track = recent_data['items'][0]
                         track = last_track.get('track', {})
                         now_playing = {
-                            'is_playing': False,
+                           'is_playing': False,
                             'track_name': track.get('name', 'Unknown'),
                             'artist_name': ', '.join([a['name'] for a in track.get('artists', [])]),
                             'played_at': last_track.get('played_at')
@@ -221,7 +220,7 @@ class SpotifyIntegration(ServiceIntegration):
                 'configured': True,
                 'playlists': playlists_count,
                 'saved_tracks': saved_tracks,
-                'now_playing': now_playing
+                 'now_playing': now_playing
             }
             
         except Exception as e:

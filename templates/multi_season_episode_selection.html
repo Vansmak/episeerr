@@ -154,6 +154,7 @@
         
         <form id="episode-form" action="/api/process-episode-selection" method="POST">
             <input type="hidden" name="request_id" value="{{ request_id }}">
+            <input type="hidden" name="selected_rule" value="{{ selected_rule or '' }}">
             
             <div class="episode-container">
                 {% for season in show.seasons %}

@@ -32,12 +32,9 @@
   <div class="row mb-4">
     <div class="col-12">
       <div class="card calendar-hero border-0 shadow-lg">
-        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom" onclick="toggleCalendar()" style="cursor: pointer;">
-          <h5 class="mb-0">
-            <i class="fas fa-calendar-week me-2"></i>This Week (7 Days)
-            <i id="calendar-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
-          </h5>
-          <div class="d-flex gap-2" onclick="event.stopPropagation();">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom">
+          <h5 class="mb-0"><i class="fas fa-calendar-week me-2"></i>This Week (7 Days)</h5>
+          <div class="d-flex gap-2">
             <button class="btn btn-sm btn-outline-secondary" onclick="loadCalendar()">
               <i class="fas fa-sync-alt"></i> Refresh
             </button>
@@ -53,7 +50,7 @@
           </div>
 
           <!-- Main 3-Column Content -->
-            <div id="calendar-container" class="row g-0 flex-lg-nowrap" style="display: none;">
+            <div id="calendar-container" class="row g-0 flex-lg-nowrap" style="display: none; min-height: 500px;">
             <!-- Upcoming Releases – equal to Ready -->
             <div class="col-12 col-lg-4 border-end border-dark">
                 <h6 class="bg-dark p-3 mb-0 border-bottom text-center text-lg-start">
@@ -91,18 +88,8 @@
         <!-- NEW: Plex Watchlist Section -->
         <div class="row mt-4">
             <div class="col-12">
-                <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
-                    <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom" onclick="toggleWatchlist()" style="cursor: pointer;">
-                        <h5 class="mb-0">
-                            <i class="fas fa-bookmark me-2"></i>Plex Watchlist
-                            <i id="watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
-                        </h5>
-                    </div>
-                    <div class="card-body p-3" style="overflow-x: hidden;">
-                        <div id="plex-watchlist-container">
-                            <!-- Watchlist loaded dynamically -->
-                        </div>
-                    </div>
+                <div id="plex-watchlist-container">
+                    <!-- Watchlist loaded dynamically -->
                 </div>
             </div>
         </div>
@@ -112,22 +99,6 @@
 </div>
 
 <style>
-/* Mobile overflow fix */
-@media (max-width: 768px) {
-  body {
-    overflow-x: hidden;
-  }
-  .container-fluid {
-    padding-left: 8px !important;
-    padding-right: 8px !important;
-  }
-  .card {
-    overflow-x: hidden;
-  }
-  .watchlist-scroll {
-    max-width: 100vw;
-  }
-}
 /* Uniform banners – smaller & consistent */
 .calendar-banner-card {
   background-size: cover !important;
@@ -161,10 +132,10 @@
 }
 /* Equal columns – sleek & balanced */
 @media (min-width: 992px) {
-  #calendar-container:not([style*="display: none"]) {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
+  #calendar-container {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
   }
   #calendar-container > div {
     flex: 1 1 33.33%;                 /* exactly equal */
@@ -613,35 +584,7 @@ function loadPlexWatchlist() {
         .catch(() => {}); // Watchlist unavailable
 }
 
-function syncPlexWatchlist() {
-    const spinner = document.getElementById('sync-spinner');
-    if (spinner) {
-        spinner.classList.add('fa-spin');
-    }
-    
-    fetch('/api/integration/plex/sync', { method: 'POST' })
-        .then(r => r.json())
-        .then(data => {
-            if (data.success) {
-                const added = (data.added_tv || 0) + (data.added_movies || 0);
-                const existed = data.already_exists || 0;
-                const errors = data.errors || 0;
-                
-                let msg = '';
-                if (added > 0) msg += `${added} added, `;
-                if (existed > 0) msg += `${existed} already existed, `;
-                if (errors > 0) msg += `${errors} errors, `;
-                msg = msg ? msg.slice(0, -2) : 'Everything up to date';
-                
-                console.log('Watchlist sync:', msg);
-                loadPlexWatchlist();
-            }
-        })
-        .catch(err => console.error('Sync failed:', err))
-        .finally(() => {
-            if (spinner) spinner.classList.remove('fa-spin');
-        });
-}
+
 // ────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────
@@ -662,60 +605,5 @@ window.addEventListener('beforeunload', () => {
     if (statsInterval) clearInterval(statsInterval);
     if (activityInterval) clearInterval(activityInterval);
 });
-// Collapsible section toggles
-function toggleCalendar() {
-    const container = document.getElementById('calendar-container');
-    const chevron = document.querySelector('#calendar-toggle-icon');
-    
-    console.log("toggleCalendar - style.display:", container.style.display);
-    console.log("toggleCalendar - computed display:", window.getComputedStyle(container).display);
-    
-    const isVisible = container.style.display !== 'none' && window.getComputedStyle(container).display !== 'none';
-    console.log("toggleCalendar - isVisible:", isVisible);
-    
-    if (!isVisible) {
-        console.log("Showing calendar");
-        container.style.display = 'flex';
-        chevron.style.transform = 'rotate(0deg)';
-    } else {
-        console.log("Hiding calendar");
-        container.style.display = 'none';
-        chevron.style.transform = 'rotate(-90deg)';
-    }
-    
-    localStorage.setItem('calendar_collapsed', container.style.display === 'none');
-}
-
-function toggleWatchlist() {
-    const container = document.getElementById('plex-watchlist-container');
-    const chevron = document.querySelector('#watchlist-toggle-icon');
-    const cardBody = container.closest('.card-body');
-    
-    if (cardBody.style.display === 'none') {
-        cardBody.style.display = 'block';
-        chevron.style.transform = 'rotate(0deg)';
-    } else {
-        cardBody.style.display = 'none';
-        chevron.style.transform = 'rotate(-90deg)';
-    }
-    
-    localStorage.setItem('watchlist_collapsed', cardBody.style.display === 'none');
-}
-
-// Restore collapsed states on page load
-const originalDOMContentLoaded = window.onload;
-window.addEventListener('DOMContentLoaded', function() {
-    if (originalDOMContentLoaded) originalDOMContentLoaded();
-    
-    setTimeout(() => {
-        if (localStorage.getItem('calendar_collapsed') === 'true') {
-            toggleCalendar();
-        }
-        if (localStorage.getItem('watchlist_collapsed') === 'true') {
-            toggleWatchlist();
-        }
-    }, 100);
-});
-
 </script>
 {% endblock %}

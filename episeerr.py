@@ -3101,7 +3101,6 @@ def select_seasons(tmdb_id):
             'seasons': []
         }
         
-        # Add seasons (skip season 0 - specials)
         for season in show_data.get('seasons', []):
             if season.get('season_number', 0) > 0:
                 formatted_show['seasons'].append({
@@ -3109,13 +3108,187 @@ def select_seasons(tmdb_id):
                     'episodeCount': season.get('episode_count', '?')
                 })
         
+        # NEW: Load available rules for the rule picker
+        config = load_config()
+        rules = []
+        default_rule = config.get('default_rule')
+        for rule_name, rule_data in config.get('rules', {}).items():
+            rules.append({
+                'name': rule_name,
+                'is_default': rule_name == default_rule,
+                'get_type': rule_data.get('get_type', 'episodes'),
+                'get_count': rule_data.get('get_count', 1),
+                'description': f"{rule_data.get('get_type', 'episodes')} × {rule_data.get('get_count', 1)}"
+            })
+        
         return render_template('season_selection.html', 
-                             show=formatted_show, 
-                             tmdb_id=tmdb_id)
-    
+                            show=formatted_show, 
+                            tmdb_id=tmdb_id,
+                            rules=rules,
+                            default_rule=default_rule)
+
     except Exception as e:
         app.logger.error(f"Error in select_seasons: {str(e)}", exc_info=True)
         return render_template('error.html', message=f"Error loading season selection: {str(e)}")
+
+@app.route('/api/apply-rule-to-selection', methods=['POST'])
+def apply_rule_to_selection():
+
+
+    try:
+        tmdb_id = request.form.get('tmdb_id')
+        rule_name = request.form.get('rule_name')
+        
+        if not tmdb_id or not rule_name:
+            return redirect(url_for('episeerr_index', message="Missing tmdb_id or rule_name"))
+        
+        # Find the pending request to get series_id
+        series_id = None
+        request_id = None
+        request_file_path = None
+        
+        for filename in os.listdir(REQUESTS_DIR):
+            if filename.endswith('.json'):
+                filepath = os.path.join(REQUESTS_DIR, filename)
+                try:
+                    with open(filepath, 'r') as f:
+                        request_data = json.load(f)
+                        if str(request_data.get('tmdb_id')) == str(tmdb_id):
+                            series_id = request_data.get('series_id')
+                            request_id = request_data.get('id')
+                            request_file_path = filepath
+                            break
+                except Exception:
+                    continue
+        
+        if not series_id:
+            return redirect(url_for('episeerr_index', message="No pending request found"))
+        
+        config = load_config()
+        
+        if rule_name not in config.get('rules', {}):
+            return redirect(url_for('episeerr_index', message=f"Rule '{rule_name}' not found"))
+        
+        # Assign series to rule in config
+        series_id_str = str(series_id)
+        target_rule = config['rules'][rule_name]
+        target_rule.setdefault('series', {})
+        
+        if series_id_str not in target_rule['series']:
+            target_rule['series'][series_id_str] = {'activity_date': None}
+            save_config(config)
+        
+        # Sync the rule tag to Sonarr
+        try:
+            episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
+            app.logger.info(f"✓ Synced tag episeerr_{rule_name} for series {series_id}")
+        except Exception as e:
+            app.logger.error(f"Tag sync failed: {e}")
+        
+        # Execute the rule logic (same as sonarr_webhook rule processing)
+        headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
+        rule_config = config['rules'][rule_name]
+        get_type = rule_config.get('get_type', 'episodes')
+        get_count = rule_config.get('get_count', 1)
+        
+        app.logger.info(f"Applying rule '{rule_name}' to series {series_id}: {get_type} × {get_count}")
+        
+        # Get all episodes
+        episodes_response = requests.get(
+            f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+            headers=headers
+        )
+        
+        if episodes_response.ok:
+            all_episodes = episodes_response.json()
+            
+            # Determine which episodes to monitor based on rule
+            episodes_to_monitor = []
+            
+            if get_type == 'all':
+                episodes_to_monitor = [
+                    ep['id'] for ep in all_episodes 
+                    if ep.get('seasonNumber', 0) > 0
+                ]
+            elif get_type == 'seasons':
+                # Get first N seasons
+                seasons = sorted(set(
+                    ep.get('seasonNumber') for ep in all_episodes 
+                    if ep.get('seasonNumber', 0) > 0
+                ))
+                target_seasons = seasons[:get_count]
+                episodes_to_monitor = [
+                    ep['id'] for ep in all_episodes 
+                    if ep.get('seasonNumber') in target_seasons
+                ]
+            else:
+                # Episodes - get first N from season 1
+                season_1_eps = sorted(
+                    [ep for ep in all_episodes if ep.get('seasonNumber') == 1],
+                    key=lambda x: x.get('episodeNumber', 0)
+                )
+                episodes_to_monitor = [ep['id'] for ep in season_1_eps[:get_count]]
+            
+            if episodes_to_monitor:
+                # Monitor selected episodes
+                monitor_payload = {
+                    'episodeIds': episodes_to_monitor,
+                    'monitored': True
+                }
+                monitor_resp = requests.put(
+                    f"{SONARR_URL}/api/v3/episode/monitor",
+                    headers=headers,
+                    json=monitor_payload
+                )
+                
+                if monitor_resp.ok:
+                    app.logger.info(f"✓ Monitored {len(episodes_to_monitor)} episodes")
+                    
+                    # Trigger search
+                    search_payload = {
+                        'name': 'EpisodeSearch',
+                        'episodeIds': episodes_to_monitor
+                    }
+                    requests.post(
+                        f"{SONARR_URL}/api/v3/command",
+                        headers=headers,
+                        json=search_payload
+                    )
+                    app.logger.info(f"✓ Triggered search for {len(episodes_to_monitor)} episodes")
+        
+        # Clean up the pending request file
+        if request_file_path and os.path.exists(request_file_path):
+            try:
+                os.remove(request_file_path)
+                app.logger.info(f"✓ Removed pending request {request_id}")
+            except Exception:
+                pass
+        
+        # Remove episeerr_select tag (keep rule tag)
+        try:
+            tag_resp = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
+            if tag_resp.ok:
+                tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
+                select_tag_id = tag_map.get('episeerr_select')
+                
+                if select_tag_id:
+                    series_resp = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+                    if series_resp.ok:
+                        series_data = series_resp.json()
+                        current_tags = series_data.get('tags', [])
+                        if select_tag_id in current_tags:
+                            current_tags.remove(select_tag_id)
+                            series_data['tags'] = current_tags
+                            requests.put(f"{SONARR_URL}/api/v3/series", headers=headers, json=series_data)
+        except Exception as e:
+            app.logger.debug(f"Tag cleanup: {e}")
+        
+        message = f"Applied rule '{rule_name}' to {request_data.get('title', 'series')}"
+        return redirect(url_for('episeerr_index', message=message))
+
+    except Exception as e:
+        app.logger.error(f"Error applying rule to selection: {e}", exc_info=True)
+        return redirect(url_for('episeerr_index', message=f"Error: {str(e)}"))    
 
 @app.route('/select-episodes/<tmdb_id>')
 def select_episodes(tmdb_id):
@@ -3180,11 +3353,13 @@ def select_episodes(tmdb_id):
         
         app.logger.info(f"Rendering episode selection with selected_seasons: {selected_seasons}")
         
-        return render_template('episode_selection.html', 
-                             show=formatted_show, 
-                             request_id=request_id,
-                             series_id=series_id,
-                             selected_seasons=selected_seasons)
+        selected_rule = request.args.get('rule', None)
+        return render_template('episode_selection.html',
+        show=formatted_show,
+        request_id=request_id,
+        series_id=series_id,
+        selected_seasons=selected_seasons,
+        selected_rule=selected_rule)
     
     except Exception as e:
         app.logger.error(f"Error in select_episodes: {str(e)}", exc_info=True)
@@ -3280,6 +3455,32 @@ def process_episode_selection():
                 else:
                     failed_seasons.append(season_number)
                     app.logger.error(f"✗ Failed to process Season {season_number}")
+            
+            # ── NEW: Assign series to rule after episode processing ──
+            selected_rule = request.form.get('selected_rule')
+            if not selected_rule:
+                config = load_config()
+                selected_rule = config.get('default_rule', 'default')
+            
+            if selected_rule:
+                config = load_config()
+                if selected_rule in config.get('rules', {}):
+                    series_id_str = str(series_id)
+                    target = config['rules'][selected_rule]
+                    target.setdefault('series', {})
+                    
+                    if series_id_str not in target['series']:
+                        target['series'][series_id_str] = {'activity_date': None}
+                        save_config(config)
+                        app.logger.info(f"✓ Assigned series {series_id} to rule '{selected_rule}'")
+                    
+                    try:
+                        episeerr_utils.sync_rule_tag_to_sonarr(series_id, selected_rule)
+                    except Exception as e:
+                        app.logger.error(f"Rule tag sync failed: {e}")
+                else:
+                    app.logger.warning(f"Selected rule '{selected_rule}' not found in config")
+            # ── END NEW ──────────────────────────────────────────────
             
             # Clean up request file
             try:

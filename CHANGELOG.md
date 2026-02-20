@@ -7,7 +7,10 @@
 
 
 ---
-
+added plex integration, includinmg watchlist syncing
+  - reuestes in not already in sonarr\radarr
+  - creates pendiing select for shows
+added now playing widgents for spoify and plex integrations
 ## [Released]
 v3.3.1 - 2025-02-06
 cosmetic fixes

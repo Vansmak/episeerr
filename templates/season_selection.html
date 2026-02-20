@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <title>Select Seasons - {{ show.name }}</title>
+    <title>Select - {{ show.name }}</title>
     <style>
         body {
             background-color: #343a40;
@@ -117,6 +117,46 @@
         </div>
         
         <h5>Select Seasons</h5>
+        
+        <!-- Rule Assignment -->
+        <div style="background: #495057; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+            <h6 style="margin-bottom: 10px;">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16" style="margin-right: 6px;">
+                    <path d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872l-.1-.34z"/>
+                    <circle cx="8" cy="8" r="3"/>
+                </svg>
+                Assign Rule
+            </h6>
+            <p style="font-size: 13px; color: #adb5bd; margin-bottom: 10px;">
+                Choose a rule to auto-manage this show, or pick episodes manually below.
+            </p>
+            <form action="/api/apply-rule-to-selection" method="POST">
+                <input type="hidden" name="tmdb_id" value="{{ tmdb_id }}">
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <select name="rule_name" id="rule-select" class="form-control form-control-sm" style="background: #343a40; color: #f8f9fa; border-color: #6c757d; flex: 1;">
+                        {% if rules %}
+                            {% for rule in rules %}
+                            <option value="{{ rule.name }}" {% if rule.is_default %}selected{% endif %}>
+                                {{ rule.name }}{% if rule.is_default %} (default){% endif %} — {{ rule.description }}
+                            </option>
+                            {% endfor %}
+                        {% else %}
+                            <option value="" disabled>No rules configured</option>
+                        {% endif %}
+                    </select>
+                    <button type="submit" class="btn btn-success btn-sm" style="white-space: nowrap;" {% if not rules %}disabled{% endif %}>
+                        Apply Rule
+                    </button>
+                </div>
+            </form>
+            <div style="border-top: 1px solid rgba(255,255,255,0.1); margin-top: 12px; padding-top: 10px;">
+                <small style="color: #6c757d;">
+                    ↓ Or select seasons/episodes below — the rule above will still be assigned for ongoing management
+                </small>
+            </div>
+        </div>
+        
+        <h6 style="color: #adb5bd; margin-bottom: 15px;">Manual Episode Selection</h6>
         <div class="season-list">
             {% for season in show.seasons %}
                 {% if season.seasonNumber > 0 %}  <!-- Skip specials (season 0) -->
@@ -166,9 +206,17 @@
         
         console.log('Selected seasons:', selectedSeasons);
         
-        // Navigate to episode selection with the selected seasons
+        // Carry the selected rule through to episode selection
+        const ruleSelect = document.getElementById('rule-select');
+        const selectedRule = ruleSelect ? ruleSelect.value : '';
+        
+        // Navigate to episode selection with the selected seasons and rule
         const seasonsParam = selectedSeasons.join(',');
-        window.location.href = `/select-episodes/{{ tmdb_id }}?step=episode&seasons=${seasonsParam}`;
+        let url = `/select-episodes/{{ tmdb_id }}?step=episode&seasons=${seasonsParam}`;
+        if (selectedRule) {
+            url += `&rule=${encodeURIComponent(selectedRule)}`;
+        }
+        window.location.href = url;
     }
     
     // Add click handlers when page loads
