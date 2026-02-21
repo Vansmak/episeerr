@@ -68,9 +68,10 @@ Why webhooks exist, what they do, and which ones you need.
 
 | Feature | What It Does | When To Use |
 |---------|--------------|-------------|
-| [**Episode Selection**](features/episode-selection.md) | Manually choose specific episodes | Try pilots, skip seasons, selective downloads |
+| [**Episode Selection**](features/episode-selection.md) | Manually choose specific episodes, or apply a rule directly | Try pilots, skip seasons, re-route a series to a different rule |
 | [**Viewing Automation**](features/viewing-automation.md) | Next episode ready when you watch | Binge watching, always-ready episodes |
 | [**Storage Management**](features/storage-management.md) | Auto-cleanup based on time/viewing | Limited storage, inactive shows cleanup |
+| [**Plex Watchlist Sync**](features/plex-watchlist-sync.md) | Add to Plex watchlist, Episeerr queues TV shows for selection and sends movies to Radarr | Zero-effort adding from Plex Discover |
 | [**Pending Deletions**](features/pending-deletions.md) | Review deletions before they happen | Test settings safely, manual approval |
 
 **All features work independently** - use one, some, or all!
@@ -240,12 +241,15 @@ Current limitations and bugs we're working on.
 **[See detailed flow diagram](assets/flow.svg)**
 
 ---
-## Recent Updates (v2.9.8)
+## Recent Updates
 
+- **Plex Watchlist Sync** — add to Plex watchlist, TV shows queue for selection, movies go straight to Radarr. Optional movie cleanup with grace period. See [Plex Watchlist Sync](features/plex-watchlist-sync.md)
+- **Series page selection icon** — click the list icon on any poster or table row to send an existing series through the selection flow without needing Sonarr tags
+- **Rule picker on selection page** — apply a rule directly from the season selection page (no manual episode picking needed), or choose episodes and assign a rule for ongoing management
+- **Rule pre-selection** — the rule dropdown on the selection page defaults to the show's currently assigned rule
 - Auto-cleanup of deleted series from config
 - Smart Jellyfin mode detection (no manual disable)
 - Webhook string/integer tag handling
-- 404 errors logged as DEBUG
 - Delay profile simplified to 3 tags
 
 ## 📝 Documentation Status
