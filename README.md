@@ -12,7 +12,7 @@ This project started as scratching my own itch - I wanted more granular series m
 
 ---
 newest features will be the dev branch and can be pulled as :custom tag.  Includes the ability to make new season and episode requests straight from episeerr for existing shows. 
-also for plex users can see your watchlist and auto sync it
+also for plex users can see your watchlist and auto sync it   https://github.com/Vansmak/episeerr/tree/dev
 ## 📋 Table of Contents
 
 - [What It Does](#what-it-does)
