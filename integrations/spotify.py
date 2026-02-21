@@ -53,61 +53,94 @@ class SpotifyIntegration(ServiceIntegration):
     # Replace the _get_token method in spotify.py:
 
     def _get_token(self, api_key: str) -> Optional[str]:
-        """Get access token - NEVER trigger interactive auth"""
+        """Get access token, auto-refreshing if expired"""
+        import time
+        import base64
         try:
             if not api_key or not os.path.exists(api_key):
-                return api_key  # Might be direct token
-            
+                return api_key  # Might be a direct token string
+
             cache_path = api_key
-            
-            # Read the cache file
+
             with open(cache_path, 'r') as f:
                 cache_data = json.load(f)
-            
+
             access_token = cache_data.get('access_token')
             expires_at = cache_data.get('expires_at', 0)
             refresh_token = cache_data.get('refresh_token')
-            
-            # Check if token is expired
-            import time
+
             if expires_at > time.time():
-                # Token is still valid
                 return access_token
-            
-            # Token expired - try to refresh (non-interactive)
-            if refresh_token:
-                cache_dir = os.path.dirname(cache_path)
-                config_path = os.path.join(cache_dir, 'config.json')
-                
+
+            if not refresh_token:
+                logger.warning("Spotify token expired and no refresh_token available")
+                return access_token
+
+            # Get client credentials - prefer settings_db, fall back to config.json
+            client_id = None
+            client_secret = None
+            try:
+                from settings_db import get_service
+                svc = get_service('spotify', 'default') or {}
+                cfg = svc.get('config') or {}
+                client_id = cfg.get('client_id')
+                client_secret = cfg.get('client_secret')
+            except Exception:
+                pass
+
+            if not client_id or not client_secret:
+                # Fall back to config.json next to the cache file
+                config_path = os.path.join(os.path.dirname(cache_path), 'config.json')
                 if os.path.exists(config_path):
                     try:
-                        import spotipy
-                        from spotipy.oauth2 import SpotifyOAuth
-                        
                         with open(config_path, 'r') as f:
-                            config = json.load(f)
-                        
-                        auth_manager = SpotifyOAuth(
-                            client_id=config.get('client_id'),
-                            client_secret=config.get('client_secret'),
-                            redirect_uri=config.get('redirect_uri', 'http://127.0.0.1:8888/callback'),
-                            scope='user-library-read user-read-recently-played playlist-read-private user-read-playback-state user-modify-playback-state',
-                            cache_path=cache_path,
-                            open_browser=False
-                        )
-                        
-                        # Use validate_token which refreshes without interactive prompt
-                        token_info = auth_manager.validate_token(cache_data)
-                        if token_info:
-                            return token_info['access_token']
-                        
-                    except Exception as e:
-                        logger.error(f"Token refresh failed: {e}")
-            
-            # Return expired token as last resort
-            # (better to try and fail than trigger interactive auth)
-            return access_token
-            
+                            file_cfg = json.load(f)
+                        client_id = client_id or file_cfg.get('client_id')
+                        client_secret = client_secret or file_cfg.get('client_secret')
+                    except Exception:
+                        pass
+
+            if not client_id or not client_secret:
+                logger.warning("Spotify token expired but no client_id/client_secret to refresh with")
+                return access_token  # Return expired token; API will 401 but widget stays visible
+
+            # Refresh via Spotify token endpoint (no spotipy needed)
+            credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+            resp = requests.post(
+                'https://accounts.spotify.com/api/token',
+                headers={
+                    'Authorization': f'Basic {credentials}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                data={
+                    'grant_type': 'refresh_token',
+                    'refresh_token': refresh_token
+                },
+                timeout=10
+            )
+
+            if resp.status_code == 200:
+                token_data = resp.json()
+                new_access_token = token_data['access_token']
+                new_expires_at = time.time() + token_data.get('expires_in', 3600)
+
+                # Write refreshed token back to cache file
+                cache_data['access_token'] = new_access_token
+                cache_data['expires_at'] = new_expires_at
+                if 'refresh_token' in token_data:
+                    cache_data['refresh_token'] = token_data['refresh_token']
+                try:
+                    with open(cache_path, 'w') as f:
+                        json.dump(cache_data, f)
+                except Exception as write_err:
+                    logger.warning(f"Could not write refreshed token to cache: {write_err}")
+
+                logger.info("Spotify token refreshed successfully")
+                return new_access_token
+            else:
+                logger.error(f"Spotify token refresh failed: {resp.status_code} {resp.text[:200]}")
+                return access_token
+
         except Exception as e:
             logger.error(f"Token fetch error: {e}")
             return None
@@ -270,60 +303,24 @@ class SpotifyIntegration(ServiceIntegration):
                 now_playing = stats.get('now_playing')
                 if not now_playing:
                     return jsonify({'success': False, 'message': 'No playback data'})
-                
-                if now_playing.get('is_playing'):
-                    album_art = f'<img src="{now_playing["album_art"]}" class="rounded" style="width: 80px; height: 80px; object-fit: cover; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">' if now_playing.get('album_art') else ''
-                    
-                    html = f'''
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-dark border-bottom">
-                            <h6 class="mb-0">
-                                <img src="{integration.icon}" style="width: 20px; height: 20px; margin-right: 8px;">
-                                Now Playing
-                            </h6>
-                        </div>
-                        <div class="card-body p-3">
-                            <div class="d-flex gap-3 align-items-center">
-                                {album_art}
-                                <div class="flex-grow-1" style="min-width: 0;">
-                                    <div class="fw-bold text-truncate mb-1" style="font-size: 15px;">
-                                        {now_playing.get('track_name', 'Unknown')}
-                                    </div>
-                                    <div class="text-muted text-truncate" style="font-size: 13px;">
-                                        {now_playing.get('artist_name', 'Unknown')}
-                                    </div>
-                                    <div class="mt-2">
-                                        <span class="badge bg-success">
-                                            <i class="fas fa-play me-1"></i>Playing
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+
+                track_name = now_playing.get('track_name', 'Unknown')
+                artist_name = now_playing.get('artist_name', 'Unknown')
+                is_playing = now_playing.get('is_playing', False)
+                album_art = f'<img src="{now_playing["album_art"]}" class="rounded" style="width:36px;height:36px;object-fit:cover;flex-shrink:0;">' if now_playing.get('album_art') else '<i class="fas fa-music text-success" style="font-size:16px;flex-shrink:0;opacity:0.7;"></i>'
+                status_badge = '<span class="badge bg-success flex-shrink-0" style="font-size:10px;"><i class="fas fa-play me-1"></i>Playing</span>' if is_playing else '<span class="badge bg-secondary flex-shrink-0" style="font-size:10px;">Last played</span>'
+
+                html = f'''
+                <div class="d-flex align-items-center gap-2 px-2 py-1 rounded" style="background:rgba(255,255,255,0.04); min-height:36px;">
+                    <img src="{integration.icon}" style="width:16px;height:16px;flex-shrink:0;">
+                    {album_art}
+                    <div class="flex-grow-1 overflow-hidden">
+                        <div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{track_name}</div>
+                        <div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{artist_name}</div>
                     </div>
-                    '''
-                else:
-                    html = f'''
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-dark border-bottom">
-                            <h6 class="mb-0">
-                                <img src="{integration.icon}" style="width: 20px; height: 20px; margin-right: 8px;">
-                                Last Played
-                            </h6>
-                        </div>
-                        <div class="card-body p-3">
-                            <div class="text-center py-3">
-                                <i class="fas fa-music text-muted mb-3" style="font-size: 2.5rem; opacity: 0.2;"></i>
-                                <div class="fw-bold text-truncate mb-1" style="font-size: 14px;">
-                                    {now_playing.get('track_name', 'Unknown')}
-                                </div>
-                                <div class="text-muted text-truncate" style="font-size: 12px;">
-                                    {now_playing.get('artist_name', 'Unknown')}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    '''
+                    {status_badge}
+                </div>
+                '''
                 
                 return jsonify({'success': True, 'html': html})
                 
@@ -386,7 +383,21 @@ class SpotifyIntegration(ServiceIntegration):
                 'label': 'Cache File Path',
                 'type': 'text',
                 'placeholder': '/spotify_shuffle/.cache-spotify',
-                'help': 'Path to your Spotify .cache file'
+                'help': 'Path to your Spotify .cache file (contains the refresh token)'
+            },
+            {
+                'name': 'client_id',
+                'label': 'Spotify Client ID',
+                'type': 'text',
+                'placeholder': 'Your Spotify app client ID',
+                'help': 'From developer.spotify.com — needed for automatic token refresh'
+            },
+            {
+                'name': 'client_secret',
+                'label': 'Spotify Client Secret',
+                'type': 'password',
+                'placeholder': 'Your Spotify app client secret',
+                'help': 'From developer.spotify.com — needed for automatic token refresh'
             }
         ]
 

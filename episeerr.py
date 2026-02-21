@@ -3267,7 +3267,7 @@ def apply_rule_to_selection():
         rule_name = request.form.get('rule_name')
         
         if not tmdb_id or not rule_name:
-            return redirect(url_for('episeerr_index', message="Missing tmdb_id or rule_name"))
+            return redirect(url_for('rules_page'))
         
         # Find the pending request to get series_id
         series_id = None
@@ -3289,12 +3289,12 @@ def apply_rule_to_selection():
                     continue
         
         if not series_id:
-            return redirect(url_for('episeerr_index', message="No pending request found"))
-        
+            return redirect(url_for('rules_page'))
+
         config = load_config()
-        
+
         if rule_name not in config.get('rules', {}):
-            return redirect(url_for('episeerr_index', message=f"Rule '{rule_name}' not found"))
+            return redirect(url_for('rules_page'))
         
         # Remove series from any rule it was previously in
         series_id_str = str(series_id)
@@ -3315,77 +3315,6 @@ def apply_rule_to_selection():
             app.logger.info(f"✓ Synced tag episeerr_{rule_name} for series {series_id}")
         except Exception as e:
             app.logger.error(f"Tag sync failed: {e}")
-        
-        # Execute the rule logic (same as sonarr_webhook rule processing)
-        headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
-        rule_config = config['rules'][rule_name]
-        get_type = rule_config.get('get_type', 'episodes')
-        get_count = rule_config.get('get_count', 1)
-        
-        app.logger.info(f"Applying rule '{rule_name}' to series {series_id}: {get_type} × {get_count}")
-        
-        # Get all episodes
-        episodes_response = requests.get(
-            f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
-            headers=headers
-        )
-        
-        if episodes_response.ok:
-            all_episodes = episodes_response.json()
-            
-            # Determine which episodes to monitor based on rule
-            episodes_to_monitor = []
-            
-            if get_type == 'all':
-                episodes_to_monitor = [
-                    ep['id'] for ep in all_episodes 
-                    if ep.get('seasonNumber', 0) > 0
-                ]
-            elif get_type == 'seasons':
-                # Get first N seasons
-                seasons = sorted(set(
-                    ep.get('seasonNumber') for ep in all_episodes 
-                    if ep.get('seasonNumber', 0) > 0
-                ))
-                target_seasons = seasons[:get_count]
-                episodes_to_monitor = [
-                    ep['id'] for ep in all_episodes 
-                    if ep.get('seasonNumber') in target_seasons
-                ]
-            else:
-                # Episodes - get first N from season 1
-                season_1_eps = sorted(
-                    [ep for ep in all_episodes if ep.get('seasonNumber') == 1],
-                    key=lambda x: x.get('episodeNumber', 0)
-                )
-                episodes_to_monitor = [ep['id'] for ep in season_1_eps[:get_count]]
-            
-            if episodes_to_monitor:
-                # Monitor selected episodes
-                monitor_payload = {
-                    'episodeIds': episodes_to_monitor,
-                    'monitored': True
-                }
-                monitor_resp = requests.put(
-                    f"{SONARR_URL}/api/v3/episode/monitor",
-                    headers=headers,
-                    json=monitor_payload
-                )
-                
-                if monitor_resp.ok:
-                    app.logger.info(f"✓ Monitored {len(episodes_to_monitor)} episodes")
-                    
-                    # Trigger search
-                    search_payload = {
-                        'name': 'EpisodeSearch',
-                        'episodeIds': episodes_to_monitor
-                    }
-                    requests.post(
-                        f"{SONARR_URL}/api/v3/command",
-                        headers=headers,
-                        json=search_payload
-                    )
-                    app.logger.info(f"✓ Triggered search for {len(episodes_to_monitor)} episodes")
         
         # Clean up the pending request file
         if request_file_path and os.path.exists(request_file_path):
@@ -3414,12 +3343,12 @@ def apply_rule_to_selection():
         except Exception as e:
             app.logger.debug(f"Tag cleanup: {e}")
         
-        message = f"Applied rule '{rule_name}' to {request_data.get('title', 'series')}"
-        return redirect(url_for('episeerr_index', message=message))
+        app.logger.info(f"Applied rule '{rule_name}' to {request_data.get('title', 'series')}")
+        return redirect(url_for('rules_page'))
 
     except Exception as e:
         app.logger.error(f"Error applying rule to selection: {e}", exc_info=True)
-        return redirect(url_for('episeerr_index', message=f"Error: {str(e)}"))    
+        return redirect(url_for('rules_page'))
 
 @app.route('/select-episodes/<tmdb_id>')
 def select_episodes(tmdb_id):
@@ -3518,13 +3447,13 @@ def process_episode_selection():
                     os.remove(request_file)
                     app.logger.info(f"Cancelled and removed request {request_id}")
             
-            return redirect(url_for('episeerr_index', message="Request cancelled"))
+            return redirect(url_for('rules_page'))
         
         elif action == 'process':
             # Load request data
             request_file = os.path.join(REQUESTS_DIR, f"{request_id}.json")
             if not os.path.exists(request_file):
-                return redirect(url_for('episeerr_index', message="Error: Request not found"))
+                return redirect(url_for('rules_page'))
             
             with open(request_file, 'r') as f:
                 request_data = json.load(f)
@@ -3532,7 +3461,7 @@ def process_episode_selection():
             series_id = request_data['series_id']
             
             if not episodes:
-                return redirect(url_for('episeerr_index', message="Error: No episodes selected"))
+                return redirect(url_for('rules_page'))
             
             app.logger.info(f"DEBUG: Processing {len(episodes)} episodes: {episodes}")
             
@@ -3557,7 +3486,7 @@ def process_episode_selection():
                     continue
             
             if not episodes_by_season:
-                return redirect(url_for('episeerr_index', message="Error: No valid episodes found"))
+                return redirect(url_for('rules_page'))
             
             app.logger.info(f"Processing multi-season selection for series {series_id}: {episodes_by_season}")
             
@@ -3621,20 +3550,14 @@ def process_episode_selection():
                 app.logger.error(f"Error removing request file: {str(e)}")
             
             # Prepare result message
-            if failed_seasons:
-                message = f"Processed {total_processed} episodes. Failed seasons: {failed_seasons}"
-                return redirect(url_for('episeerr_index', message=message))
-            else:
-                seasons_list = list(episodes_by_season.keys())
-                message = f"Successfully processed {total_processed} episodes across {len(seasons_list)} seasons"
-                return redirect(url_for('episeerr_index', message=message))
-        
+            return redirect(url_for('rules_page'))
+
         else:
-            return redirect(url_for('episeerr_index', message="Invalid action"))
-            
+            return redirect(url_for('rules_page'))
+
     except Exception as e:
         app.logger.error(f"Error processing episode selection: {str(e)}", exc_info=True)
-        return redirect(url_for('episeerr_index', message="An error occurred while processing episodes"))
+        return redirect(url_for('rules_page'))
 
 @app.route('/api/tmdb/season/<tmdb_id>/<season_number>')
 def get_tmdb_season(tmdb_id, season_number):

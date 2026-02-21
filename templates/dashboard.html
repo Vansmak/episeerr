@@ -97,6 +97,12 @@
                             <i class="fas fa-bookmark me-2"></i>Plex Watchlist
                             <i id="watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
                         </h5>
+                        <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation();">
+                            <span id="plex-sync-status" class="text-muted" style="font-size: 12px;"></span>
+                            <button class="btn btn-sm btn-outline-secondary" onclick="syncPlexWatchlist()" title="Sync now">
+                                <i class="fas fa-sync-alt" id="sync-spinner"></i> Sync
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body p-3" style="overflow-x: hidden;">
                         <div id="plex-watchlist-container">
@@ -154,10 +160,6 @@
   padding: 12px;
   background: linear-gradient(to top, rgba(0,0,0,0.85), transparent 70%);
   width: 100%;
-}
-#integration-widgets-container .card {
-    max-height: 250px;
-    overflow-y: auto;
 }
 /* Equal columns – sleek & balanced */
 @media (min-width: 992px) {
@@ -602,12 +604,17 @@ function toggleDay(dayId) {
 function loadPlexWatchlist() {
     const container = document.getElementById('plex-watchlist-container');
     if (!container) return;
-    
+
     fetch('/api/integration/plex/watchlist')
         .then(r => r.json())
         .then(data => {
             if (data.success && data.html) {
                 container.innerHTML = data.html;
+            }
+            // Always update sync status in the card header
+            const statusEl = document.getElementById('plex-sync-status');
+            if (statusEl && data.sync_text) {
+                statusEl.textContent = data.sync_text;
             }
         })
         .catch(() => {}); // Watchlist unavailable
@@ -634,7 +641,7 @@ function syncPlexWatchlist() {
                 msg = msg ? msg.slice(0, -2) : 'Everything up to date';
                 
                 console.log('Watchlist sync:', msg);
-                loadPlexWatchlist();
+                loadPlexWatchlist(); // Reloads content + updates sync status in header
             }
         })
         .catch(err => console.error('Sync failed:', err))

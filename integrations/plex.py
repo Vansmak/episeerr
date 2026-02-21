@@ -302,13 +302,7 @@ class PlexIntegration(ServiceIntegration):
     
     def get_sync_config(self) -> dict:
         """Get watchlist sync configuration with defaults"""
-        try:
-            from settings_db import get_service
-            plex_config = get_service('plex') or {}
-        except Exception:
-            plex_config = {}
-        
-        return plex_config.get('watchlist_sync', {
+        defaults = {
             'enabled': False,
             'interval_minutes': 120,
             'tv_quality_profile': None,
@@ -320,7 +314,16 @@ class PlexIntegration(ServiceIntegration):
                 'grace_days': 7,
             },
             'auto_remove_watched': True,
-        })
+        }
+        try:
+            from settings_db import get_service
+            plex_row = get_service('plex') or {}
+            # watchlist_sync lives inside the config JSON column
+            plex_config = plex_row.get('config') or {}
+        except Exception:
+            plex_config = {}
+
+        return plex_config.get('watchlist_sync', defaults)
     
     def check_exists_in_sonarr(self, tmdb_id: str = None, tvdb_id: str = None) -> Optional[dict]:
         """Check if a show already exists in Sonarr by TMDB or TVDB ID"""
@@ -1215,62 +1218,37 @@ class PlexIntegration(ServiceIntegration):
                 now_playing = stats.get('now_playing')
                 
                 if not now_playing:
-                    html = f'''
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-dark border-bottom py-2 px-3">
-                            <h6 class="mb-0" style="font-size: 14px;">
-                                <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width: 18px; height: 18px; margin-right: 6px;">
-                                Plex
-                            </h6>
-                        </div>
-                        <div class="card-body p-2 text-center">
-                            <i class="fas fa-tv text-muted" style="font-size: 1.5rem; opacity: 0.3;"></i>
-                            <div class="text-muted mt-1" style="font-size: 11px;">Nothing playing</div>
-                        </div>
+                    html = '''
+                    <div class="d-flex align-items-center gap-2 px-2 py-1 rounded" style="background:rgba(255,255,255,0.04); min-height:36px;">
+                        <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width:16px;height:16px;opacity:0.6;flex-shrink:0;">
+                        <i class="fas fa-tv text-muted" style="font-size:11px;opacity:0.4;"></i>
+                        <span class="text-muted" style="font-size:12px;">Nothing playing</span>
                     </div>
                     '''
                 else:
-                    thumb = f'<img src="{now_playing["thumb"]}" class="rounded" style="width: 80px; height: 80px; object-fit: cover; box-shadow: 0 2px 8px rgba(0,0,0,0.3);">' if now_playing.get('thumb') else ''
-                    
+                    thumb = f'<img src="{now_playing["thumb"]}" class="rounded" style="width:36px;height:36px;object-fit:cover;flex-shrink:0;">' if now_playing.get('thumb') else ''
+
                     if now_playing.get('episode_title') and now_playing.get('season') and now_playing.get('episode'):
                         title = now_playing['title']
-                        subtitle = f"S{now_playing['season']}E{now_playing['episode']} - {now_playing['episode_title']}"
+                        subtitle = f"S{now_playing['season']}E{now_playing['episode']} · {now_playing['episode_title']}"
                     else:
                         title = now_playing['title']
                         subtitle = now_playing.get('user', 'Unknown User')
-                    
+
                     state_icon = 'play' if now_playing['state'] == 'playing' else 'pause'
-                    state_text = now_playing['state'].capitalize()
-                    
+                    progress = now_playing['progress']
+
                     html = f'''
-                    <div class="card border-0 shadow-sm">
-                        <div class="card-header bg-dark border-bottom py-2 px-3">
-                            <h6 class="mb-0" style="font-size: 14px;">
-                                <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width: 18px; height: 18px; margin-right: 6px;">
-                                Now Watching
-                            </h6>
+                    <div class="d-flex align-items-center gap-2 px-2 py-1 rounded" style="background:rgba(255,255,255,0.04); min-height:36px;">
+                        <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width:16px;height:16px;flex-shrink:0;">
+                        {thumb}
+                        <div class="flex-grow-1 overflow-hidden">
+                            <div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{title}</div>
+                            <div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{subtitle}</div>
                         </div>
-                        <div class="card-body p-3">
-                            <div class="d-flex gap-3 align-items-center">
-                                {thumb}
-                                <div class="flex-grow-1" style="min-width: 0;">
-                                    <div class="fw-bold text-truncate mb-1" style="font-size: 15px;">
-                                        {title}
-                                    </div>
-                                    <div class="text-muted text-truncate" style="font-size: 13px;">
-                                        {subtitle}
-                                    </div>
-                                    <div class="mt-2">
-                                        <span class="badge bg-warning">
-                                            <i class="fas fa-{state_icon} me-1"></i>{state_text}
-                                        </span>
-                                        <span class="badge bg-secondary ms-1">
-                                            {now_playing['progress']}%
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">
+                            <i class="fas fa-{state_icon} me-1"></i>{progress}%
+                        </span>
                     </div>
                     '''
                 
@@ -1298,15 +1276,35 @@ class PlexIntegration(ServiceIntegration):
                 
                 # Use enriched watchlist with status
                 watchlist_items = integration.get_watchlist_with_status(api_key)
-                
+
+                # Compute sync status text (always needed for card header)
+                sync_data = load_sync_data()
+                sync_config = integration.get_sync_config()
+                last_sync = sync_data.get('last_full_sync')
+                sync_enabled = sync_config.get('enabled', False)
+
+                if sync_enabled and last_sync:
+                    try:
+                        sync_dt = datetime.fromisoformat(last_sync)
+                        ago_seconds = (datetime.now() - sync_dt).total_seconds()
+                        if ago_seconds < 3600:
+                            ago_text = f"{int(ago_seconds / 60)}m ago"
+                        elif ago_seconds < 86400:
+                            ago_text = f"{int(ago_seconds / 3600)}h ago"
+                        else:
+                            ago_text = f"{int(ago_seconds / 86400)}d ago"
+                    except:
+                        ago_text = "unknown"
+                    sync_text = f"Synced {ago_text}"
+                elif sync_enabled:
+                    sync_text = "Sync pending..."
+                else:
+                    sync_text = "Auto-sync off"
+
                 if not watchlist_items:
                     html = '<p class="text-muted text-center py-4">Your watchlist is empty</p>'
                 else:
-                    # Sync info for header
-                    sync_data = load_sync_data()
-                    sync_config = integration.get_sync_config()
-                    last_sync = sync_data.get('last_full_sync')
-                    sync_enabled = sync_config.get('enabled', False)
+                    # Sync info already computed above
                     
                     items_html = ''
                     for item in watchlist_items:
@@ -1348,36 +1346,8 @@ class PlexIntegration(ServiceIntegration):
                         </div>
                         '''
                     
-                    # Sync status line
-                    if sync_enabled and last_sync:
-                        try:
-                            sync_dt = datetime.fromisoformat(last_sync)
-                            ago_seconds = (datetime.now() - sync_dt).total_seconds()
-                            if ago_seconds < 3600:
-                                ago_text = f"{int(ago_seconds / 60)}m ago"
-                            elif ago_seconds < 86400:
-                                ago_text = f"{int(ago_seconds / 3600)}h ago"
-                            else:
-                                ago_text = f"{int(ago_seconds / 86400)}d ago"
-                        except:
-                            ago_text = "unknown"
-                        sync_line = f'<span class="text-muted" style="font-size: 11px;">Synced {ago_text}</span>'
-                    elif sync_enabled:
-                        sync_line = '<span class="text-muted" style="font-size: 11px;">Sync pending...</span>'
-                    else:
-                        sync_line = '<span class="text-muted" style="font-size: 11px;">Auto-sync off</span>'
-                    
                     html = f'''
                     <div class="watchlist-container">
-                        <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h6 class="mb-0"><i class="fas fa-bookmark me-2"></i>Plex Watchlist ({len(watchlist_items)})</h6>
-                            <div class="d-flex align-items-center gap-2">
-                                {sync_line}
-                                <button class="btn btn-sm btn-outline-secondary" onclick="syncPlexWatchlist()" title="Sync now">
-                                    <i class="fas fa-sync-alt" id="sync-spinner"></i>
-                                </button>
-                            </div>
-                        </div>
                         <div class="watchlist-scroll">
                             {items_html}
                         </div>
@@ -1465,8 +1435,8 @@ class PlexIntegration(ServiceIntegration):
                     </style>
                     '''
                 
-                return jsonify({'success': True, 'html': html})
-                
+                return jsonify({'success': True, 'html': html, 'sync_text': sync_text})
+
             except Exception as e:
                 logger.error(f"Error generating watchlist: {e}")
                 return jsonify({'success': False, 'message': str(e)})
