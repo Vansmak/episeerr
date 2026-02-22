@@ -3,21 +3,30 @@
 ## [Unreleased / Dev]
 
 ### New Features
+- **Always Have** — new rule parameter with expression syntax for episodes that should always be present and protected from cleanup
+  - Expression examples: `s1` (full season), `s1e1` (pilot), `s1, s*e1` (showcase — season 1 + first ep of every other season), `s1-3` (season range)
+  - Processes on rule assignment (new series or reassignment) — monitors and searches matching episodes
+  - Protected from Grace and Keep cleanup; only Dormant overrides it
+  - Works alongside Get/Keep/Grace independently
 - **Series page selection** — list icon on every poster (grid) and table row launches the selection flow for any existing series; grab specific seasons/episodes or just change the rule without touching Sonarr tags
 - **Plex integration** — watchlist sync, now-playing widget
   - TV shows added to Plex watchlist create a pending selection request
   - Movies go straight to Radarr
   - Optional movie cleanup: delete from Radarr after watched + grace period
+  - Sync settings integrated into existing Plex Save button on Setup page
 - **Plex/Spotify now-playing widgets** on dashboard
 - **Rule picker on selection page** — dropdown pre-selects the show's current rule; Apply to reassign only (no processing), or pick episodes manually and still assign a rule for ongoing management
 - **Plex token helper script** (`get_plex_token.py`)
 
 ### Fixes
 - Rule reassignment now removes series from old rule before adding to new one
+- Rule assignment is purely additive — never unmonitors or deletes existing episodes when reassigning
 - Duplicate pending request check — reuses existing request if series already queued
 - Cancel on selection page deletes the pending request before navigating back
 - Stat pills unassigned count no longer goes negative when stale config entries exist for deleted series
 - After selection flow, lands on Rules page instead of index
+- Plex watchlist fetch includes `includeGuids=1` for TMDB/TVDB ID resolution
+- Watchlist sync skips shows already in Episeerr config or with pending selection requests
 
 ## [Released]
 v3.3.1 - 2025-02-06

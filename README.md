@@ -52,6 +52,7 @@ Episeerr gives you **four independent features** for TV episode management:
 | ⚡ **Viewing Automation** | Next episode ready when you watch | Binge watching, always-ready episodes |
 | 💾 **Storage Management** | Automatic cleanup based on time/viewing | Limited storage, inactive show cleanup |
 | 🔄 **Plex Watchlist Sync** | Add to Plex watchlist, Episeerr handles the rest | Zero-effort adding, full selection control |
+| 📌 **Always Have** | Baseline episodes always present and protected | Showcase libraries, permanent pilots, season placeholders |
 
 **Use one, some, or all** - they work independently!
 
@@ -906,6 +907,27 @@ When a show enters the selection flow (from any method above), the season select
 
 ---
 
+### 📌 Always Have (Rule Parameter)
+
+**Define a baseline of episodes that are always present and protected from cleanup.**
+
+This is about setting up the show, not ongoing watching. When a show enters a rule with Always Have, those episodes get downloaded immediately. Grace and Keep cleanup will never touch them — only Dormant (which is intentionally nuclear) overrides this.
+
+**Expression syntax:**
+
+| Expression | Result |
+|------------|--------|
+| `s1e1` | Just the pilot |
+| `s1` | All of season 1 |
+| `s1, s*e1` | Season 1 + first ep of every other season |
+| `s1-3` | Seasons 1 through 3 |
+| `s1e1-5` | Season 1, episodes 1-5 |
+| `all` | Everything |
+
+Combine with commas. Leave blank to skip. Always Have, Get, Keep, Grace, and Dormant are all independent — use any combination.
+
+---
+
 ### ⚡ Viewing Automation
 
 **Next episode ready when you watch.**
@@ -1043,6 +1065,53 @@ Dormant: 90 days
 - Keep all of S2, delete S1
 - After 14 days → Cleanup S2
 - Perfect for binging complete seasons
+
+---
+
+### Showcase
+
+**Profile:** Plex shows all seasons exist without downloading everything
+
+```yaml
+Rule Name: showcase
+Always Have: s1, s*e1
+GET: 1 episode
+KEEP: 1 episode
+Action: Search
+Grace Watched: null
+Grace Unwatched: null
+Dormant: null
+```
+
+**What happens:**
+- Show added → Season 1 downloads + first episode of every other season
+- Plex displays all seasons so users see the full scope of the show
+- When someone starts watching → Get 1 brings the next episode
+- Always Have episodes never get deleted by Keep or Grace
+- No cleanup configured — show persists as a library placeholder
+
+---
+
+### One-at-a-Time with Pilot
+
+**Profile:** Minimal footprint, always keep a starting point
+
+```yaml
+Rule Name: one_at_a_time
+Always Have: s1e1
+GET: 1 episode
+KEEP: 1 episode
+Action: Search
+Keep Pilot: true
+Grace Watched: 14 days
+Dormant: 60 days
+```
+
+**What happens:**
+- Pilot is always protected (Always Have + Keep Pilot)
+- Watch E5 → E6 ready, E4 deleted
+- After 14 days inactive → Cleanup watched, pilot stays
+- After 60 days dormant → Everything deleted including pilot
 
 ---
 
@@ -1199,6 +1268,15 @@ A: No! Only set up webhooks for features you want:
 - Episode Selection only: Sonarr webhook
 - Viewing Automation: Sonarr + Tautulli/Jellyfin webhooks
 - Full automation: All webhooks
+
+**Q: What does Always Have do?**  
+A: It's an expression on a rule that defines episodes to always keep. When a show enters the rule, those episodes get downloaded immediately. Grace and Keep cleanup won't delete them. Only Dormant (which is intentionally nuclear) overrides it.
+
+**Q: Does Always Have apply when I move a show to a different rule?**  
+A: Yes. Whether it's a new show or a reassignment, the Always Have expression runs and ensures those episodes are monitored.
+
+**Q: Will Always Have re-download episodes I deleted manually?**  
+A: Not automatically. Always Have runs on rule assignment and protects during cleanup. It doesn't continuously scan for missing episodes.
 
 **Q: Can I use both Tautulli and Jellyfin?**  
 A: No need - choose one based on your media server (Plex = Tautulli, Jellyfin = Jellyfin webhook)

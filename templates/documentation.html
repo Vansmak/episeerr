@@ -444,6 +444,67 @@
                 </div>
             </div>
 
+            <div class="row mt-3">
+                <div class="col-12">
+                    <h5><i class="fas fa-anchor text-info me-2"></i>Always Have (Optional)</h5>
+                    <p>An expression that defines episodes to always keep downloaded and protected from cleanup. Think of it as the baseline state of a show — these episodes are always there regardless of what Get/Keep does.</p>
+                    <p>When a show is assigned to a rule with Always Have, those episodes get monitored and searched immediately. Cleanup (grace, keep) will never delete them. Dormant cleanup is the only exception — dormant is nuclear and ignores Always Have.</p>
+                    
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Expression</th>
+                                <th>What It Grabs</th>
+                                <th>Use Case</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>s1e1</code></td>
+                                <td>Just the pilot</td>
+                                <td>Placeholder in Plex</td>
+                            </tr>
+                            <tr>
+                                <td><code>s1</code></td>
+                                <td>All of season 1</td>
+                                <td>First season to try</td>
+                            </tr>
+                            <tr>
+                                <td><code>s1, s*e1</code></td>
+                                <td>Season 1 + first episode of every other season</td>
+                                <td>Plex shows all seasons exist without downloading everything</td>
+                            </tr>
+                            <tr>
+                                <td><code>s1-3</code></td>
+                                <td>Seasons 1 through 3</td>
+                                <td>First few seasons to start</td>
+                            </tr>
+                            <tr>
+                                <td><code>s1e1-5</code></td>
+                                <td>Season 1, episodes 1-5</td>
+                                <td>Try first handful of episodes</td>
+                            </tr>
+                            <tr>
+                                <td><code>all</code></td>
+                                <td>Everything</td>
+                                <td>Combined with Keep for full protection</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p><small class="text-muted">Combine with commas: <code>s1, s3e1-3, s*e1</code>. Leave blank to skip — Get/Keep will handle everything.</small></p>
+                </div>
+            </div>
+
+            <div class="alert alert-secondary mt-3">
+                <h6><i class="fas fa-puzzle-piece me-2"></i>How The Pieces Fit Together</h6>
+                <p class="mb-1"><strong>Always Have</strong> = what's always present on disk (the floor)</p>
+                <p class="mb-1"><strong>Get</strong> = what to download next when you watch (ongoing)</p>
+                <p class="mb-1"><strong>Keep</strong> = how many watched episodes to retain (immediate cleanup after watching)</p>
+                <p class="mb-1"><strong>Grace</strong> = time-based cleanup for inactive shows (days since last watch)</p>
+                <p class="mb-0"><strong>Dormant</strong> = nuclear cleanup for abandoned shows (ignores everything)</p>
+                <p class="mt-2 mb-0">They're all independent — use any combination. A show can have Always Have + Get + Grace with no Keep, or just Get with no cleanup at all.</p>
+            </div>
+
             <div class="alert alert-info mt-3">
                 <strong><i class="fas fa-lightbulb me-2"></i>Rule Examples:</strong>
                 <ul class="mb-0">
@@ -451,6 +512,7 @@
                     <li><strong>Get 3, Keep 0:</strong> Binge mode - get 3 ahead, delete after watching</li>
                     <li><strong>Get 1 season, Keep 1 season:</strong> Season-based - entire seasons at a time</li>
                     <li><strong>Get All, Keep All:</strong> Hoarder mode - download everything, keep forever</li>
+                    <li><strong>Always Have: s1, s*e1 + Get 1:</strong> Showcase — Plex shows all seasons, grab 1 at a time when watching</li>
                 </ul>
             </div>
         </div>
@@ -667,39 +729,45 @@
 
             <div class="card bg-light mt-3">
                 <div class="card-body">
-                    <h6><i class="fas fa-question-circle me-2"></i>Grace vs Keep vs Dormant</h6>
+                    <h6><i class="fas fa-question-circle me-2"></i>Grace vs Keep vs Dormant vs Always Have</h6>
                     <table class="table table-sm table-bordered mb-0">
                         <thead>
                             <tr>
                                 <th>Setting</th>
                                 <th>When It Acts</th>
-                                <th>What It Deletes</th>
+                                <th>What It Does</th>
                                 <th>Preserves Position?</th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr>
+                                <td><strong>Always Have</strong></td>
+                                <td>On rule assignment + during cleanup</td>
+                                <td>Downloads matching episodes, protects from deletion</td>
+                                <td>N/A (these never leave)</td>
+                            </tr>
+                            <tr>
                                 <td><strong>Keep</strong></td>
                                 <td>Immediately after watching</td>
-                                <td>Based on Keep rule (real-time)</td>
+                                <td>Deletes beyond Keep window (real-time)</td>
                                 <td>Yes (last_season/episode)</td>
                             </tr>
                             <tr>
                                 <td><strong>Grace Watched</strong></td>
                                 <td>After X days of inactivity</td>
-                                <td>Watched episodes except last one</td>
+                                <td>Deletes watched episodes except last one</td>
                                 <td>Yes (keeps 1 watched bookmark)</td>
                             </tr>
                             <tr>
                                 <td><strong>Grace Unwatched</strong></td>
                                 <td>After X days of inactivity</td>
-                                <td>Unwatched episodes except first one</td>
+                                <td>Deletes unwatched episodes except first one</td>
                                 <td>Yes (keeps 1 unwatched bookmark)</td>
                             </tr>
                             <tr>
                                 <td><strong>Dormant</strong></td>
                                 <td>After X days of inactivity</td>
-                                <td>Everything (nuclear option)</td>
+                                <td>Deletes EVERYTHING (nuclear, ignores Always Have)</td>
                                 <td>No (complete removal)</td>
                             </tr>
                         </tbody>

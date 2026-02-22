@@ -107,6 +107,14 @@
                             </div>
 
                             <div class="mb-3">
+                                <label for="always_have" class="form-label"><i class="fas fa-lock text-success me-1"></i>Always Have</label>
+                                <input type="text" class="form-control" id="always_have" name="always_have"
+                                       value="{{ rule.always_have or '' }}"
+                                       placeholder="e.g. s1, s*e1, s1e1, s1-3, all">
+                                <div class="form-text">Episodes to always keep and never delete. Examples: <code>s1</code> (all of season 1), <code>s*e1</code> (first ep of every season), <code>s1e1</code> (pilot only), <code>s1-3</code> (seasons 1–3), <code>all</code></div>
+                            </div>
+
+                            <div class="mb-3">
                                 <div class="form-check">
                                     <input class="form-check-input" type="checkbox" id="set_as_default" name="set_as_default"
                                            {% if rule_name == config.get('default_rule') %}checked{% endif %}>

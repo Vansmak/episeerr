@@ -1990,6 +1990,7 @@ def create_rule():
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
+            'always_have': request.form.get('always_have', '').strip(),
             'series': {},
             'dry_run': False
         }
@@ -2060,7 +2061,8 @@ def edit_rule(rule_name):
             'grace_unwatched': grace_unwatched,
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
-            'keep_pilot': 'keep_pilot' in request.form
+            'keep_pilot': 'keep_pilot' in request.form,
+            'always_have': request.form.get('always_have', '').strip()
         })
         
         # Handle default rule setting
@@ -2239,11 +2241,20 @@ def assign_rules():
             target_series_dict[series_id] = {'activity_date': None}  # New series
     
     save_config(config)
-    
+
+    # Process always_have for newly assigned series (additive only - never unmonitors)
+    rule_always_have = config['rules'][rule_name].get('always_have', '')
+    if rule_always_have:
+        for sid in series_ids:
+            try:
+                media_processor.process_always_have(int(sid), rule_always_have)
+            except Exception as e:
+                app.logger.error(f"always_have processing failed for series {sid}: {e}")
+
     # NEW STEP 4: Sync tags to Sonarr
     tag_sync_success = 0
     tag_sync_failed = 0
-    
+
     for series_id in series_ids:
         try:
             success = episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
@@ -3308,7 +3319,77 @@ def apply_rule_to_selection():
         target_rule.setdefault('series', {})
         target_rule['series'][series_id_str] = {'activity_date': None}
         save_config(config)
-        
+
+        _rule_cfg = config['rules'][rule_name]
+        _always_have = _rule_cfg.get('always_have', '')
+        _request_source = request_data.get('source', '')
+        _rule_headers = {'X-Api-Key': SONARR_API_KEY}
+
+        # always_have: monitor matching episodes (additive, never unmonitors)
+        if _always_have:
+            try:
+                media_processor.process_always_have(series_id, _always_have)
+            except Exception as e:
+                app.logger.error(f"always_have processing failed for series {series_id}: {e}")
+
+        # For new shows (not a series_page reassignment) also run get_type/get_count monitoring
+        if _request_source != 'series_page':
+            try:
+                _get_type = _rule_cfg.get('get_type', 'episodes')
+                _get_count = _rule_cfg.get('get_count', 1)
+                _action_option = _rule_cfg.get('action_option', 'monitor')
+
+                _eps_resp = requests.get(
+                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                    headers=_rule_headers
+                )
+                if _eps_resp.ok:
+                    _all_eps = _eps_resp.json()
+                    _starting_season = 1
+                    _season_eps = sorted(
+                        [ep for ep in _all_eps if ep.get('seasonNumber') == _starting_season],
+                        key=lambda x: x.get('episodeNumber', 0)
+                    )
+
+                    _to_monitor = []
+                    if _get_type == 'all':
+                        _to_monitor = [ep['id'] for ep in _all_eps if ep.get('seasonNumber', 0) >= _starting_season]
+                    elif _get_type == 'seasons':
+                        _n = _get_count or 1
+                        _to_monitor = [
+                            ep['id'] for ep in _all_eps
+                            if _starting_season <= ep.get('seasonNumber', 0) < (_starting_season + _n)
+                        ]
+                    else:  # episodes
+                        _n = _get_count or 1
+                        _to_monitor = [ep['id'] for ep in _season_eps[:_n]]
+
+                    if _to_monitor:
+                        _mon_resp = requests.put(
+                            f"{SONARR_URL}/api/v3/episode/monitor",
+                            headers=_rule_headers,
+                            json={"episodeIds": _to_monitor, "monitored": True}
+                        )
+                        if _mon_resp.ok:
+                            app.logger.info(
+                                f"Monitored {len(_to_monitor)} episodes (get_type={_get_type}) "
+                                f"for series {series_id}"
+                            )
+                            if _action_option == 'search':
+                                _srch_resp = requests.post(
+                                    f"{SONARR_URL}/api/v3/command",
+                                    headers=_rule_headers,
+                                    json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
+                                )
+                                if _srch_resp.ok:
+                                    app.logger.info(f"Triggered episode search for series {series_id}")
+                                else:
+                                    app.logger.error(f"Episode search failed: {_srch_resp.text}")
+                        else:
+                            app.logger.error(f"Failed to monitor episodes: {_mon_resp.text}")
+            except Exception as e:
+                app.logger.error(f"get_type monitoring failed for series {series_id}: {e}")
+
         # Sync the rule tag to Sonarr
         try:
             episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
@@ -4036,7 +4117,15 @@ def process_sonarr_webhook():
             get_type = rule_config.get('get_type', 'episodes')
             get_count = rule_config.get('get_count', 1)
             action_option = rule_config.get('action_option', 'monitor')
-            
+
+            # Process always_have FIRST (additive on top of get_type, runs after unmonitor)
+            always_have = rule_config.get('always_have', '')
+            if always_have:
+                try:
+                    media_processor.process_always_have(series_id, always_have)
+                except Exception as e:
+                    app.logger.error(f"always_have processing failed for series {series_id}: {e}")
+
             app.logger.info(f"Executing rule '{assigned_rule}' with get_type '{get_type}', get_count '{get_count}' starting from Season {starting_season}")
             
             # Get all episodes for the series

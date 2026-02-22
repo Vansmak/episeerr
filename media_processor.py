@@ -1700,51 +1700,212 @@ def is_dry_run_enabled(rule_name=None):
     # Check rule-specific setting (you'll need to implement this based on your setup)
     # For now, return False
     return False
-def is_anchor_episode(episode, series_id=None):
+def is_protected_by_expression(season_num, episode_num, expression, total_seasons=None):
+    """
+    Check if a season/episode matches an always_have expression.
+
+    Syntax (comma-separated for multiple):
+      all        - every episode
+      s1         - all episodes of season 1
+      s1e1       - season 1 episode 1 only
+      s1e1-5     - season 1 episodes 1 through 5
+      s1-3       - all episodes of seasons 1 through 3
+      s*e1       - episode 1 of every season (wildcard expands with total_seasons)
+    """
+    if not expression:
+        return False
+
+    expression = expression.strip().lower()
+    if not expression:
+        return False
+
+    for part in expression.split(','):
+        part = part.strip()
+        if not part:
+            continue
+
+        if part == 'all':
+            return True
+
+        if not part.startswith('s'):
+            continue
+
+        # Wildcard season: s*eN
+        if part.startswith('s*'):
+            remainder = part[2:]
+            if remainder.startswith('e'):
+                try:
+                    if episode_num == int(remainder[1:]):
+                        return True
+                except ValueError:
+                    pass
+            continue
+
+        rest = part[1:]  # strip leading 's'
+
+        if 'e' in rest:
+            # s<season>e<ep> or s<season>e<ep_start>-<ep_end>
+            e_idx = rest.index('e')
+            try:
+                target_season = int(rest[:e_idx])
+            except ValueError:
+                continue
+            if season_num != target_season:
+                continue
+            ep_part = rest[e_idx + 1:]
+            if '-' in ep_part:
+                bounds = ep_part.split('-', 1)
+                try:
+                    if int(bounds[0]) <= episode_num <= int(bounds[1]):
+                        return True
+                except ValueError:
+                    pass
+            else:
+                try:
+                    if episode_num == int(ep_part):
+                        return True
+                except ValueError:
+                    pass
+        elif '-' in rest:
+            # s<start>-<end>: season range, all episodes
+            bounds = rest.split('-', 1)
+            try:
+                if int(bounds[0]) <= season_num <= int(bounds[1]):
+                    return True
+            except ValueError:
+                pass
+        else:
+            # s<N>: entire season
+            try:
+                if season_num == int(rest):
+                    return True
+            except ValueError:
+                pass
+
+    return False
+
+
+def process_always_have(series_id, expression):
+    """
+    Monitor any episodes matching the always_have expression and trigger a search.
+    Only ever adds monitoring - never unmonitors or deletes anything.
+
+    Args:
+        series_id: Sonarr series ID (int)
+        expression: always_have expression string (e.g. 's1', 's*e1', 'all')
+    """
+    if not expression or not expression.strip():
+        return
+
+    headers = {'X-Api-Key': SONARR_API_KEY}
+
+    try:
+        resp = requests.get(
+            f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+            headers=headers
+        )
+        if not resp.ok:
+            logger.error(f"process_always_have: failed to get episodes for series {series_id}: {resp.text}")
+            return
+
+        all_episodes = resp.json()
+
+        # Collect unmonitored episodes that match the expression
+        to_monitor = []
+        for ep in all_episodes:
+            season = ep.get('seasonNumber', 0)
+            ep_num = ep.get('episodeNumber', 0)
+            if season == 0:
+                continue  # skip specials
+            if is_protected_by_expression(season, ep_num, expression):
+                if not ep.get('monitored', False):
+                    to_monitor.append(ep['id'])
+
+        if not to_monitor:
+            logger.info(
+                f"process_always_have: no unmonitored matches for series {series_id} "
+                f"with expression '{expression}'"
+            )
+            return
+
+        # Monitor matching episodes
+        monitor_resp = requests.put(
+            f"{SONARR_URL}/api/v3/episode/monitor",
+            headers=headers,
+            json={"episodeIds": to_monitor, "monitored": True}
+        )
+        if not monitor_resp.ok:
+            logger.error(
+                f"process_always_have: failed to monitor episodes for series {series_id}: "
+                f"{monitor_resp.text}"
+            )
+            return
+
+        logger.info(
+            f"process_always_have: monitored {len(to_monitor)} episodes for series {series_id} "
+            f"(always_have: '{expression}')"
+        )
+
+        # Trigger search for the newly monitored episodes
+        search_resp = requests.post(
+            f"{SONARR_URL}/api/v3/command",
+            headers=headers,
+            json={"name": "EpisodeSearch", "episodeIds": to_monitor}
+        )
+        if search_resp.ok:
+            logger.info(f"process_always_have: triggered search for {len(to_monitor)} episodes")
+        else:
+            logger.error(f"process_always_have: search trigger failed: {search_resp.text}")
+
+    except Exception as e:
+        logger.error(f"process_always_have: error for series {series_id}: {e}", exc_info=True)
+
+
+def is_anchor_episode(episode, series_id=None, check_always_have=True):
     """
     Check if an episode is an "anchor" that should never be deleted.
-    
+
     Anchor episodes are protected from ALL cleanup operations:
     - Grace period cleanup (watched/unwatched)
     - Keep rule cleanup (seasons/episodes)
-    - Dormant cleanup
     - Manual unmonitor operations
-    
+
+    NOTE: pass check_always_have=False from dormant cleanup - dormant is
+    intentionally nuclear and should not respect always_have expressions.
+
     Currently anchored:
     - S01E01 (pilot episode) - IF rule-level 'keep_pilot' is enabled
-    
+    - Any episode matching the rule's 'always_have' expression
+
     Args:
         episode: Episode dict with 'seasonNumber' and 'episodeNumber'
         series_id: Optional series ID to check rule-based protection
-    
+        check_always_have: Whether to evaluate the always_have expression (default True)
+
     Returns:
         bool: True if episode should be protected from deletion
     """
     season = episode.get('seasonNumber')
     episode_num = episode.get('episodeNumber')
-    
-    # Check if this is the pilot episode
+
     is_pilot = (season == 1 and episode_num == 1)
-    
-    if not is_pilot:
-        return False
-    
-    
-    
-    # PRIORITY 1: Check rule-based pilot protection
+
     if series_id is not None:
         from episeerr import load_config, get_rule_for_series
         config = load_config()
         rule = get_rule_for_series(series_id, config)
-        
-        if rule and rule.get('keep_pilot', False):
-            return True
-    
-    # Future: Could add more anchor types here
-    # - Series finales
-    # - User-bookmarked episodes
-    # - Episodes with specific tags
-    
+
+        if rule:
+            # keep_pilot: protect S01E01
+            if is_pilot and rule.get('keep_pilot', False):
+                return True
+
+            # always_have expression (skipped for dormant cleanup)
+            if check_always_have:
+                always_have = rule.get('always_have', '')
+                if always_have and is_protected_by_expression(season, episode_num, always_have):
+                    return True
+
     return False
 
 
@@ -2296,8 +2457,8 @@ def run_dormant_cleanup():
                     days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
                     if days_since_activity > dormant_days:
                         all_episodes = fetch_all_episodes(series_id)
-                        # Filter out anchor episodes (S01E01) even from dormant cleanup
-                        deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and 'episodeFileId' in ep and not is_anchor_episode(ep, series_id)]
+                        # Dormant cleanup is nuclear: respect keep_pilot but NOT always_have
+                        deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and 'episodeFileId' in ep and not is_anchor_episode(ep, series_id, check_always_have=False)]
                         episode_file_ids = [ep['episodeFileId'] for ep in deletable_episodes]
                         
                         if episode_file_ids:
