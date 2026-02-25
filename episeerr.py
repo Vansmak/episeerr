@@ -1,4 +1,4 @@
-__version__ = "3.3.1"
+__version__ = "3.3.5"
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import subprocess
 import os
@@ -1108,6 +1108,7 @@ class OCDarrScheduler:
         self.cleanup_thread = None
         self.running = False
         self.last_cleanup = 0
+        self.last_aired_check = 0
         self.update_interval_from_settings()
     
     def update_interval_from_settings(self):
@@ -1141,7 +1142,16 @@ class OCDarrScheduler:
                     print("⏰ Starting scheduled global storage gate cleanup...")
                     self._run_cleanup()
                     self.last_cleanup = current_time
-                    
+
+                # Daily aired-but-not-downloaded notification check
+                hours_since_aired = (current_time - self.last_aired_check) / 3600
+                if hours_since_aired >= 24:
+                    try:
+                        check_aired_not_downloaded()
+                    except Exception as aired_err:
+                        print(f"Aired not downloaded check error: {aired_err}")
+                    self.last_aired_check = current_time
+
                 time.sleep(600)  # Check every 10 minutes
             except Exception as e:
                 print(f"Scheduler error: {str(e)}")
@@ -1366,40 +1376,6 @@ def api_series_data_enhanced():
             'success': False,
             'error': str(e),
             'series': []
-        }), 500
-
-
-# Optional: Endpoint to set default rule
-@app.route('/api/set-default-rule', methods=['POST'])
-def api_set_default_rule():
-    """Set a rule as the default"""
-    try:
-        data = request.get_json()
-        rule_name = data.get('rule_name')
-        
-        if not rule_name:
-            return jsonify({'success': False, 'error': 'Rule name required'}), 400
-        
-        config_data = load_config()
-        
-        # Verify rule exists
-        if rule_name not in config_data.get('rules', {}):
-            return jsonify({'success': False, 'error': 'Rule not found'}), 404
-        
-        # Update default rule
-        config_data['default_rule'] = rule_name
-        save_config(config_data)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Default rule set to {rule_name}',
-            'default_rule': rule_name
-        })
-    
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e)
         }), 500
 
 
@@ -1830,6 +1806,7 @@ def get_notification_config():
             'NOTIFICATIONS_ENABLED': settings.get('notifications_enabled', False),
             'DISCORD_WEBHOOK_URL': settings.get('discord_webhook_url', ''),
             'EPISEERR_URL': settings.get('episeerr_url', 'http://localhost:5002'),
+            'NOTIFY_AIRED_NOT_DOWNLOADED': settings.get('notify_aired_not_downloaded', False),
         }
     except Exception as e:
         app.logger.warning(f"Could not load notification config: {e}")
@@ -1837,7 +1814,86 @@ def get_notification_config():
             'NOTIFICATIONS_ENABLED': False,
             'DISCORD_WEBHOOK_URL': '',
             'EPISEERR_URL': 'http://localhost:5002',
+            'NOTIFY_AIRED_NOT_DOWNLOADED': False,
         }
+
+def check_aired_not_downloaded():
+    """Query Sonarr calendar for the past 48 hours and notify about aired-but-not-downloaded episodes.
+
+    Skips series with Sonarr status 'ended'. Only notifies once per episode
+    (tracked in /data/aired_notifications.json). Entries are auto-cleaned after 30 days.
+    """
+    import media_processor
+    from notification_storage import (
+        aired_notification_exists, store_aired_notification,
+        cleanup_old_aired_notifications
+    )
+
+    global_settings = media_processor.load_global_settings()
+    if not global_settings.get('notify_aired_not_downloaded', False):
+        app.logger.debug("Aired not downloaded notifications disabled, skipping check")
+        return
+
+    if not global_settings.get('notifications_enabled', False):
+        app.logger.debug("Notifications disabled globally, skipping aired check")
+        return
+
+    prefs = sonarr_utils.load_preferences()
+    sonarr_url = prefs.get('SONARR_URL', '')
+    api_key = prefs.get('SONARR_API_KEY', '')
+
+    if not sonarr_url or not api_key:
+        app.logger.warning("Sonarr not configured, skipping aired-not-downloaded check")
+        return
+
+    headers = {'X-Api-Key': api_key, 'Content-Type': 'application/json'}
+
+    now = datetime.utcnow()
+    start = (now - timedelta(hours=48)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    end = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+
+    try:
+        response = requests.get(
+            f"{sonarr_url}/api/v3/calendar",
+            headers=headers,
+            params={'start': start, 'end': end, 'unmonitored': 'false'},
+            timeout=30
+        )
+        response.raise_for_status()
+        episodes = response.json()
+    except Exception as e:
+        app.logger.error(f"Failed to fetch Sonarr calendar for aired check: {e}")
+        return
+
+    new_episodes = []
+    for ep in episodes:
+        if ep.get('hasFile', True):
+            continue
+        series_status = ep.get('series', {}).get('status', '').lower()
+        if series_status == 'ended':
+            continue
+        episode_id = ep.get('id')
+        if not episode_id:
+            continue
+        if aired_notification_exists(episode_id):
+            continue
+        new_episodes.append(ep)
+
+    if not new_episodes:
+        app.logger.debug("No new aired-but-not-downloaded episodes to notify about")
+        return
+
+    app.logger.info(f"Found {len(new_episodes)} aired-but-not-downloaded episode(s), sending notification")
+
+    try:
+        from notifications import send_notification
+        send_notification('aired_not_downloaded', episodes=new_episodes)
+        for ep in new_episodes:
+            store_aired_notification(ep['id'])
+        cleanup_old_aired_notifications()
+    except Exception as e:
+        app.logger.error(f"Failed to send aired-not-downloaded notification: {e}")
+
 
 def get_sonarr_series():
     """Get series list from Sonarr, excluding series with 'watched' tag."""
@@ -2296,11 +2352,6 @@ def sonarr_series_url(series):
         # If it's just an ID passed directly
         return f"{SONARR_URL}/series/{series}"
 
-# Alternative: If you prefer a simple ID-based approach
-@app.template_filter('sonarr_url_simple')
-def sonarr_series_url_simple(series_id):
-    """Generate Sonarr series URL from series ID."""
-    return f"{SONARR_URL}/series/{series_id}"
 @app.route('/delete-rule/<rule_name>', methods=['POST'])
 
 
@@ -2353,20 +2404,6 @@ def inject_service_urls():
             }
     
     return {'services': services}
-
-@app.route('/set-default-rule', methods=['POST'])
-def set_default_rule():
-    """Set the default rule."""
-    config = load_config()
-    rule_name = request.form.get('rule_name')
-    if rule_name not in config['rules']:
-        return redirect(url_for('index', message="Invalid rule selected"))
-    config['default_rule'] = rule_name
-    save_config(config)
-    referer = request.referrer or ''
-    if '/rules' in referer:
-        return redirect(url_for('rules_page'))
-    return redirect(url_for('index', message=f"Set '{rule_name}' as default rule"))
 
 # UPDATE unassign_series() function
 
@@ -2786,21 +2823,23 @@ def update_global_settings():
         notifications_enabled = data.get('notifications_enabled', False)
         discord_webhook_url = data.get('discord_webhook_url', '')
         episeerr_url = data.get('episeerr_url', 'http://localhost:5002')
-        
+        notify_aired_not_downloaded = data.get('notify_aired_not_downloaded', False)
+
         # Validate inputs
         if storage_min_gb is not None:
             storage_min_gb = int(storage_min_gb) if storage_min_gb else None
-        
+
         settings = {
             'global_storage_min_gb': storage_min_gb,
             'cleanup_interval_hours': int(cleanup_interval_hours),
             'dry_run_mode': bool(dry_run_mode),
             'auto_assign_new_series': bool(auto_assign_new_series),
-            
+
             # NEW: Save notification settings
             'notifications_enabled': bool(notifications_enabled),
             'discord_webhook_url': str(discord_webhook_url),
             'episeerr_url': str(episeerr_url),
+            'notify_aired_not_downloaded': bool(notify_aired_not_downloaded),
         }
         
         media_processor.save_global_settings(settings)
@@ -4874,38 +4913,6 @@ def jellyfin_polling_status():
 # DEBUG & TEST ROUTES (Simplified)
 # ============================================================================
 
-@app.route('/debug-series/<int:series_id>')
-def debug_series(series_id):
-    """Debug series information."""
-    try:
-        from media_processor import get_activity_date_with_hierarchy, load_config
-        config = load_config()
-        rule = None
-        rule_name = None
-        for r_name, r_details in config['rules'].items():
-            if str(series_id) in r_details.get('series', {}):
-                rule = r_details
-                rule_name = r_name
-                break
-        if not rule:
-            return jsonify({"error": f"Series {series_id} not found in any rule"})
-        
-        # Get series data from config
-        series_data = rule.get('series', {}).get(str(series_id), {})
-        activity_date = get_activity_date_with_hierarchy(series_id)
-        
-        return jsonify({
-            "series_id": series_id,
-            "rule_name": rule_name,
-            "rule_config": rule,
-            "series_data": series_data,
-            "activity_date": activity_date,
-            "current_time": int(time.time()),
-            "days_since_activity": (int(time.time()) - activity_date) / (24*60*60) if activity_date else "No activity date"
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route('/api/test-cleanup/<int:series_id>')
 def test_cleanup(series_id):
     """Test cleanup for a specific series."""
@@ -4945,39 +4952,6 @@ def test_cleanup(series_id):
                 "rule": rule_name,
                 "reason": reason
             })
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
-
-@app.route('/add-test-activity/<int:series_id>', methods=['POST'])
-def add_test_activity(series_id):
-    """Add test activity data for debugging."""
-    try:
-        days_ago = int(request.form.get('days_ago', 16))
-        season = int(request.form.get('season', 1))
-        episode = int(request.form.get('episode', 1))
-        current_time = int(time.time())
-        watch_time = current_time - (days_ago * 24 * 60 * 60)
-        
-        # Update config.json directly
-        config = load_config()
-        for rule_name, rule_details in config['rules'].items():
-            series_dict = rule_details.get('series', {})
-            if str(series_id) in series_dict:
-                series_dict[str(series_id)] = {
-                    'activity_date': watch_time,
-                    'last_season': season,
-                    'last_episode': episode
-                }
-                break
-        
-        save_config(config)
-        
-        return jsonify({
-            "status": "success",
-            "message": f"Added activity for series {series_id}: watched S{season}E{episode} {days_ago} days ago",
-            "watch_timestamp": watch_time,
-            "days_ago": days_ago
-        })
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
 

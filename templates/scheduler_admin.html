@@ -108,6 +108,12 @@
                                         <strong>Enable Discord Notifications</strong>
                                     </label>
                                 </div>
+                                <div class="form-check form-switch mb-3">
+                                    <input class="form-check-input" type="checkbox" id="notify_aired_not_downloaded" name="notify_aired_not_downloaded">
+                                    <label class="form-check-label" for="notify_aired_not_downloaded">
+                                        Notify on aired episodes not downloaded
+                                    </label>
+                                </div>
                             </div>
                             <div class="col-md-4">
                                 <div class="mb-3">
@@ -126,7 +132,7 @@
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="row mb-4">
                             <div class="col-md-12">
                                 <div class="alert alert-info">
@@ -135,7 +141,8 @@
                                         • ⚠️ Episodes not found after search<br>
                                         • 📋 Pending episode selection requests<br>
                                         • ⚠️ Tagged requests with no episodes grabbed<br>
-                                        • ❌ Critical errors
+                                        • ❌ Critical errors<br>
+                                        • 📺 Aired episodes not downloaded (continuing series only)
                                     </small>
                                 </div>
                             </div>
@@ -307,12 +314,14 @@ async function loadGlobalSettings() {
            
             
             // Notification fields
-            document.getElementById('notifications_enabled').checked = 
+            document.getElementById('notifications_enabled').checked =
                 globalSettings.notifications_enabled || false;
-            document.getElementById('discord_webhook_url').value = 
+            document.getElementById('discord_webhook_url').value =
                 globalSettings.discord_webhook_url || '';
-            document.getElementById('episeerr_url').value = 
+            document.getElementById('episeerr_url').value =
                 globalSettings.episeerr_url || 'http://localhost:5002';
+            document.getElementById('notify_aired_not_downloaded').checked =
+                globalSettings.notify_aired_not_downloaded || false;
                 
             // Update storage status if we have disk info
             if (data.disk_info) {
@@ -339,7 +348,8 @@ async function saveGlobalSettings(event) {
         
         notifications_enabled: formData.has('notifications_enabled'),
         discord_webhook_url: formData.get('discord_webhook_url') || '',
-        episeerr_url: formData.get('episeerr_url') || 'http://localhost:5002'
+        episeerr_url: formData.get('episeerr_url') || 'http://localhost:5002',
+        notify_aired_not_downloaded: formData.has('notify_aired_not_downloaded')
     };
     
     try {

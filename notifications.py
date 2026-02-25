@@ -5,6 +5,7 @@ Handles Discord notifications for pending searches and selection requests
 
 import requests
 import logging
+from sonarr_utils import get_episode
 from datetime import datetime
 
 from logging_config import main_logger as logger
@@ -63,7 +64,12 @@ def send_notification(notification_type, **data):
                 series=data['series'],
                 series_id=data.get('series_id')
             )
-        
+
+        elif notification_type == "aired_not_downloaded":
+            message = build_aired_not_downloaded_message(
+                episodes=data['episodes']
+            )
+
         else:
             logger.warning(f"Unknown notification type: {notification_type}")
             return None
@@ -161,6 +167,92 @@ def build_selection_pending_message(series, series_id=None):
             "color": 3447003,  # Blue
             "fields": fields,
             "timestamp": datetime.utcnow().isoformat()
+        }]
+    }
+
+
+def build_aired_not_downloaded_message(episodes):
+    """Build a single batched Discord embed for all aired-but-not-downloaded episodes."""
+    from sonarr_utils import get_episode   # add this import at top of file if not already there
+
+    by_series = {}
+    
+    for ep in episodes:
+        # Try different possible locations for series title
+        series_title = (
+            ep.get('seriesTitle') or
+            ep.get('series', {}).get('title') or
+            'Unknown Series'
+        )
+        
+        # If still unknown → fetch full episode from Sonarr (most reliable fix)
+        if series_title == 'Unknown Series' and 'id' in ep:
+            full_ep = get_episode(ep['id'])
+            if full_ep and 'series' in full_ep:
+                series_title = full_ep['series'].get('title', 'Unknown Series (fetched)')
+        
+        by_series.setdefault(series_title, []).append(ep)
+
+    fields = []
+    for series_title in sorted(by_series):
+        lines = []
+        for ep in sorted(by_series[series_title], key=lambda e: (e.get('seasonNumber', 0), e.get('episodeNumber', 0))):
+            season = ep.get('seasonNumber', 0)
+            episode = ep.get('episodeNumber', 0)
+            ep_title = ep.get('title') or 'Unknown'
+            
+            air_date_raw = ep.get('airDate') or ep.get('airDateUtc', '')
+            try:
+                if 'T' in air_date_raw:
+                    dt = datetime.fromisoformat(air_date_raw.replace('Z', '+00:00'))
+                    air_date_str = dt.strftime('%b %d, %Y')
+                else:
+                    air_date_str = air_date_raw
+            except Exception:
+                air_date_str = air_date_raw or 'Unknown'
+                
+            lines.append(f"S{season:02d}E{episode:02d} — {ep_title} *(aired {air_date_str})*")
+        
+        field_value = '\n'.join(lines)
+        if len(field_value) > 1020:
+            field_value = field_value[:1020] + '…'
+            
+        fields.append({
+            'name': series_title,
+            'value': field_value,
+            'inline': False
+        })
+
+    # Discord allows max 25 fields per embed
+    if len(fields) > 25:
+        truncated = len(fields) - 24
+        fields = fields[:24]
+        fields.append({
+            'name': f'… and {truncated} more series',
+            'value': 'Check Sonarr for the full list.',
+            'inline': False
+        })
+
+    if EPISEERR_URL:
+        fields.append({
+            'name': '🔗 Manage',
+            'value': f'[Open Episeerr]({EPISEERR_URL}/episeerr)',
+            'inline': False
+        })
+
+    total = sum(len(v) for v in by_series.values())
+    description = (
+        f"**{total}** episode{'s' if total != 1 else ''} have aired but not yet been downloaded.\n"
+        "Sonarr may still be searching — this is a heads-up for continuing series."
+    )
+
+    return {
+        'embeds': [{
+            'title': '📺 Aired but Not Downloaded',
+            'description': description,
+            'color': 15105570,  # Orange — warning
+            'fields': fields,
+            'timestamp': datetime.utcnow().isoformat()
         }]
     }
 

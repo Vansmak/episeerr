@@ -131,6 +131,170 @@
     --poster-bg: #f8fafc;
 }
 
+/* Minty Fresh Theme */
+[data-theme="minty-fresh"] {
+    --sidebar-bg: #f0fdf7;
+    --sidebar-header-bg: #d1fae5;
+    --main-bg: #f0fdfa;
+    --topbar-bg: #f0fdf7;
+    --card-bg: #ffffff;
+    --border-color: #86efac;
+
+    --nav-text: #047857;
+    --nav-hover-bg: #d1fae5;
+    --nav-hover-text: #064e3b;
+    --nav-active-bg: #a7f3d0;
+    --nav-active-text: #059669;
+
+    --submenu-bg: #ecfdf5;
+
+    --text-primary: #064e3b;
+    --text-muted: #047857;
+
+    --brand-color: #10b981;
+    --primary-color: #10b981;
+    --success-bg: #059669;
+    --danger-bg: #ef4444;
+    --danger-color: #dc2626;
+    --warning-bg: #f59e0b;
+    --warning-color: #d97706;
+    --warning-text: #000;
+
+    --badge-bg: #d1fae5;
+    --badge-text: #065f46;
+
+    --btn-bg: #d1fae5;
+    --btn-text: #065f46;
+    --btn-hover-bg: #a7f3d0;
+    --btn-hover-text: #064e3b;
+
+    --poster-bg: #ecfdf5;
+    --secondary-bg: #6ee7b7;
+}
+
+/* Solar Flare Theme */
+[data-theme="solar-flare"] {
+    --sidebar-bg: #fffbeb;
+    --sidebar-header-bg: #fef3c7;
+    --main-bg: #fffbeb;
+    --topbar-bg: #fffbeb;
+    --card-bg: #ffffff;
+    --border-color: #fcd34d;
+
+    --nav-text: #92400e;
+    --nav-hover-bg: #fef3c7;
+    --nav-hover-text: #78350f;
+    --nav-active-bg: #fde68a;
+    --nav-active-text: #b45309;
+
+    --submenu-bg: #fef9e7;
+
+    --text-primary: #78350f;
+    --text-muted: #92400e;
+
+    --brand-color: #d97706;
+    --primary-color: #d97706;
+    --success-bg: #16a34a;
+    --danger-bg: #ef4444;
+    --danger-color: #dc2626;
+    --warning-bg: #f59e0b;
+    --warning-color: #b45309;
+    --warning-text: #000;
+
+    --badge-bg: #fef3c7;
+    --badge-text: #92400e;
+
+    --btn-bg: #fef3c7;
+    --btn-text: #92400e;
+    --btn-hover-bg: #fde68a;
+    --btn-hover-text: #78350f;
+
+    --poster-bg: #fffbeb;
+    --secondary-bg: #fbbf24;
+}
+
+/* Cyber Neon Theme */
+[data-theme="cyber-neon"] {
+    --sidebar-bg: #0a0a1a;
+    --sidebar-header-bg: #050510;
+    --main-bg: #000000;
+    --topbar-bg: #0a0a1a;
+    --card-bg: #12122a;
+    --border-color: #2d1b4e;
+
+    --nav-text: #8b8baf;
+    --nav-hover-bg: #1a1a3a;
+    --nav-hover-text: #e0e0ff;
+    --nav-active-bg: #2d1b4e;
+    --nav-active-text: #e040e0;
+
+    --submenu-bg: #050510;
+
+    --text-primary: #e8e8ff;
+    --text-muted: #8b8baf;
+
+    --brand-color: #e040e0;
+    --primary-color: #e040e0;
+    --success-bg: #39ff14;
+    --danger-bg: #ff2d55;
+    --danger-color: #ff2d55;
+    --warning-bg: #ffff00;
+    --warning-color: #ffff00;
+    --warning-text: #000;
+
+    --badge-bg: #1a1a3a;
+    --badge-text: #c0c0e0;
+
+    --btn-bg: #1a1a3a;
+    --btn-text: #c0c0e0;
+    --btn-hover-bg: #2d1b4e;
+    --btn-hover-text: #fff;
+
+    --poster-bg: #050510;
+    --secondary-bg: #6b21a8;
+}
+
+/* Arctic Chill Theme */
+[data-theme="arctic-chill"] {
+    --sidebar-bg: #eff6ff;
+    --sidebar-header-bg: #dbeafe;
+    --main-bg: #f0f9ff;
+    --topbar-bg: #eff6ff;
+    --card-bg: #ffffff;
+    --border-color: #93c5fd;
+
+    --nav-text: #1e40af;
+    --nav-hover-bg: #dbeafe;
+    --nav-hover-text: #1e3a8a;
+    --nav-active-bg: #bfdbfe;
+    --nav-active-text: #2563eb;
+
+    --submenu-bg: #f0f9ff;
+
+    --text-primary: #1e3a8a;
+    --text-muted: #1e40af;
+
+    --brand-color: #2563eb;
+    --primary-color: #2563eb;
+    --success-bg: #22c55e;
+    --danger-bg: #ef4444;
+    --danger-color: #dc2626;
+    --warning-bg: #f59e0b;
+    --warning-color: #d97706;
+    --warning-text: #000;
+
+    --badge-bg: #dbeafe;
+    --badge-text: #1e40af;
+
+    --btn-bg: #dbeafe;
+    --btn-text: #1e40af;
+    --btn-hover-bg: #bfdbfe;
+    --btn-hover-text: #1e3a8a;
+
+    --poster-bg: #eff6ff;
+    --secondary-bg: #60a5fa;
+}
+
 /* ============================================
    Scrollbar Styling
    ============================================ */
@@ -535,10 +699,42 @@ a:hover {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
+[data-theme="minty-fresh"] .series-grid-card {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="solar-flare"] .series-grid-card {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+[data-theme="arctic-chill"] .series-grid-card {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="cyber-neon"] .series-grid-card {
+    box-shadow: 0 2px 12px rgba(224, 64, 224, 0.15);
+}
+
 .series-grid-card:hover {
     box-shadow: 0 8px 24px rgba(99, 102, 241, 0.2);
 }
 
 [data-theme="light-breeze"] .series-grid-card:hover {
     box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+}
+
+[data-theme="minty-fresh"] .series-grid-card:hover {
+    box-shadow: 0 8px 24px rgba(16, 185, 129, 0.2);
+}
+
+[data-theme="solar-flare"] .series-grid-card:hover {
+    box-shadow: 0 8px 24px rgba(217, 119, 6, 0.2);
+}
+
+[data-theme="arctic-chill"] .series-grid-card:hover {
+    box-shadow: 0 8px 24px rgba(37, 99, 235, 0.15);
+}
+
+[data-theme="cyber-neon"] .series-grid-card:hover {
+    box-shadow: 0 8px 24px rgba(224, 64, 224, 0.3);
 }

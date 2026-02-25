@@ -1,9 +1,26 @@
-/* === Theme Variables === */
+/* === Theme Preview Circles (for sidebar) === */
+.text-theme-default     { color: #6366f1; }
+.text-theme-nightowl    { color: #c792ea; }
+.text-theme-nord        { color: #81a1c1; }
+.text-theme-light       { color: #3b82f6; }
+.text-theme-minty       { color: #34d399; }     /* Mint accent */
+.text-theme-solar       { color: #fbbf24; }     /* Solar yellow */
+.text-theme-cyber       { color: #ff00ff; }     /* Neon magenta */
+.text-theme-arctic      { color: #3b82f6; }     /* Arctic blue */
+
+/* === Base / Default Theme === */
 :root {
     --bg-primary: #0f1419;
     --bg-secondary: #1a1f24;
     --bg-card: #242a32;
     --header-bg: #1a3346;
+    --sidebar-bg: #1a1d29;
+    --sidebar-header-bg: #151823;
+    --nav-text: #9ca3af;
+    --nav-hover-bg: #232736;
+    --nav-hover-text: #ffffff;
+    --nav-active-bg: #2d3142;
+    --nav-active-text: #6366f1;
     --text-primary: #f5f5f7;
     --text-secondary: #a0a5ad;
     --accent-primary: #6366f1;
@@ -15,13 +32,22 @@
     --glass-bg: rgba(36, 42, 50, 0.8);
     --shadow-light: rgba(99, 102, 241, 0.1);
     --shadow-dark: rgba(0, 0, 0, 0.3);
+    --brand-color: #6366f1;
 }
 
+/* Night Owl */
 :root[data-theme="night-owl"] {
     --bg-primary: #011627;
     --bg-secondary: #0d2231;
     --bg-card: #1a3346;
     --header-bg: #0d2231;
+    --sidebar-bg: #011627;
+    --sidebar-header-bg: #001122;
+    --nav-text: #8badc1;
+    --nav-hover-bg: #0d3a58;
+    --nav-hover-text: #d6deeb;
+    --nav-active-bg: #1a3346;
+    --nav-active-text: #82aaff;
     --text-primary: #d6deeb;
     --text-secondary: #8badc1;
     --accent-primary: #82aaff;
@@ -33,13 +59,22 @@
     --glass-bg: rgba(26, 51, 70, 0.8);
     --shadow-light: rgba(130, 170, 255, 0.1);
     --shadow-dark: rgba(0, 0, 0, 0.4);
+    --brand-color: #c792ea;
 }
 
+/* Nord */
 :root[data-theme="nord"] {
     --bg-primary: #2e3440;
     --bg-secondary: #3b4252;
     --bg-card: #434c5e;
     --header-bg: #3b4252;
+    --sidebar-bg: #2e3440;
+    --sidebar-header-bg: #242933;
+    --nav-text: #d8dee9;
+    --nav-hover-bg: #434c5e;
+    --nav-hover-text: #eceff4;
+    --nav-active-bg: #4c566a;
+    --nav-active-text: #88c0d0;
     --text-primary: #eceff4;
     --text-secondary: #d8dee9;
     --accent-primary: #88c0d0;
@@ -51,13 +86,22 @@
     --glass-bg: rgba(67, 76, 94, 0.8);
     --shadow-light: rgba(136, 192, 208, 0.1);
     --shadow-dark: rgba(0, 0, 0, 0.3);
+    --brand-color: #88c0d0;
 }
 
+/* Light Breeze */
 :root[data-theme="light-breeze"] {
     --bg-primary: #f8fafc;
     --bg-secondary: #e2e8f0;
     --bg-card: #ffffff;
     --header-bg: #e2e8f0;
+    --sidebar-bg: #f1f5f9;
+    --sidebar-header-bg: #e2e8f0;
+    --nav-text: #64748b;
+    --nav-hover-bg: #cbd5e1;
+    --nav-hover-text: #1e293b;
+    --nav-active-bg: #e2e8f0;
+    --nav-active-text: #3b82f6;
     --text-primary: #1e293b;
     --text-secondary: #64748b;
     --accent-primary: #3b82f6;
@@ -66,12 +110,123 @@
     --accent-error: #ef4444;
     --accent-warning: #f59e0b;
     --border-color: #cbd5e1;
-    --glass-bg: rgba(255, 255, 255, 0.8);
+    --glass-bg: rgba(226, 232, 240, 0.5);
     --shadow-light: rgba(59, 130, 246, 0.1);
     --shadow-dark: rgba(0, 0, 0, 0.1);
+    --brand-color: #3b82f6;
 }
 
-/* === Base Styles === */
+/* === New Themes === */
+
+/* Minty Fresh */
+:root[data-theme="minty-fresh"] {
+    --bg-primary: #f0fdf7;
+    --bg-secondary: #dcfce7;
+    --bg-card: #ffffff;
+    --header-bg: #bbf7d0;
+    --sidebar-bg: #f0fdf7;
+    --sidebar-header-bg: #d1fae5;
+    --nav-text: #047857;
+    --nav-hover-bg: #d1fae5;
+    --nav-hover-text: #064e3b;
+    --nav-active-bg: #a7f3d0;
+    --nav-active-text: #059669;
+    --text-primary: #064e3b;
+    --text-secondary: #047857;
+    --accent-primary: #10b981;
+    --accent-secondary: #059669;
+    --accent-success: #059669;
+    --accent-error: #ef4444;
+    --accent-warning: #f59e0b;
+    --border-color: #86efac;
+    --glass-bg: rgba(209, 250, 229, 0.5);
+    --shadow-light: rgba(16, 185, 129, 0.15);
+    --shadow-dark: rgba(0, 0, 0, 0.08);
+    --brand-color: #10b981;
+}
+
+/* Solar Flare */
+:root[data-theme="solar-flare"] {
+    --bg-primary: #fffbeb;
+    --bg-secondary: #fef3c7;
+    --bg-card: #ffffff;
+    --header-bg: #fde68a;
+    --sidebar-bg: #fffbeb;
+    --sidebar-header-bg: #fef3c7;
+    --nav-text: #92400e;
+    --nav-hover-bg: #fef3c7;
+    --nav-hover-text: #78350f;
+    --nav-active-bg: #fde68a;
+    --nav-active-text: #b45309;
+    --text-primary: #78350f;
+    --text-secondary: #92400e;
+    --accent-primary: #d97706;
+    --accent-secondary: #b45309;
+    --accent-success: #16a34a;
+    --accent-error: #ef4444;
+    --accent-warning: #b45309;
+    --border-color: #fcd34d;
+    --glass-bg: rgba(254, 243, 199, 0.5);
+    --shadow-light: rgba(217, 119, 6, 0.15);
+    --shadow-dark: rgba(0, 0, 0, 0.08);
+    --brand-color: #d97706;
+}
+
+/* Cyber Neon */
+:root[data-theme="cyber-neon"] {
+    --bg-primary: #05050f;
+    --bg-secondary: #0a0a1a;
+    --bg-card: #12122a;
+    --header-bg: #0f0f24;
+    --sidebar-bg: #0a0a1a;
+    --sidebar-header-bg: #050510;
+    --nav-text: #8b8baf;
+    --nav-hover-bg: #1a1a3a;
+    --nav-hover-text: #e0e0ff;
+    --nav-active-bg: #2d1b4e;
+    --nav-active-text: #e040e0;
+    --text-primary: #e8e8ff;
+    --text-secondary: #8b8baf;
+    --accent-primary: #e040e0;
+    --accent-secondary: #00e5ff;
+    --accent-success: #39ff14;
+    --accent-error: #ff2d55;
+    --accent-warning: #ffe14d;
+    --border-color: #2d1b4e;
+    --glass-bg: rgba(10, 10, 26, 0.85);
+    --shadow-light: rgba(224, 64, 224, 0.15);
+    --shadow-dark: rgba(0, 0, 0, 0.6);
+    --brand-color: #e040e0;
+}
+
+/* Arctic Chill */
+:root[data-theme="arctic-chill"] {
+    --bg-primary: #f0f9ff;
+    --bg-secondary: #e0f2fe;
+    --bg-card: #ffffff;
+    --header-bg: #bae6fd;
+    --sidebar-bg: #eff6ff;
+    --sidebar-header-bg: #dbeafe;
+    --nav-text: #1e40af;
+    --nav-hover-bg: #dbeafe;
+    --nav-hover-text: #1e3a8a;
+    --nav-active-bg: #bfdbfe;
+    --nav-active-text: #2563eb;
+    --text-primary: #1e3a8a;
+    --text-secondary: #1e40af;
+    --accent-primary: #2563eb;
+    --accent-secondary: #3b82f6;
+    --accent-success: #22c55e;
+    --accent-error: #ef4444;
+    --accent-warning: #f59e0b;
+    --border-color: #93c5fd;
+    --glass-bg: rgba(219, 234, 254, 0.5);
+    --shadow-light: rgba(37, 99, 235, 0.12);
+    --shadow-dark: rgba(0, 0, 0, 0.06);
+    --brand-color: #2563eb;
+}
+
+
 body {
     background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
     color: var(--text-primary);
@@ -1123,4 +1278,177 @@ a:hover .clickable-card .text-muted {
 
 .calendar-day-expanded[style*="display: block"] {
   opacity: 1;
+}
+
+/* ============================================
+   Light Theme Overrides
+   All light themes need inverted rgba values,
+   different shadows, and adjusted UI elements.
+   ============================================ */
+
+/* Shared light theme mixin — applies to all 4 light themes */
+[data-theme="light-breeze"],
+[data-theme="minty-fresh"],
+[data-theme="solar-flare"],
+[data-theme="arctic-chill"] {
+    /* Stat pills: dark on light instead of light on dark */
+    & .stat-pill,
+    .stat-pill {
+        background: rgba(0, 0, 0, 0.04);
+        border: 1px solid rgba(0, 0, 0, 0.1);
+        color: var(--text-primary);
+    }
+    & .stat-pill:hover,
+    .stat-pill:hover {
+        background: rgba(0, 0, 0, 0.08);
+    }
+}
+
+/* Stat pill overrides (non-nested fallback for older browsers) */
+[data-theme="light-breeze"] .stat-pill,
+[data-theme="minty-fresh"] .stat-pill,
+[data-theme="solar-flare"] .stat-pill,
+[data-theme="arctic-chill"] .stat-pill {
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    color: var(--text-primary);
+}
+
+[data-theme="light-breeze"] .stat-pill:hover,
+[data-theme="minty-fresh"] .stat-pill:hover,
+[data-theme="solar-flare"] .stat-pill:hover,
+[data-theme="arctic-chill"] .stat-pill:hover {
+    background: rgba(0, 0, 0, 0.08);
+}
+
+/* Clickable card hover - lighter shadow for light themes */
+[data-theme="light-breeze"] .clickable-card:hover,
+[data-theme="minty-fresh"] .clickable-card:hover,
+[data-theme="solar-flare"] .clickable-card:hover,
+[data-theme="arctic-chill"] .clickable-card:hover {
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.12);
+    border-color: rgba(0, 0, 0, 0.15);
+}
+
+/* Banner border fix for light themes */
+[data-theme="light-breeze"] .ocdarr-banner,
+[data-theme="minty-fresh"] .ocdarr-banner,
+[data-theme="solar-flare"] .ocdarr-banner,
+[data-theme="arctic-chill"] .ocdarr-banner {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Sortable hover fix */
+[data-theme="light-breeze"] .sortable:hover,
+[data-theme="minty-fresh"] .sortable:hover,
+[data-theme="solar-flare"] .sortable:hover,
+[data-theme="arctic-chill"] .sortable:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Card shadows - softer for light themes */
+[data-theme="light-breeze"] .card,
+[data-theme="minty-fresh"] .card,
+[data-theme="solar-flare"] .card,
+[data-theme="arctic-chill"] .card {
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+}
+
+[data-theme="light-breeze"] .card:not(.stats-card):hover,
+[data-theme="minty-fresh"] .card:not(.stats-card):hover,
+[data-theme="solar-flare"] .card:not(.stats-card):hover,
+[data-theme="arctic-chill"] .card:not(.stats-card):hover {
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* Stats card hover - lighter shadow */
+[data-theme="light-breeze"] .stats-card:hover,
+[data-theme="minty-fresh"] .stats-card:hover,
+[data-theme="solar-flare"] .stats-card:hover,
+[data-theme="arctic-chill"] .stats-card:hover {
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Navbar toggler icon - dark lines for light bg */
+[data-theme="light-breeze"] .navbar-toggler-icon,
+[data-theme="minty-fresh"] .navbar-toggler-icon,
+[data-theme="solar-flare"] .navbar-toggler-icon,
+[data-theme="arctic-chill"] .navbar-toggler-icon {
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 30 30'%3e%3cpath stroke='rgba%2830, 41, 59, 0.8%29' stroke-linecap='round' stroke-miterlimit='10' stroke-width='2' d='m4 7h22M4 15h22M4 23h22'/%3e%3c/svg%3e") !important;
+}
+
+/* Mobile navbar collapse - lighter shadow */
+@media (max-width: 991.98px) {
+    [data-theme="light-breeze"] .navbar-collapse,
+    [data-theme="minty-fresh"] .navbar-collapse,
+    [data-theme="solar-flare"] .navbar-collapse,
+    [data-theme="arctic-chill"] .navbar-collapse {
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15) !important;
+    }
+}
+
+/* Warning badge text - ensure readable on light bg-primary */
+[data-theme="light-breeze"] .badge.bg-warning,
+[data-theme="minty-fresh"] .badge.bg-warning,
+[data-theme="solar-flare"] .badge.bg-warning,
+[data-theme="arctic-chill"] .badge.bg-warning {
+    color: #1e293b !important;
+}
+
+/* Text-muted override for light themes */
+[data-theme="light-breeze"] .text-muted,
+[data-theme="minty-fresh"] .text-muted,
+[data-theme="solar-flare"] .text-muted,
+[data-theme="arctic-chill"] .text-muted {
+    color: var(--text-secondary) !important;
+}
+
+/* Calendar hero card body matches theme */
+[data-theme="light-breeze"] .calendar-hero .card-body,
+[data-theme="minty-fresh"] .calendar-hero .card-body,
+[data-theme="solar-flare"] .calendar-hero .card-body,
+[data-theme="arctic-chill"] .calendar-hero .card-body {
+    background: var(--bg-card);
+}
+
+/* Activity feed borders */
+[data-theme="light-breeze"] .activity-feed .activity-item.slim,
+[data-theme="minty-fresh"] .activity-feed .activity-item.slim,
+[data-theme="solar-flare"] .activity-feed .activity-item.slim,
+[data-theme="arctic-chill"] .activity-feed .activity-item.slim {
+    border-bottom-color: var(--border-color);
+}
+
+/* Form focus ring - theme-appropriate */
+[data-theme="minty-fresh"] .form-control:focus,
+[data-theme="minty-fresh"] .form-select:focus {
+    box-shadow: 0 0 0 0.2rem rgba(16, 185, 129, 0.25) !important;
+}
+
+[data-theme="solar-flare"] .form-control:focus,
+[data-theme="solar-flare"] .form-select:focus {
+    box-shadow: 0 0 0 0.2rem rgba(217, 119, 6, 0.25) !important;
+}
+
+[data-theme="arctic-chill"] .form-control:focus,
+[data-theme="arctic-chill"] .form-select:focus {
+    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.25) !important;
+}
+
+/* Cyber Neon specific: glow effects */
+[data-theme="cyber-neon"] .card {
+    box-shadow: 0 2px 16px rgba(224, 64, 224, 0.08);
+}
+
+[data-theme="cyber-neon"] .card:not(.stats-card):hover {
+    box-shadow: 0 8px 32px rgba(224, 64, 224, 0.2);
+}
+
+[data-theme="cyber-neon"] .stats-card {
+    box-shadow: 0 8px 32px rgba(224, 64, 224, 0.2);
+}
+
+[data-theme="cyber-neon"] .form-control:focus,
+[data-theme="cyber-neon"] .form-select:focus {
+    box-shadow: 0 0 0 0.2rem rgba(224, 64, 224, 0.25) !important;
 }

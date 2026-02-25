@@ -1691,15 +1691,6 @@ def check_time_based_cleanup(series_id, rule):
     except Exception as e:
         return False, f"Error: {str(e)}"
 
-def is_dry_run_enabled(rule_name=None):
-    """Check if dry run is enabled (simplified version)."""
-    # Check environment variable first
-    if os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true':
-        return True
-    
-    # Check rule-specific setting (you'll need to implement this based on your setup)
-    # For now, return False
-    return False
 def is_protected_by_expression(season_num, episode_num, expression, total_seasons=None):
     """
     Check if a season/episode matches an always_have expression.

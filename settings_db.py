@@ -208,29 +208,6 @@ def set_setting(key: str, value: Any, category: str = 'general', description: st
     conn.commit()
     conn.close()
 
-def get_all_settings(category: str = None) -> Dict[str, Any]:
-    """Get all settings, optionally filtered by category"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    if category:
-        cursor.execute('SELECT * FROM settings WHERE category = ?', (category,))
-    else:
-        cursor.execute('SELECT * FROM settings')
-    
-    rows = cursor.fetchall()
-    conn.close()
-    
-    settings = {}
-    for row in rows:
-        try:
-            settings[row['key']] = json.loads(row['value'])
-        except:
-            settings[row['key']] = row['value']
-    
-    return settings
-
 # Configuration getters with env fallback
 def get_sonarr_config() -> Dict[str, str]:
     """Get Sonarr config from DB or env"""
