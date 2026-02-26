@@ -3,8 +3,16 @@
 {% block content %}
 <div class="container-fluid">
     <!-- Rules Section -->
-    <div class="mb-4">
-        <h2><i class="fas fa-list me-2"></i>Rules</h2>
+    <div class="mb-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <h2 class="mb-0"><i class="fas fa-list me-2"></i>Rules</h2>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('create_rule') }}" class="btn btn-primary btn-sm">
+                <i class="fas fa-plus-circle me-1"></i>Create New Rule
+            </a>
+            <a href="{{ url_for('cleanup') }}" class="btn btn-warning btn-sm text-dark">
+                <i class="fas fa-broom me-1"></i>Clean Config
+            </a>
+        </div>
     </div>
 
     <!-- Desktop: Table view -->

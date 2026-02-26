@@ -2,6 +2,7 @@ __pycache__/
 venv/
 node_modules
 preferences.json
+*.sh
 .env
 /logs/*
 /temp/*

@@ -272,7 +272,7 @@ def test_connection(service):
                        integration_data.get('path') or
                        '')
             
-            if api_key:  # Only test if we have an API key
+            if api_key or url:  # Test if we have either — some integrations (e.g. Docker) need only url
                 success, message = integration.test_connection(url, api_key)
                 
                 if success:
@@ -375,14 +375,13 @@ def save_service_config(service):
             
             # Check if we got any data at all
             if not integration_data:
-                # No integration fields found, this might be a legacy service
-                # Fall through to legacy handlers
+                # No integration fields found, fall through to legacy handlers
                 pass
-            elif not api_key:
-                # Integration data exists but no API key - this is an error
+            elif not api_key and not url:
+                # Neither api_key nor url — nothing useful to save
                 return jsonify({
                     'status': 'error',
-                    'message': 'API key/token/path is required'
+                    'message': 'At least a URL or API key is required'
                 }), 400
             else:
                 # We have valid integration data - save it

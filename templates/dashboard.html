@@ -5,114 +5,125 @@
 {% block content %}
 <div class="container-fluid">
   <!-- Slim Stats Bar -->
-    <div class="row mb-3">
+  <div class="row mb-3">
     <div class="col-12">
-        <div class="d-flex flex-wrap gap-3 justify-content-start align-items-center" id="stats-pills-container">
+      <div class="d-flex flex-wrap gap-2 justify-content-start align-items-center" id="stats-pills-container">
         <!-- Sonarr (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start">
-            <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-2" style="width: 20px; height: 20px;">
-            <strong id="sonarr-series">--</strong>
-            <small class="text-muted ms-2" id="sonarr-size">(-- GB)</small>
-            <small class="text-muted ms-2">•</small>
-            <small class="text-muted ms-1"><strong id="episodes-count">--</strong> eps</small>
+        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-3 py-2 px-md-4 py-md-3 text-center text-md-start" style="font-size: 0.82rem;">
+          <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-1" style="width: 16px; height: 16px;">
+          <strong id="sonarr-series">--</strong>
+          <small class="text-muted ms-1" id="sonarr-size">(-- GB)</small>
+          <small class="text-muted ms-1">•</small>
+          <small class="text-muted ms-1"><strong id="episodes-count">--</strong> eps</small>
         </div>
 
         <!-- Sonarr Queue (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start">
-            <i class="fas fa-list me-2 text-info"></i>
-            <strong id="sonarr-queue">--</strong>
+        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-3 py-2 px-md-4 py-md-3 text-center text-md-start" style="font-size: 0.82rem;">
+          <i class="fas fa-list me-1 text-info"></i>
+          <strong id="sonarr-queue">--</strong>
         </div>
 
         <!-- Integration Pills will be inserted here by JavaScript -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Plex Watchlist Section (hidden until /api/integration/plex/watchlist confirms Plex is configured) -->
+  <div class="row mb-3" id="plex-watchlist-section" style="display: none;">
+    <div class="col-12">
+      <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom" onclick="toggleWatchlist()" style="cursor: pointer;">
+          <h6 class="mb-0">
+            <i class="fas fa-bookmark me-2"></i>Plex Watchlist
+            <i id="watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
+          </h6>
+          <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation();">
+            <span id="plex-sync-status" class="text-muted" style="font-size: 12px;"></span>
+            <button class="btn btn-sm btn-outline-secondary" onclick="syncPlexWatchlist()" title="Sync now">
+              <i class="fas fa-sync-alt" id="sync-spinner"></i> Sync
+            </button>
+          </div>
         </div>
+        <div class="card-body p-3" style="overflow-x: hidden;">
+          <div id="plex-watchlist-container">
+            <!-- Watchlist loaded dynamically -->
+          </div>
+        </div>
+      </div>
     </div>
-    </div>
+  </div>
 
   <!-- Full-Width Calendar + Activity Integration -->
   <div class="row mb-4">
     <div class="col-12">
       <div class="card calendar-hero border-0 shadow-lg">
-        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom" onclick="toggleCalendar()" style="cursor: pointer;">
-          <h5 class="mb-0">
-            <i class="fas fa-calendar-week me-2"></i>This Week (7 Days)
-            <i id="calendar-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
-          </h5>
-          <div class="d-flex gap-2" onclick="event.stopPropagation();">
-            <button class="btn btn-sm btn-outline-secondary" onclick="loadCalendar()">
-              <i class="fas fa-sync-alt"></i> Refresh
-            </button>
-            
-          </div>
-        </div>
-
         <div class="card-body p-0">
-          <!-- Loading Overlay -->
-          <div id="calendar-loading" class="text-center py-5">
-            <div class="spinner-border text-primary" role="status"></div>
-            <p class="mt-3 text-muted">Loading this week's overview...</p>
+
+          <!-- Column Headers Row — always visible, acts as section header + toggle trigger -->
+          <div class="row g-0 flex-lg-nowrap" id="calendar-column-headers">
+            <div class="col-12 col-lg-4 border-end border-dark" onclick="toggleCalendar()" style="cursor: pointer;">
+              <h6 class="bg-dark p-3 mb-0 border-bottom d-flex align-items-center">
+                <i class="fas fa-clock me-2"></i>Upcoming Releases
+              </h6>
+            </div>
+            <div class="col-12 col-lg-4 border-end border-dark" onclick="toggleCalendar()" style="cursor: pointer;">
+              <h6 class="bg-dark p-3 mb-0 border-bottom d-flex align-items-center">
+                <i class="fas fa-check-circle text-success me-2"></i>Ready to Watch
+              </h6>
+            </div>
+            <div class="col-12 col-lg-4" onclick="toggleCalendar()" style="cursor: pointer;">
+              <h6 class="bg-dark p-3 mb-0 border-bottom d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-stream me-2"></i>Recent Activity</span>
+                <div class="d-flex gap-2 align-items-center">
+                  <button class="btn btn-sm btn-outline-secondary" onclick="event.stopPropagation(); loadCalendar()">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                  </button>
+                  <i id="calendar-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
+                </div>
+              </h6>
+            </div>
           </div>
 
-          <!-- Main 3-Column Content -->
+          <!-- Calendar Body (collapsible) -->
+          <div id="calendar-body">
+
+            <!-- Loading Overlay -->
+            <div id="calendar-loading" class="text-center py-5">
+              <div class="spinner-border text-primary" role="status"></div>
+              <p class="mt-3 text-muted">Loading this week's overview...</p>
+            </div>
+
+            <!-- Main 3-Column Content -->
             <div id="calendar-container" class="row g-0 flex-lg-nowrap" style="display: none;">
-            <!-- Upcoming Releases – equal to Ready -->
-            <div class="col-12 col-lg-4 border-end border-dark">
-                <h6 class="bg-dark p-3 mb-0 border-bottom text-center text-lg-start">
-                <i class="fas fa-clock me-2"></i>Upcoming Releases
-                </h6>
+              <!-- Upcoming Releases -->
+              <div class="col-12 col-lg-4 border-end border-dark">
                 <div id="upcoming-container" class="p-3"></div>
-            </div>
+              </div>
 
-            <!-- Ready to Watch – equal to Upcoming -->
-            <div class="col-12 col-lg-4 border-end border-dark">
-                <h6 class="bg-dark p-3 mb-0 border-bottom text-center text-lg-start">
-                <i class="fas fa-check-circle text-success me-2"></i>Ready to Watch
-                </h6>
+              <!-- Ready to Watch -->
+              <div class="col-12 col-lg-4 border-end border-dark">
                 <div id="downloaded-container" class="p-3"></div>
-            </div>
+              </div>
 
-            <!-- Recent Activity column -->
-            <div class="col-12 col-lg-4">
-                <h6 class="bg-dark p-3 mb-0 border-bottom text-center text-lg-start">
-                    <i class="fas fa-stream me-2"></i>Recent Activity
-                </h6>
+              <!-- Recent Activity column -->
+              <div class="col-12 col-lg-4">
                 <div id="activity-feed-mini" class="p-3 activity-feed" style="max-height: 600px; overflow-y: auto;"></div>
-                
+
                 <!-- Integration Widgets Container - DYNAMIC -->
                 <div id="integration-widgets-container" class="mt-3" style="display: flex; flex-direction: column; gap: 4px;">
-                    <!-- Remove max-height entirely, let widgets stack naturally -->
                 </div>
+              </div>
             </div>
-          <!-- Empty State -->
-          <div id="calendar-empty" class="text-center py-5 text-muted" style="display: none;">
-            <i class="fas fa-calendar-times fa-3x mb-3"></i>
-            <p>No events scheduled or recorded this week</p>
+
+            <!-- Empty State -->
+            <div id="calendar-empty" class="text-center py-5 text-muted" style="display: none;">
+              <i class="fas fa-calendar-times fa-3x mb-3"></i>
+              <p>No events scheduled or recorded this week</p>
+            </div>
+
           </div>
         </div>
-        <!-- NEW: Plex Watchlist Section -->
-        <div class="row mt-4">
-            <div class="col-12">
-                <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
-                    <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom" onclick="toggleWatchlist()" style="cursor: pointer;">
-                        <h5 class="mb-0">
-                            <i class="fas fa-bookmark me-2"></i>Plex Watchlist
-                            <i id="watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
-                        </h5>
-                        <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation();">
-                            <span id="plex-sync-status" class="text-muted" style="font-size: 12px;"></span>
-                            <button class="btn btn-sm btn-outline-secondary" onclick="syncPlexWatchlist()" title="Sync now">
-                                <i class="fas fa-sync-alt" id="sync-spinner"></i> Sync
-                            </button>
-                        </div>
-                    </div>
-                    <div class="card-body p-3" style="overflow-x: hidden;">
-                        <div id="plex-watchlist-container">
-                            <!-- Watchlist loaded dynamically -->
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-      
+      </div>
     </div>
   </div>
 </div>
@@ -191,6 +202,14 @@
   }
 }
 
+/* Column headers — equal height across all three cells */
+#calendar-column-headers > div {
+  display: flex;
+}
+#calendar-column-headers h6 {
+  flex: 1;
+}
+
 /* General cleanup for sleeker feel */
 .calendar-day-section {
   margin-bottom: 8px !important;
@@ -219,7 +238,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set intervals
         statsInterval = setInterval(loadDashboardStats, 60000);
         activityInterval = setInterval(loadActivitySlim, 60000);
-        
+
         setInterval(loadIntegrationWidgets, 60000);
     });
 });
@@ -230,27 +249,27 @@ function loadIntegrations() {
         .then(r => r.json())
         .then(data => {
             if (!data.success || !data.integrations) return;
-            
+
             const container = document.getElementById('stats-pills-container');
-            
+
             data.integrations.forEach(integration => {
                 // Store metadata for later use
                 integrationMetadata[integration.service_name] = integration;
-                
+
                 // Only create pill if widget is enabled
                 if (!integration.widget || !integration.widget.enabled) return;
-                
+
                 // Create pill element
                 const pill = document.createElement('div');
-                pill.className = 'stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-4 py-3 text-center text-md-start';
+                pill.className = 'stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-3 py-2 px-md-4 py-md-3 text-center text-md-start';
+                pill.style.cssText = 'display:none; font-size: 0.82rem;';
                 pill.id = `${integration.service_name}-pill`;
-                pill.style.display = 'none';  // Hidden until stats load
-                
+
                 pill.innerHTML = `
-                    <img src="${integration.icon}" class="me-2" style="width: 20px; height: 20px;" onerror="this.style.display='none'">
+                    <img src="${integration.icon}" class="me-1" style="width: 16px; height: 16px;" onerror="this.style.display='none'">
                     <span id="${integration.service_name}-content">--</span>
                 `;
-                
+
                 // Append to end of container
                 container.appendChild(pill);
             });
@@ -259,18 +278,19 @@ function loadIntegrations() {
             console.error('Error loading integrations:', err);
         });
 }
+
 // Load integration widgets (generic - works for any integration)
 function loadIntegrationWidgets() {
     const container = document.getElementById('integration-widgets-container');
     if (!container) return;
-    
+
     fetch('/api/dashboard/integrations')
         .then(r => r.json())
         .then(data => {
             if (!data.success || !data.integrations) return;
-            
+
             container.innerHTML = '';
-            
+
             // Check each integration for custom widget
             data.integrations.forEach(integration => {
                 if (integration.widget && integration.widget.has_custom_widget) {
@@ -290,6 +310,7 @@ function loadIntegrationWidgets() {
         })
         .catch(err => console.error('Widget load error:', err));
 }
+
 // Stats (top pills)
 function loadDashboardStats() {
     fetch('/api/dashboard/stats')
@@ -299,37 +320,37 @@ function loadDashboardStats() {
 
             if (data.success) {
                 const stats = data.stats;
-                
+
                 // Core Sonarr stats
                 if (stats.sonarr) {
                     document.getElementById('sonarr-series').textContent = stats.sonarr.series_count || '--';
                     document.getElementById('sonarr-size').textContent = '(' + (stats.sonarr.size_gb || '--') + ' GB)';
                     document.getElementById('episodes-count').textContent = stats.sonarr.episode_count || '--';
-                    
+
                     const sonarrQueue = stats.sonarr.queue_count ?? 0;
                     document.getElementById('sonarr-queue').textContent = sonarrQueue;
                 }
-                
+
                 // Integration pills (automatic)
                 Object.keys(integrationMetadata).forEach(serviceName => {
                     const integration = integrationMetadata[serviceName];
                     const serviceStats = stats[serviceName];
-                    
+
                     // Skip if no widget or disabled
                     if (!integration.widget || !integration.widget.enabled) return;
-                    
+
                     // Skip if not configured or has error
                     if (!serviceStats || !serviceStats.configured || serviceStats.error) {
                         document.getElementById(`${serviceName}-pill`).style.display = 'none';
                         return;
                     }
-                    
+
                     // Format using plugin's template
                     const content = formatTemplate(
                         integration.widget.pill.template,
                         serviceStats
                     );
-                    
+
                     document.getElementById(`${serviceName}-content`).innerHTML = content;
                     document.getElementById(`${serviceName}-pill`).style.display = 'flex';
                 });
@@ -400,7 +421,7 @@ function loadCalendar() {
         .then(r => r.json())
         .then(data => {
             document.getElementById('calendar-loading').style.display = 'none';
-            
+
             if (data.success && (data.upcoming?.length > 0 || data.downloaded?.length > 0)) {
                 document.getElementById('calendar-container').style.display = 'flex';
                 renderUpcoming(data.upcoming || []);
@@ -463,7 +484,7 @@ function renderUpcoming(episodes) {
                     </div>
                 </div>
                 <div id="${dayId}-preview" class="calendar-banner-card" style="display: block; background-image: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.8)), url('${banner}');">
-                
+
                     <div class="calendar-card-content">
                         <div class="series-title-small">${firstEp.series_title}</div>
                         <div class="episode-info-small">
@@ -473,7 +494,7 @@ function renderUpcoming(episodes) {
                         ${moreCount > 0 ? `<div class="more-episodes">+${moreCount} more</div>` : ''}
                     </div>
                 </div>
-                
+
                 <div id="${dayId}" class="calendar-day-expanded" style="display: none;">
                     ${dayEvents.map(ep => {
                         const epBanner = getBannerUrl(ep);
@@ -546,7 +567,7 @@ function renderDownloaded(episodes) {
                         ${dayEvents.length > 1 ? `<i class="fas fa-chevron-right" id="${dayId}-chevron"></i>` : ''}
                     </div>
                 </div>
-                
+
                 <div id="${dayId}-preview" class="calendar-banner-card ready-badge-card" style="background-image: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.8)), url('${banner}');">
                     <div class="calendar-card-content">
                         <div class="series-title-small">${firstEp.series_title}</div>
@@ -555,7 +576,7 @@ function renderDownloaded(episodes) {
                         ${moreCount > 0 ? `<div class="more-episodes">+${moreCount} more</div>` : ''}
                     </div>
                 </div>
-                
+
                 <div id="${dayId}" class="calendar-day-expanded" style="display: none;">
                     ${dayEvents.map(ep => {
                         const epBanner = getBannerUrl(ep);
@@ -601,23 +622,29 @@ function toggleDay(dayId) {
         chevron.classList.add('fa-chevron-right');
     }
 }
+
 function loadPlexWatchlist() {
     const container = document.getElementById('plex-watchlist-container');
+    const section = document.getElementById('plex-watchlist-section');
     if (!container) return;
 
     fetch('/api/integration/plex/watchlist')
         .then(r => r.json())
         .then(data => {
-            if (data.success && data.html) {
-                container.innerHTML = data.html;
+            if (data.success) {
+                // Plex is configured — reveal the section
+                if (section) section.style.display = '';
+                if (data.html) {
+                    container.innerHTML = data.html;
+                }
             }
-            // Always update sync status in the card header
+            // If not success, keep section hidden (calendar moves up, no empty space)
             const statusEl = document.getElementById('plex-sync-status');
             if (statusEl && data.sync_text) {
                 statusEl.textContent = data.sync_text;
             }
         })
-        .catch(() => {}); // Watchlist unavailable
+        .catch(() => {}); // Watchlist unavailable — section stays hidden
 }
 
 function syncPlexWatchlist() {
@@ -625,7 +652,7 @@ function syncPlexWatchlist() {
     if (spinner) {
         spinner.classList.add('fa-spin');
     }
-    
+
     fetch('/api/integration/plex/sync', { method: 'POST' })
         .then(r => r.json())
         .then(data => {
@@ -633,13 +660,13 @@ function syncPlexWatchlist() {
                 const added = (data.added_tv || 0) + (data.added_movies || 0);
                 const existed = data.already_exists || 0;
                 const errors = data.errors || 0;
-                
+
                 let msg = '';
                 if (added > 0) msg += `${added} added, `;
                 if (existed > 0) msg += `${existed} already existed, `;
                 if (errors > 0) msg += `${errors} errors, `;
                 msg = msg ? msg.slice(0, -2) : 'Everything up to date';
-                
+
                 console.log('Watchlist sync:', msg);
                 loadPlexWatchlist(); // Reloads content + updates sync status in header
             }
@@ -649,6 +676,7 @@ function syncPlexWatchlist() {
             if (spinner) spinner.classList.remove('fa-spin');
         });
 }
+
 // ────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────
@@ -669,35 +697,30 @@ window.addEventListener('beforeunload', () => {
     if (statsInterval) clearInterval(statsInterval);
     if (activityInterval) clearInterval(activityInterval);
 });
+
 // Collapsible section toggles
 function toggleCalendar() {
-    const container = document.getElementById('calendar-container');
+    const body = document.getElementById('calendar-body');
     const chevron = document.querySelector('#calendar-toggle-icon');
-    
-    console.log("toggleCalendar - style.display:", container.style.display);
-    console.log("toggleCalendar - computed display:", window.getComputedStyle(container).display);
-    
-    const isVisible = container.style.display !== 'none' && window.getComputedStyle(container).display !== 'none';
-    console.log("toggleCalendar - isVisible:", isVisible);
-    
-    if (!isVisible) {
-        console.log("Showing calendar");
-        container.style.display = 'flex';
-        chevron.style.transform = 'rotate(0deg)';
-    } else {
-        console.log("Hiding calendar");
-        container.style.display = 'none';
+
+    const isVisible = body.style.display !== 'none';
+
+    if (isVisible) {
+        body.style.display = 'none';
         chevron.style.transform = 'rotate(-90deg)';
+    } else {
+        body.style.display = '';
+        chevron.style.transform = 'rotate(0deg)';
     }
-    
-    localStorage.setItem('calendar_collapsed', container.style.display === 'none');
+
+    localStorage.setItem('calendar_collapsed', body.style.display === 'none');
 }
 
 function toggleWatchlist() {
     const container = document.getElementById('plex-watchlist-container');
     const chevron = document.querySelector('#watchlist-toggle-icon');
     const cardBody = container.closest('.card-body');
-    
+
     if (cardBody.style.display === 'none') {
         cardBody.style.display = 'block';
         chevron.style.transform = 'rotate(0deg)';
@@ -705,7 +728,7 @@ function toggleWatchlist() {
         cardBody.style.display = 'none';
         chevron.style.transform = 'rotate(-90deg)';
     }
-    
+
     localStorage.setItem('watchlist_collapsed', cardBody.style.display === 'none');
 }
 
@@ -713,7 +736,7 @@ function toggleWatchlist() {
 const originalDOMContentLoaded = window.onload;
 window.addEventListener('DOMContentLoaded', function() {
     if (originalDOMContentLoaded) originalDOMContentLoaded();
-    
+
     setTimeout(() => {
         if (localStorage.getItem('calendar_collapsed') === 'true') {
             toggleCalendar();

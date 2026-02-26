@@ -562,7 +562,8 @@
                                 {% endfor %}
                             </div>
                             
-                            <!-- Iframe Option -->
+                            <!-- Iframe Option — hidden for integrations without a web URL (e.g. Docker) -->
+                            {% if not integration.service_name == 'docker' %}
                             <div class="mb-3">
                                 <div class="form-check">
                                     <input type="checkbox" 
@@ -578,6 +579,7 @@
                                     </small>
                                 </div>
                             </div>
+                            {% endif %}
                             
                             {% if integration.get_custom_setup_html is defined %}
                                 {{ integration.get_custom_setup_html(integration_configs[integration.service_name].saved_values) | safe }}

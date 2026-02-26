@@ -1,7 +1,8 @@
 # Changelog
 
 ## [Unreleased / Dev]
-
+- added docker integration - see containsers in sidbar and start restrat them
+- moved plex watchlist if used above calendar on dashboard
 ### v3.3.5 - 2026-02-24
 - **Notifications**
   - Added notification option if episodes released but not in library

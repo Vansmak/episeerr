@@ -442,50 +442,13 @@
             
             
 
-            <!-- Rules Section (Expandable) -->
-            <div class="sidebar-section">
-                <a href="{{ url_for('rules_page') }}" class="sidebar-section-header" id="rulesSectionHeader" style="text-decoration: none;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <i class="fas fa-list"></i>
-                        <span>Rules</span>
-                    </div>
-                    <i class="fas fa-chevron-down" onclick="event.preventDefault(); event.stopPropagation(); toggleRulesSection();"></i>
-                </a>
-                
-                <div class="sidebar-submenu" id="rulesSubmenu">
-                    <!-- Create New Rule -->
-                    <a href="{{ url_for('create_rule') }}" class="sidebar-rule-item" style="color: var(--primary-color, #6366f1);">
-                        <i class="fas fa-plus-circle me-2"></i>
-                        <span class="sidebar-rule-name">Create New Rule</span>
-                    </a>
-                    
-                    <!-- Clean Config -->
-                    <a href="{{ url_for('cleanup') }}" class="sidebar-rule-item" style="color: var(--warning-color, #f59e0b);">
-                        <i class="fas fa-broom me-2"></i>
-                        <span class="sidebar-rule-name">Clean Config</span>
-                    </a>
-                </div>
-            </div>
+            <!-- Rules -->
+            <a href="{{ url_for('rules_page') }}" class="sidebar-nav-item {% if request.endpoint == 'rules_page' %}active{% endif %}">
+                <i class="fas fa-list"></i>
+                <span>Rules</span>
+            </a>
 
             <div class="sidebar-divider"></div>
-
-            <!-- Setup -->
-            <a href="{{ url_for('setup') }}" class="sidebar-nav-item {% if request.endpoint == 'setup' %}active{% endif %}">
-                <i class="fas fa-plug"></i>
-                <span>Setup</span>
-            </a>
-
-            <!-- Admin -->
-            <a href="{{ url_for('scheduler_admin') }}" class="sidebar-nav-item {% if request.endpoint == 'scheduler_admin' %}active{% endif %}">
-                <i class="fas fa-sliders-h"></i>
-                <span>Admin</span>
-            </a>
-
-            <!-- Documentation -->
-            <a href="{{ url_for('documentation') }}" class="sidebar-nav-item {% if request.endpoint == 'documentation' %}active{% endif %}">
-                <i class="fas fa-book"></i>
-                <span>Documentation</span>
-            </a>
 
             <!-- Pending Items -->
             <a href="{{ url_for('episeerr_index') }}" class="sidebar-nav-item {% if request.endpoint == 'episeerr_index' %}active{% endif %} position-relative">
@@ -494,8 +457,6 @@
                 <i class="fas fa-exclamation-circle text-warning ms-1" id="notification-bell-sidebar" style="display: none; font-size: 0.8em;"></i>
                 <span id="request-count-badge-sidebar" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none; font-size: 0.65em; margin-left: -10px;">0</span>
             </a>
-
-            <div class="sidebar-divider"></div>
 
             <!-- Quick Links Section -->
             <div class="sidebar-section">
@@ -506,50 +467,91 @@
                     </div>
                     <i class="fas fa-chevron-down"></i>
                 </div>
-                
                 <div class="sidebar-submenu" id="systemSubmenu">
                     <div id="systemLinksContainer"></div>
                 </div>
             </div>
 
+            <!-- Containers Section — hidden until Docker is confirmed configured via JS -->
+            <div id="containersSidebarWrapper" style="display: none;">
+                <div class="sidebar-divider"></div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-header collapsed" id="containersSectionHeader">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <i class="fas fa-cubes"></i>
+                            <span>Containers</span>
+                        </div>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="sidebar-submenu" id="containersSubmenu">
+                        <div id="containersListContainer">
+                            <div class="sidebar-rule-item text-muted small py-2">
+                                <i class="fas fa-spinner fa-spin me-2"></i>Loading...
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div class="sidebar-divider"></div>
 
-            <!-- Theme Section (Expandable + Auto-close on select) -->
+            <!-- Admin Section (Expandable, collapsed by default) -->
             <div class="sidebar-section">
-                <div class="sidebar-section-header" id="themeSectionHeader">
+                <div class="sidebar-section-header collapsed" id="adminSectionHeader">
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <i class="fas fa-palette"></i>
-                        <span>Theme</span>
+                        <i class="fas fa-cog"></i>
+                        <span>Admin</span>
                     </div>
                     <i class="fas fa-chevron-down"></i>
                 </div>
-                
-                <div class="sidebar-submenu" id="themeSubmenu">
-                    <div class="theme-option active" data-theme="default">
-                        <div class="theme-preview" style="background: linear-gradient(45deg, #0f1419, #6366f1);"></div>
-                        <span>Default Dark</span>
-                    </div>
-                    <div class="theme-option" data-theme="night-owl">
-                        <div class="theme-preview" style="background: linear-gradient(45deg, #011627, #c792ea);"></div>
-                        <span>Night Owl</span>
-                    </div>
-                    <div class="theme-option" data-theme="nord">
-                        <div class="theme-preview" style="background: linear-gradient(45deg, #2e3440, #88c0d0);"></div>
-                        <span>Nord</span>
-                    </div>
-                    <div class="theme-option" data-theme="light-breeze">
-                        <div class="theme-preview" style="background: linear-gradient(45deg, #f8fafc, #3b82f6);"></div>
-                        <span>Light Breeze</span>
-                    </div>
+                <div class="sidebar-submenu" id="adminSubmenu">
+                    <a href="{{ url_for('setup') }}" class="sidebar-rule-item {% if request.endpoint == 'setup' %}active{% endif %}">
+                        <i class="fas fa-plug me-2"></i>
+                        <span class="sidebar-rule-name">Services</span>
+                    </a>
+                    <a href="{{ url_for('scheduler_admin') }}" class="sidebar-rule-item {% if request.endpoint == 'scheduler_admin' %}active{% endif %}">
+                        <i class="fas fa-sliders-h me-2"></i>
+                        <span class="sidebar-rule-name">Settings</span>
+                    </a>
+                    <a href="{{ url_for('documentation') }}" class="sidebar-rule-item {% if request.endpoint == 'documentation' %}active{% endif %}">
+                        <i class="fas fa-book me-2"></i>
+                        <span class="sidebar-rule-name">Documentation</span>
+                    </a>
 
-                    
-                    <div class="theme-option" data-theme="cyber-neon">
-                        <div class="theme-preview" style="background: linear-gradient(45deg, #0a0a1a, #e040e0);"></div>
-                        <span>Cyber Neon</span>
+                    <!-- Theme nested under Admin -->
+                    <div class="sidebar-divider" style="margin: 4px 0;"></div>
+                    <div class="sidebar-rule-item" id="themeSubHeader" style="cursor:pointer; justify-content:space-between;" onclick="toggleThemeSection()">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <i class="fas fa-palette me-2"></i>
+                            <span class="sidebar-rule-name">Theme</span>
+                        </div>
+                        <i class="fas fa-chevron-down" id="themeChevron" style="font-size:11px; transition: transform 0.3s;"></i>
                     </div>
-                    
+                    <div id="themeSubmenu" style="max-height:0; overflow:hidden; transition: max-height 0.3s ease-in-out;">
+                        <div class="theme-option active" data-theme="default">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #0f1419, #6366f1);"></div>
+                            <span>Default Dark</span>
+                        </div>
+                        <div class="theme-option" data-theme="night-owl">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #011627, #c792ea);"></div>
+                            <span>Night Owl</span>
+                        </div>
+                        <div class="theme-option" data-theme="nord">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #2e3440, #88c0d0);"></div>
+                            <span>Nord</span>
+                        </div>
+                        <div class="theme-option" data-theme="light-breeze">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #f8fafc, #3b82f6);"></div>
+                            <span>Light Breeze</span>
+                        </div>
+                        <div class="theme-option" data-theme="cyber-neon">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #0a0a1a, #e040e0);"></div>
+                            <span>Cyber Neon</span>
+                        </div>
+                    </div>
                 </div>
             </div>
+
         </nav>
     </aside>
 
@@ -586,9 +588,6 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Initialize sidebar
     initializeSidebar();
-    
-    // Populate rules in sidebar
-    // populateRulesSidebar(); // Disabled - rules shown in main content area
     
     // Populate system links
     populateSystemLinks();
@@ -632,26 +631,6 @@ function initializeSidebar() {
         });
     }
 
-    // Rules section expand/collapse
-    const rulesHeader = document.getElementById('rulesSectionHeader');
-    const rulesSubmenu = document.getElementById('rulesSubmenu');
-    
-    if (rulesHeader && rulesSubmenu) {
-        // Load saved state
-        const rulesExpanded = localStorage.getItem('sidebar-rules-expanded') !== 'false';
-        if (rulesExpanded) {
-            rulesSubmenu.classList.add('show');
-        } else {
-            rulesHeader.classList.add('collapsed');
-        }
-
-        rulesHeader.addEventListener('click', function() {
-            const isExpanded = rulesSubmenu.classList.toggle('show');
-            rulesHeader.classList.toggle('collapsed', !isExpanded);
-            localStorage.setItem('sidebar-rules-expanded', isExpanded);
-        });
-    }
-
     // System section expand/collapse
     const systemHeader = document.getElementById('systemSectionHeader');
     const systemSubmenu = document.getElementById('systemSubmenu');
@@ -672,98 +651,77 @@ function initializeSidebar() {
         });
     }
 
-    // Theme section – with auto-collapse on selection
-    const themeHeader = document.getElementById('themeSectionHeader');
-    const themeSubmenu = document.getElementById('themeSubmenu');
-    if (themeHeader && themeSubmenu) {
-        // Optional: remember if user wants it open (default closed)
-        const expanded = localStorage.getItem('sidebar-theme-expanded') === 'true';
-        if (expanded) themeSubmenu.classList.add('show');
-        else themeHeader.classList.add('collapsed');
-
-        themeHeader.addEventListener('click', (e) => {
-            // Only toggle if not clicking inside a theme option
-            if (!e.target.closest('.theme-option')) {
-                const isExpanded = themeSubmenu.classList.toggle('show');
-                themeHeader.classList.toggle('collapsed', !isExpanded);
-                localStorage.setItem('sidebar-theme-expanded', isExpanded);
-            }
+    // Admin section (collapsed by default)
+    const adminHeader = document.getElementById('adminSectionHeader');
+    const adminSubmenu = document.getElementById('adminSubmenu');
+    if (adminHeader && adminSubmenu) {
+        const expanded = localStorage.getItem('sidebar-admin-expanded') === 'true';
+        if (expanded) {
+            adminSubmenu.classList.add('show');
+            adminHeader.classList.remove('collapsed');
+        }
+        adminHeader.addEventListener('click', () => {
+            const isExpanded = adminSubmenu.classList.toggle('show');
+            adminHeader.classList.toggle('collapsed', !isExpanded);
+            localStorage.setItem('sidebar-admin-expanded', isExpanded);
         });
     }
 
-    // Theme selection with auto-close
+    // Containers section — check Docker availability on load, expand if previously open
+    const containersHeader = document.getElementById('containersSectionHeader');
+    const containersSubmenu = document.getElementById('containersSubmenu');
+    if (containersHeader && containersSubmenu) {
+        // Always check availability (shows/hides the wrapper)
+        populateContainersSidebar();
+
+        const expanded = localStorage.getItem('sidebar-containers-expanded') === 'true';
+        if (expanded) {
+            containersSubmenu.classList.add('show');
+            containersHeader.classList.remove('collapsed');
+        }
+        containersHeader.addEventListener('click', () => {
+            const isExpanded = containersSubmenu.classList.toggle('show');
+            containersHeader.classList.toggle('collapsed', !isExpanded);
+            localStorage.setItem('sidebar-containers-expanded', isExpanded);
+            if (isExpanded) populateContainersSidebar();
+        });
+    }
+}
+
+function toggleThemeSection() {
+    const submenu = document.getElementById('themeSubmenu');
+    const chevron = document.getElementById('themeChevron');
+    if (!submenu) return;
+    const isOpen = submenu.style.maxHeight && submenu.style.maxHeight !== '0px';
+    submenu.style.maxHeight = isOpen ? '0px' : '300px';
+    if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(-180deg)';
+    localStorage.setItem('sidebar-theme-expanded', String(!isOpen));
+}
+
+// Theme option click — select and auto-close
+document.addEventListener('DOMContentLoaded', function() {
+    const themeSubmenu = document.getElementById('themeSubmenu');
+    if (themeSubmenu && localStorage.getItem('sidebar-theme-expanded') === 'true') {
+        themeSubmenu.style.maxHeight = '300px';
+        const chevron = document.getElementById('themeChevron');
+        if (chevron) chevron.style.transform = 'rotate(-180deg)';
+    }
+
     document.querySelectorAll('.theme-option').forEach(option => {
         option.addEventListener('click', function(e) {
-            e.stopPropagation(); // prevent header click from toggling
-
+            e.stopPropagation();
             const theme = this.dataset.theme;
             setTheme(theme);
             localStorage.setItem('episeerr-theme', theme);
             updateActiveTheme(theme);
-
-            // Auto-collapse after selection
-            if (themeSubmenu && themeHeader) {
-                themeSubmenu.classList.remove('show');
-                themeHeader.classList.add('collapsed');
-                localStorage.setItem('sidebar-theme-expanded', 'false');
-            }
+            const sub = document.getElementById('themeSubmenu');
+            const chev = document.getElementById('themeChevron');
+            if (sub) sub.style.maxHeight = '0px';
+            if (chev) chev.style.transform = '';
+            localStorage.setItem('sidebar-theme-expanded', 'false');
         });
     });
-}
-
-// Toggle Rules section
-function toggleRulesSection() {
-    const rulesSubmenu = document.getElementById('rulesSubmenu');
-    const rulesHeader = document.getElementById('rulesSectionHeader');
-    const isExpanded = rulesSubmenu.classList.toggle('show');
-    rulesHeader.classList.toggle('collapsed', !isExpanded);
-    localStorage.setItem('sidebar-rules-expanded', isExpanded);
-}
-
-// Populate Rules in Sidebar
-function populateRulesSidebar() {
-    const container = document.getElementById('rulesListContainer');
-    if (!container) return;
-
-    // Fetch rules from API or use page data
-    fetch('/api/rules-list')
-        .then(response => response.json())
-        .then(data => {
-            if (data.rules && data.rules.length > 0) {
-                container.innerHTML = data.rules.map(rule => {
-                    const isDefault = rule.is_default;
-                    const badgeHTML = isDefault 
-                        ? `<span class="sidebar-rule-badge default"><i class="fas fa-star"></i> Default</span>`
-                        : `<span class="sidebar-rule-badge">${rule.series_count}</span>`;
-                    
-                    return `
-                        <div class="sidebar-rule-item">
-                            <span class="sidebar-rule-name" title="${rule.description || rule.name}">${rule.display_name}</span>
-                            ${badgeHTML}
-                            <div class="sidebar-rule-actions">
-                                <a href="/edit-rule/${rule.name}" class="sidebar-rule-btn edit" title="Edit">
-                                    <i class="fas fa-edit"></i>
-                                </a>
-                                ${!isDefault ? `
-                                    <button class="sidebar-rule-btn delete" onclick="deleteRule('${rule.name}')" title="Delete">
-                                        <i class="fas fa-trash"></i>
-                                    </button>
-                                ` : ''}
-                            </div>
-                        </div>
-                    `;
-                }).join('');
-            } else {
-                container.innerHTML = '<div class="sidebar-rule-item text-muted" style="font-size: 0.85rem;">No rules configured</div>';
-            }
-        })
-        .catch(error => {
-            console.error('Error loading rules:', error);
-            container.innerHTML = '<div class="sidebar-rule-item text-muted" style="font-size: 0.85rem;">Error loading rules</div>';
-        });
-}
-
-// Populate Quick Links - Load from database
+});
 function populateSystemLinks() {
     const container = document.getElementById('systemLinksContainer');
     if (!container) return;
@@ -836,6 +794,70 @@ function populateSystemLinks() {
     });
 }
     
+// Populate Containers in Sidebar
+function populateContainersSidebar() {
+    const wrapper = document.getElementById('containersSidebarWrapper');
+    const container = document.getElementById('containersListContainer');
+    if (!container) return;
+
+    container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>';
+
+    fetch('/api/docker/media-containers')
+        .then(r => r.json())
+        .then(data => {
+            // Hide entire section if Docker not configured
+            if (!data.available) {
+                if (wrapper) wrapper.style.display = 'none';
+                return;
+            }
+            // Show section now that Docker is confirmed available
+            if (wrapper) wrapper.style.display = 'block';
+
+            if (!data.containers || data.containers.length === 0) {
+                container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2">No media containers found</div>';
+                return;
+            }
+            container.innerHTML = data.containers.map(c => {
+                const isRunning = c.status === 'running';
+                const statusDot = `<span style="
+                    width:8px; height:8px; border-radius:50%; flex-shrink:0;
+                    background:${isRunning ? '#22c55e' : '#ef4444'};
+                    display:inline-block;"></span>`;
+                return `
+                    <div class="sidebar-rule-item" style="justify-content: space-between;">
+                        <div style="display:flex; align-items:center; gap:6px; overflow:hidden;">
+                            ${statusDot}
+                            <span class="sidebar-rule-name" title="${c.name}">${c.name}</span>
+                        </div>
+                        <div style="display:flex; gap:4px; flex-shrink:0;">
+                            ${isRunning
+                                ? `<button class="sidebar-rule-btn" onclick="containerAction('${c.id}','restart')" title="Restart"><i class="fas fa-redo"></i></button>
+                                   <button class="sidebar-rule-btn delete" onclick="containerAction('${c.id}','stop')" title="Stop"><i class="fas fa-stop"></i></button>`
+                                : `<button class="sidebar-rule-btn edit" onclick="containerAction('${c.id}','start')" title="Start"><i class="fas fa-play"></i></button>`
+                            }
+                        </div>
+                    </div>`;
+            }).join('');
+        })
+        .catch(() => {
+            // On error, hide the section silently
+            if (wrapper) wrapper.style.display = 'none';
+        });
+}
+
+function containerAction(containerId, action) {
+    fetch(`/api/docker/container/${containerId}/${action}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                setTimeout(populateContainersSidebar, 1500); // refresh after action settles
+            } else {
+                alert(`Action failed: ${data.error || 'Unknown error'}`);
+            }
+        })
+        .catch(() => alert('Docker request failed'));
+}
+
 // Delete Rule Function
 function deleteRule(ruleName) {
     if (confirm(`Are you sure you want to delete the rule "${ruleName}"?`)) {
