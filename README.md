@@ -1,5 +1,5 @@
 # Episeerr
-
+⚠️ DO NOT EXPOSE TO INTERNET - Use VPN or reverse proxy with auth.  Use reponsibly at your own risk. 
 **Smart episode management for Sonarr** - Get episodes as you watch, clean up automatically when storage gets low.
 This project started as scratching my own itch - I wanted more granular series management and couldn't find exactly what I wanted. I'm not a programmer by trade, but I had a clear vision for the solution I needed. I used AI as a development tool to help implement my ideas faster, just like any other tool. The creativity, problem-solving, architecture decisions, and feature design are all mine - AI helped with code, syntax and implementation details. Although I run everything in my own production environment first, it is catered to my environment and is use at your own risk. All code is open source for anyone to review and audit. The tool has been useful for me, and I shared it in case others can benefit from it too - but I absolutely understand if some prefer to stick with established solutions.
 

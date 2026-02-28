@@ -1,5 +1,5 @@
-__version__ = "3.3.7"
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+__version__ = "3.3.8"
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
 import atexit
@@ -37,6 +37,19 @@ app = Flask(__name__)
 register_integration_blueprints(app)
 app.register_blueprint(dashboard_bp)
 
+# Session / Auth configuration
+_secret = os.getenv('SECRET_KEY')
+if not _secret:
+    app.logger.warning("SECRET_KEY not set — sessions will not survive restarts. Set SECRET_KEY env var.")
+    _secret = os.urandom(24).hex()
+app.config['SECRET_KEY'] = _secret
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_SECURE', 'false').lower() == 'true'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_DOMAIN'] = None  # Accept cookies on any domain/IP
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
+    seconds=int(os.getenv('AUTH_SESSION_TIMEOUT', '86400'))
+)
 
 
 # Load environment variables
@@ -67,6 +80,90 @@ os.makedirs(REQUESTS_DIR, exist_ok=True)
 
 LAST_PROCESSED_FILE = os.path.join(os.getcwd(), 'data', 'last_processed.json')
 os.makedirs(os.path.dirname(LAST_PROCESSED_FILE), exist_ok=True)
+
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+# Endpoints that are always accessible without authentication
+_AUTH_EXEMPT_ENDPOINTS = {
+    'login',
+    'logout',
+    'static',
+    'process_sonarr_webhook',
+    'handle_server_webhook',
+}
+
+
+@app.before_request
+def check_authentication():
+    """Global authentication gate. Skipped when REQUIRE_AUTH != 'true'."""
+    if not os.getenv('REQUIRE_AUTH', 'false').lower() == 'true':
+        return None
+
+    if os.getenv('AUTH_BYPASS_LOCALHOST', 'true').lower() == 'true':
+        if request.remote_addr in ('127.0.0.1', '::1'):
+            return None
+
+    # endpoint is None when URL doesn't match any route (404)
+    if not request.endpoint or request.endpoint in _AUTH_EXEMPT_ENDPOINTS:
+        return None
+
+    if not session.get('authenticated'):
+        # API paths and AJAX calls always get 401, never a redirect
+        if (request.path.startswith('/api/')
+                or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                or request.is_json):
+            return jsonify({'error': 'Unauthorized', 'redirect': url_for('login')}), 401
+        return redirect(url_for('login', next=request.url))
+
+    return None
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page using username/password authentication."""
+    if not os.getenv('REQUIRE_AUTH', 'false').lower() == 'true':
+        return redirect(url_for('index'))
+
+    if session.get('authenticated'):
+        next_url = request.args.get('next')
+        return redirect(next_url or url_for('index'))
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+
+        valid_username = os.getenv('AUTH_USERNAME', 'admin')
+        valid_password = os.getenv('AUTH_PASSWORD', '')
+
+        if not valid_password:
+            return render_template('login.html',
+                                   error='Authentication not configured — set AUTH_PASSWORD environment variable',
+                                   username=username)
+
+        if username == valid_username and password == valid_password:
+            session['authenticated'] = True
+            session['username'] = username
+            session.permanent = True
+            app.logger.info(f"Successful login for user '{username}' from {request.remote_addr}")
+            next_url = request.args.get('next')
+            return redirect(next_url or url_for('index'))
+
+        app.logger.warning(f"Failed login attempt for user '{username}' from {request.remote_addr}")
+        return render_template('login.html',
+                               error='Invalid username or password',
+                               username=username)
+
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    """Clear session and redirect to login."""
+    session.clear()
+    return redirect(url_for('login'))
 
 
 def reload_module_configs():
