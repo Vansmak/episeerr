@@ -511,6 +511,14 @@
 
             <div class="sidebar-divider"></div>
 
+            <!-- Logout (only shown when auth is active) -->
+            {% if session.authenticated %}
+            <a href="{{ url_for('logout') }}" class="sidebar-nav-item" title="Sign out">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>Logout</span>
+            </a>
+            {% endif %}
+
             <!-- Admin Section (Expandable, collapsed by default) -->
             <div class="sidebar-section">
                 <div class="sidebar-section-header collapsed" id="adminSectionHeader">

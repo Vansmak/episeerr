@@ -19,4 +19,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=INFO
+      - REQUIRE_AUTH=true
+      - AUTH_USERNAME=admin
+      - AUTH_PASSWORD=Spartan28ep
+      - SECRET_KEY=4e2be33638803192fc4faedb558d9282367bb249a2624824f4a2c5f9ba024c9b
+      #- AUTH_BYPASS_LOCALHOST=true
+      #- AUTH_SESSION_TIMEOUT=86400
+      #- SESSION_SECURE=false
     

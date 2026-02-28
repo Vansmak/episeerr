@@ -1,56 +1,30 @@
 # Changelog
 
 ## [Unreleased / Dev]
-###Version 3.3.7
-⚠️ BREAKING CHANGES
 
-Webhook URLs Changed: Integration refactor requires updating webhook URLs in external services
+### v3.3.8 
 
-Jellyfin: http://episeerr:5002/jellyfin-webhook → http://episeerr:5002/api/integration/jellyfin/webhook
-Emby: http://episeerr:5002/emby-webhook → http://episeerr:5002/api/integration/emby/webhook
-Jellyseerr/Overseerr: http://episeerr:5002/seerr-webhook → http://episeerr:5002/api/integration/seerr/webhook
-Old webhook routes have been removed - update your configurations or webhooks will fail
+⚠️ **BREAKING CHANGES**
+- **Webhook URLs Changed** - Update webhook configurations:
+  - Jellyfin: `/jellyfin-webhook` → `/api/integration/jellyfin/webhook`
+  - Emby: `/emby-webhook` → `/api/integration/emby/webhook`
+  - Jellyseerr: `/seerr-webhook` → `/api/integration/seerr/webhook`
 
-### 🏗️ Architecture Refactor - Integration 
+🏗️ **Integrations Refactor**
+- Jellyfin, Emby, and Jellyseerr migrated to modular integration system (~1500 lines refactored)
+- Self-contained integration modules with auto-discovery
+- Easier maintenance and future extensibility
 
-- **Modular Integration System**: Migrated Jellyfin, Emby, and Jellyseerr/Overseerr to self-contained integration modules
-  - ~1500 lines refactored from core files into clean, modular integrations
-  - Each integration is self-contained: webhook handlers, polling logic, config, setup UI
-  - New webhook endpoints: `/api/integration/jellyfin/webhook`, `/api/integration/emby/webhook`, `/api/integration/seerr/webhook`
-  - Easier maintenance: change one integration without touching others
-  - Template for future integrations
-- **Jellyfin Integration** (668 lines):
-  - Both polling and progress modes supported
-  - Webhook-triggered polling: polls only active sessions
-  - Drift correction: auto-syncs config with Sonarr tags
-  - Duplicate prevention with shared tracking
-- **Emby Integration** (582 lines):
-  - Polling mode only (Emby has no PlaybackProgress event)
-  - Webhook-triggered session polling
-  - Optional user filtering or monitor all users
-  - Shared episode tracking with Jellyfin
-- **Seerr Integration** (315 lines):
-  - Webhook receiver for Jellyseerr/Overseerr requests
-  - Request tracking with TMDB poster fetching
-  - Auto-deletion after episode processing
-  - Pending request management
+🔐 **Security**
+- Optional password authentication
+- Session-based login with configurable timeout (default 24 hours)
+- Localhost bypass for admin access
+- Environment variables: `REQUIRE_AUTH`, `AUTH_USERNAME`, `AUTH_PASSWORD`
 
-### 🎨 UI/UX Improvements
-- **System Links Reorganization**: Clearer categorization of services and integrations
-  - **Required Services**: Sonarr (always needed)
-  - **Media Server**: Shows all configured media servers (Plex via Tautulli, Jellyfin, Emby)
-  - **Optional Integrations**: Auto-populated from configured integrations (Plex watchlist, Jellyseerr, Docker, etc.)
-  - **Custom Links**: Manual bookmarks only (integrations no longer auto-add here)
-  - Sidebar matches setup page organization
-- **Plex Integration Clarification**: Plex appears in both Media Server (via Tautulli for webhooks) and Optional Integrations (for watchlist/widgets)
-
-### 🔧 Technical Changes
-- Integration discovery system auto-loads all `.py` files in `/integrations/` folder
-- Integration blueprints auto-register routes
-- Removed legacy webhook routes from core (`/jellyfin-webhook`, `/emby-webhook`, `/seerr-webhook`)
-- Removed hardcoded setup forms (now auto-generated from integration `get_setup_fields()`)
-- Improved form field rendering with detailed help text
-- Added polling status debug endpoints for each media server
+🎨 **UI/UX**
+- Reorganized System Links with clearer categories (Required Services, Media Servers, Optional Integrations, Custom Links)
+- Docker integration now supports optional web UI URL
+- All configured media servers shown (Plex, Jellyfin, Emby)
 
 ### v3.3.6 - 2026-02-25
 - **Sidebar**
