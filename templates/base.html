@@ -402,6 +402,22 @@
         border: 1px solid var(--border-color, #2d3142);
         flex-shrink: 0;
     }
+
+    /* Sidebar quick-links group headers */
+    .sidebar-link-group-header {
+        padding: 4px 12px 2px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted, #6b7280);
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+    .sidebar-link-group-header i {
+        font-size: 0.6rem;
+    }
 </style></head>
 <body>
     <!-- Mobile Navbar (Hidden on Desktop) -->
@@ -494,6 +510,14 @@
             </div>
 
             <div class="sidebar-divider"></div>
+
+            <!-- Logout (only shown when auth is active) -->
+            {% if session.authenticated %}
+            <a href="{{ url_for('logout') }}" class="sidebar-nav-item" title="Sign out">
+                <i class="fas fa-sign-out-alt"></i>
+                <span>Logout</span>
+            </a>
+            {% endif %}
 
             <!-- Admin Section (Expandable, collapsed by default) -->
             <div class="sidebar-section">
@@ -728,70 +752,87 @@ function populateSystemLinks() {
 
     container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>';
 
-    // Fetch both services and custom links
     Promise.all([
-        fetch('/api/services-sidebar').then(r => r.json()).catch(() => ({status: 'error', services: []})),
+        fetch('/api/media-server').then(r => r.json()).catch(() => []),
+        fetch('/api/optional-integrations').then(r => r.json()).catch(() => []),
         fetch('/api/quick-links').then(r => r.json()).catch(() => ({status: 'error', links: []}))
     ])
-    .then(([servicesData, linksData]) => {
-        const allLinks = [];
-        const serviceIds = new Set(); // Track IDs to prevent duplicates
-        
-        // Add configured integration services
-        if (servicesData.status === 'success' && servicesData.services) {
-            servicesData.services.forEach(service => {
-                allLinks.push(service);
-                serviceIds.add(service.id); // Track by ID not URL
-            });
-        }
-        
-        // Add custom quick links that aren't already in services (by ID)
-        if (linksData.status === 'success' && linksData.links) {
-            linksData.links.forEach(link => {
-                if (!serviceIds.has(link.id)) {
-                    allLinks.push(link);
-                }
-            });
-        }
-        
-        if (allLinks.length > 0) {
-            container.innerHTML = allLinks.map(link => {
-                const isImageIcon = link.icon && (link.icon.startsWith('http') || link.icon.startsWith('/'));
-                const iconHtml = isImageIcon 
-                    ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
-                    : `<i class="${link.icon || 'fas fa-link'}"></i>`;
-                
-                if (link.open_in_iframe) {
-                    // Use the quick link ID route
-                    return `
-                        <a href="/iframe/${link.id}" class="sidebar-rule-item" title="${link.name}">
-                            ${iconHtml}
-                            <span class="sidebar-rule-name">${link.name}</span>
-                        </a>
-                    `;
-                } else {
-                    return `
-                        <a href="${link.url}" target="_blank" class="sidebar-rule-item" title="${link.name}">
-                            ${iconHtml}
-                            <span class="sidebar-rule-name">${link.name}</span>
-                            <i class="fas fa-external-link-alt ms-1" style="font-size: 0.7rem; opacity: 0.6;"></i>
-                        </a>
-                    `;
-                }
-            }).join('');
+    .then(([mediaServer, optionalIntegrations, linksData]) => {
+        let html = '';
+        // Track rendered URLs to prevent duplicates across all sections
+        const shownUrls = new Set();
+
+        // ── Required Services ──────────────────────────────────────────
+        const sonarrLink = (linksData.links || []).find(l => l.name === 'Sonarr');
+        if (sonarrLink) {
+            html += renderSidebarLink(sonarrLink);
+            shownUrls.add(sonarrLink.url);
         } else {
-            container.innerHTML = `
-                <div class="sidebar-rule-item text-muted small py-2">
-                    No services configured
-                    <a href="/setup" style="color: var(--accent-color);">Configure in Setup</a>
-                </div>
-            `;
+            html += `<div class="sidebar-rule-item text-muted small">Sonarr not configured</div>`;
         }
+
+        // ── Media Servers ──────────────────────────────────────────────
+        if (mediaServer && mediaServer.length > 0) {
+            mediaServer.forEach(server => {
+                if (!shownUrls.has(server.url)) {
+                    const iconHtml = `<img src="${server.icon}" alt="${server.name}" class="sidebar-icon-img" />`;
+                    html += `<a href="${server.url}" target="_blank" class="sidebar-rule-item" title="${server.name}">
+                                ${iconHtml}
+                                <span class="sidebar-rule-name">${server.name}</span>
+                                <i class="fas fa-external-link-alt ms-1" style="font-size:0.7rem;opacity:0.6;"></i>
+                             </a>`;
+                    shownUrls.add(server.url);
+                }
+            });
+        }
+
+        // ── Optional Integrations ──────────────────────────────────────
+        if (optionalIntegrations && optionalIntegrations.length > 0) {
+            optionalIntegrations.forEach(integration => {
+                if (!shownUrls.has(integration.url)) {
+                    html += renderSidebarLink(integration);
+                    shownUrls.add(integration.url);
+                }
+            });
+        }
+
+        // ── Custom Bookmarks ───────────────────────────────────────────
+        // Exclude system-managed names and any URL already rendered above
+        const systemNames = new Set(['Sonarr', 'Tautulli']);
+        const customLinks = (linksData.links || []).filter(l =>
+            !systemNames.has(l.name) && !shownUrls.has(l.url)
+        );
+        customLinks.forEach(link => { html += renderSidebarLink(link); });
+
+        container.innerHTML = html || `
+            <div class="sidebar-rule-item text-muted small py-2">
+                No services configured
+                <a href="/setup" style="color: var(--accent-color);">Configure in Setup</a>
+            </div>`;
     })
     .catch(err => {
         console.error('Error loading quick links:', err);
         container.innerHTML = '<div class="sidebar-rule-item text-muted small py-2">Error loading links</div>';
     });
+}
+
+function renderSidebarLink(link) {
+    const isImageIcon = link.icon && (link.icon.startsWith('http') || link.icon.startsWith('/'));
+    const iconHtml = isImageIcon
+        ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
+        : `<i class="${link.icon || 'fas fa-link'}"></i>`;
+    if (link.open_in_iframe) {
+        const href = link.iframe_url || `/iframe/${link.id}`;
+        return `<a href="${href}" class="sidebar-rule-item" title="${link.name}">
+                    ${iconHtml}
+                    <span class="sidebar-rule-name">${link.name}</span>
+                </a>`;
+    }
+    return `<a href="${link.url}" target="_blank" class="sidebar-rule-item" title="${link.name}">
+                ${iconHtml}
+                <span class="sidebar-rule-name">${link.name}</span>
+                <i class="fas fa-external-link-alt ms-1" style="font-size:0.7rem;opacity:0.6;"></i>
+            </a>`;
 }
     
 // Populate Containers in Sidebar

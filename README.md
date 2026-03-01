@@ -128,7 +128,7 @@ services:
       # --- Jellyfin: uncomment Option A OR Option B, not both ---
       #
       # Option A: Real-time (Jellyfin sends PlaybackProgress webhooks)
-      #   Configure in Jellyfin: http://<episeerr>:5002/jellyfin-webhook
+      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
       #   Notification type: PlaybackProgress
       #
       # - JELLYFIN_URL=http://your-jellyfin:8096
@@ -138,7 +138,7 @@ services:
       # - JELLYFIN_TRIGGER_MAX=55.0
       #
       # Option B: Polling (Jellyfin sends PlaybackStart, Episeerr polls /Sessions)
-      #   Configure in Jellyfin: http://<episeerr>:5002/jellyfin-webhook
+      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
       #   Notification type: PlaybackStart
       #
       # - JELLYFIN_URL=http://your-jellyfin:8096
@@ -149,7 +149,7 @@ services:
 
       # --- Emby: uncomment to enable ---
       #   Configure in Emby: User Prefs → Notifications → Webhooks
-      #   URL: http://<episeerr>:5002/emby-webhook
+      #   URL: http://<episeerr>:5002/api/integration/emby/webhook
       #   Events: playback.start, playback.stop
       #
       # - EMBY_URL=http://your-emby:8096
@@ -166,6 +166,15 @@ services:
       # OR
       - OVERSEERR_URL=http://your-overseerr:5055
       - OVERSEERR_API_KEY=your_overseerr_key
+      
+      # ============================================
+      # OPTIONAL - Authentication (Security)
+      # ============================================
+      # Uncomment to enable password protection:
+      # - REQUIRE_AUTH=true
+      # - AUTH_USERNAME=admin
+      # - AUTH_PASSWORD=your-password-here
+      # - SECRET_KEY=generate-random-key  # Optional: auto-generated if not set
       
       # ============================================
       # OPTIONAL - Quick Links in Sidebar
@@ -297,10 +306,23 @@ Create `/boot/config/plugins/community.applications/private/episeerr/my-episeerr
 | `EMBY_USER_ID` | ⚠️ Required if using emby | Your EMBY username |
 | `EMBY_URL` | ❌ Optional | For request integration |
 | `EMBY_API_KEY` | ❌ Optional | EMBY API key |
+
+**Authentication (Optional):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REQUIRE_AUTH` | `false` | Enable password authentication |
+| `AUTH_USERNAME` | `admin` | Login username |
+| `AUTH_PASSWORD` | - | Login password (required if auth enabled) |
+| `SECRET_KEY` | Auto-generated | Session encryption key (optional, auto-generated if not set) |
+| `AUTH_BYPASS_LOCALHOST` | `true` | Skip authentication for localhost access |
+| `AUTH_SESSION_TIMEOUT` | `86400` | Session timeout in seconds (24 hours) |
+
 **⚠️ Important Notes:**
 - TMDB requires the **Read Access Token**, not the API key v3
 - Jellyfin **requires** `JELLYFIN_USER_ID` to be set to your username
 - All URLs should NOT have trailing slashes
+- **Security:** If exposing Episeerr beyond your local network, enable `REQUIRE_AUTH` or use a reverse proxy with authentication (Cloudflare Access, Authelia, etc.)
 
 ---
 Dashboard Integrations
@@ -549,7 +571,7 @@ Jellyfin sends a webhook on every progress update. Episeerr fires once when prog
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
 2. **Configure:**
    - **Webhook Name:** Episeerr Episode Tracking
-   - **Webhook URL:** `http://your-episeerr:5002/jellyfin-webhook`
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/jellyfin/webhook`
    - **Notification Type:** Select ONLY **"Playback Progress"**
    - **User Filter:** Your username (recommended)
    - **Item Type:** Episodes
@@ -583,7 +605,7 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
 **Webhook Setup:**
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
 2. **Configure:**
-   - **Webhook URL:** `http://your-episeerr:5002/jellyfin-webhook`
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/jellyfin/webhook`
    - **Notification Type:** Select **"Session Start"**
    - **User Filter:** Your username
    - **Item Type:** Episodes
@@ -647,7 +669,7 @@ Emby doesn't send continuous progress webhooks like Jellyfin's PlaybackProgress,
 1. **Emby** → User Preferences (top-right avatar) → Notifications → Webhooks → Add Webhook
 2. **Configure:**
    - **Webhook Name:** Episeerr Episode Tracking
-   - **Webhook URL:** `http://your-episeerr:5002/emby-webhook`
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/emby/webhook`
    - **Events:** Enable **"playback.start"** and **"playback.stop"**
    - *(No item type filter in Emby — it sends all events; Episeerr filters to Episodes internally)*
 3. **Save**
@@ -689,7 +711,7 @@ docker logs episeerr | grep "Processing Emby"
 1. **Jellyseerr/Overseerr** → Settings → Notifications → Webhooks
 
 2. **Add Webhook:**
-   - **Webhook URL:** `http://your-episeerr:5002/seerr-webhook`
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/seerr/webhook`
    - **Notification Types:** Enable "Request Approved"
 
 3. **Save**
@@ -1160,9 +1182,9 @@ docker logs episeerr | grep "Received.*webhook" | tail -20
 **Verify webhook URLs:**
 - Sonarr: `http://episeerr:5002/sonarr-webhook`
 - Tautulli: `http://episeerr:5002/webhook`
-- Jellyfin: `http://episeerr:5002/jellyfin-webhook`
-- Emby: `http://episeerr:5002/emby-webhook`
-- Jellyseerr: `http://episeerr:5002/seerr-webhook`
+- Jellyfin: `http://episeerr:5002/api/integration/jellyfin/webhook`
+- Emby: `http://episeerr:5002/api/integration/emby/webhook`
+- Jellyseerr: `http://episeerr:5002/api/integration/seerr/webhook`
 
 > **Configuration:** Use the `/setup` page to configure services with URLs and API keys (recommended), or use environment variables.
 

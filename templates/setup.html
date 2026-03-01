@@ -103,241 +103,13 @@
     <!-- Media Server Section -->
     <div class="row mb-3">
         <div class="col-12">
-            <h5><i class="fas fa-film me-2"></i>Media Server <small class="text-muted">(Choose One)</small></h5>
+            <h5><i class="fas fa-film me-2"></i>Media Server <small class="text-muted">(See below for other servers, Jellyfin or Emby)</small></h5>
         </div>
     </div>
 
-    <!-- Jellyfin -->
-    <div class="row mb-3">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="mb-0">
-                            <i class="fas fa-play-circle me-2"></i>Jellyfin
-                            {% if jellyfin_connected %}
-                                <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
-                            {% else %}
-                                <span class="badge bg-secondary ms-2">Not Connected</span>
-                            {% endif %}
-                        </h6>
-                    </div>
-                    <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#jellyfin-config">
-                        <i class="fas fa-cog"></i>
-                    </button>
-                </div>
-                <div id="jellyfin-config" class="collapse">
-                    <div class="card-body">
-                        <form id="jellyfin-form">
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <label for="jellyfin-url" class="form-label">URL</label>
-                                    <input type="url" class="form-control" id="jellyfin-url" name="jellyfin-url"
-                                           placeholder="http://192.168.1.100:8096" value="{{ jellyfin_url or '' }}">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="jellyfin-apikey" class="form-label">API Key</label>
-                                    <input type="text" class="form-control" id="jellyfin-apikey" name="jellyfin-apikey"
-                                           placeholder="API Key" value="{{ jellyfin_apikey or '' }}">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="jellyfin-userid" class="form-label">User ID</label>
-                                    <input type="text" class="form-control" id="jellyfin-userid" name="jellyfin-userid"
-                                           placeholder="Username" value="{{ jellyfin_userid or '' }}">
-                                </div>
-                            </div>
-                            
-                            <div class="card bg-dark border-secondary mb-3">
-                                <div class="card-body">
-                                    <h6><i class="fas fa-satellite-dish me-2"></i>Detection Method</h6>
-                                    
-                                    <!-- OPTION 1: Webhook-Triggered Polling (RECOMMENDED) -->
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="radio" name="jellyfin-method" 
-                                               id="jellyfin-polling" value="polling" checked>
-                                        <label class="form-check-label" for="jellyfin-polling">
-                                            <strong>Webhook-Triggered Polling</strong> <span class="badge bg-success">Recommended</span>
-                                            <br><small class="text-muted">Webhook fires on playback start, then Episeerr polls only that session until threshold reached</small>
-                                        </label>
-                                    </div>
-                                    <div class="row ms-4 mb-3" id="jellyfin-polling-settings">
-                                        <div class="col-md-6 mb-2">
-                                            <label for="jellyfin-poll-interval" class="form-label">Poll Interval (seconds)</label>
-                                            <input type="number" class="form-control form-control-sm" 
-                                                   id="jellyfin-poll-interval" name="jellyfin-poll-interval"
-                                                   value="{{ jellyfin_poll_interval or '900' }}" min="300" step="60">
-                                            <small class="text-muted">Recommended: 900 (15 min). Min: 300 (5 min)</small>
-                                        </div>
-                                        <div class="col-md-6 mb-2">
-                                            <label for="jellyfin-trigger-percent" class="form-label">Trigger %</label>
-                                            <input type="number" class="form-control form-control-sm" 
-                                                   id="jellyfin-trigger-percent" name="jellyfin-trigger-percent"
-                                                   value="{{ jellyfin_trigger_percent or '50.0' }}" 
-                                                   step="0.1" min="0" max="100">
-                                        </div>
-                                    </div>
-                                    
-                                    <!-- OPTION 2: PlaybackProgress (Real-time spam) -->
-                                    <div class="form-check mb-2">
-                                        <input class="form-check-input" type="radio" name="jellyfin-method" 
-                                               id="jellyfin-progress" value="progress">
-                                        <label class="form-check-label" for="jellyfin-progress">
-                                            <strong>PlaybackProgress</strong> <span class="badge bg-warning text-dark">Advanced</span>
-                                            <br><small class="text-muted">Jellyfin sends constant webhooks during playback. Processes once in threshold range.</small>
-                                        </label>
-                                    </div>
-                                    <div class="row ms-4" id="jellyfin-progress-settings" style="display: none;">
-                                        <div class="col-md-6 mb-2">
-                                            <label for="jellyfin-trigger-min" class="form-label">Min %</label>
-                                            <input type="number" class="form-control form-control-sm" 
-                                                   id="jellyfin-trigger-min" name="jellyfin-trigger-min"
-                                                   value="{{ jellyfin_trigger_min or '50.0' }}" 
-                                                   step="0.1" min="0" max="100">
-                                        </div>
-                                        <div class="col-md-6 mb-2">
-                                            <label for="jellyfin-trigger-max" class="form-label">Max %</label>
-                                            <input type="number" class="form-control form-control-sm" 
-                                                   id="jellyfin-trigger-max" name="jellyfin-trigger-max"
-                                                   value="{{ jellyfin_trigger_max or '55.0' }}" 
-                                                   step="0.1" min="0" max="100">
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="alert alert-info mt-3 mb-0">
-                                        <small><strong>Webhook Setup:</strong><br>
-                                        In Jellyfin → Dashboard → Plugins → Notifications → Webhook:<br>
-                                        • <strong>For Polling mode:</strong> Enable <code>PlaybackStart</code> and <code>PlaybackStop</code><br>
-                                        &nbsp;&nbsp;→ Start fires once, triggers polling every 15 min until threshold<br>
-                                        &nbsp;&nbsp;→ Stop is a safety net - checks final % in case polling hasn't caught it yet<br>
-                                        • <strong>For Progress mode:</strong> Enable only <code>PlaybackProgress</code><br>
-                                        &nbsp;&nbsp;→ Jellyfin sends constant updates, processes once when in threshold range<br>
-                                        • URL: <code>http://&lt;episeerr-ip&gt;:5002/jellyfin-webhook</code></small>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <!-- Iframe Option -->
-                            <div class="mb-3">
-                                <div class="form-check">
-                                    <input type="checkbox" class="form-check-input" id="jellyfin-open_in_iframe" name="jellyfin-open_in_iframe">
-                                    <label class="form-check-label" for="jellyfin-open_in_iframe">
-                                        Open in Episeerr sidebar (iframe)
-                                    </label>
-                                    <small class="form-text text-muted d-block">
-                                        When checked, this service will open inside Episeerr instead of a new tab
-                                    </small>
-                                </div>
-                            </div>
-                            
-                            <div class="d-flex justify-content-between">
-                                <button type="button" class="btn btn-secondary" onclick="testConnection('jellyfin')">
-                                    <i class="fas fa-plug me-1"></i>Test
-                                </button>
-                                <button type="submit" class="btn btn-success">
-                                    <i class="fas fa-save me-1"></i>Save
-                                </button>
-                            </div>
-                            <div id="jellyfin-test-result" class="mt-3" style="display: none;"></div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    <!-- Emby -->
-    <div class="row mb-3">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="mb-0">
-                            <i class="fas fa-play-circle me-2"></i>Emby
-                            {% if emby_connected %}
-                                <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
-                            {% else %}
-                                <span class="badge bg-secondary ms-2">Not Connected</span>
-                            {% endif %}
-                        </h6>
-                    </div>
-                    <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#emby-config">
-                        <i class="fas fa-cog"></i>
-                    </button>
-                </div>
-                <div id="emby-config" class="collapse">
-                    <div class="card-body">
-                        <form id="emby-form">
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <label for="emby-url" class="form-label">URL</label>
-                                    <input type="url" class="form-control" id="emby-url" name="emby-url"
-                                           placeholder="http://192.168.1.100:8096" value="{{ emby_url or '' }}">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="emby-apikey" class="form-label">API Key</label>
-                                    <input type="text" class="form-control" id="emby-apikey" name="emby-apikey"
-                                           placeholder="API Key" value="{{ emby_apikey or '' }}">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="emby-userid" class="form-label">User ID</label>
-                                    <input type="text" class="form-control" id="emby-userid" name="emby-userid"
-                                           placeholder="Username" value="{{ emby_userid or '' }}">
-                                </div>
-                            </div>
-                            
-                            <div class="card bg-dark border-secondary mb-3">
-                                <div class="card-body">
-                                    <h6><i class="fas fa-satellite-dish me-2"></i>Polling Settings</h6>
-                                    <small class="text-muted d-block mb-3">Webhook fires on playback start, then Episeerr polls only that session until threshold reached</small>
-                                    <div class="row">
-                                        <div class="col-md-6 mb-2">
-                                            <label for="emby-poll-interval" class="form-label">Poll Interval (seconds)</label>
-                                            <input type="number" class="form-control" id="emby-poll-interval" name="emby-poll-interval"
-                                                   value="{{ emby_poll_interval or '900' }}" min="300" step="60">
-                                                    <small class="text-muted">Recommended: 900 (15 min). Min: 300 (5 min)</small>
-                                        </div>
-                                        <div class="col-md-6 mb-2">
-                                            <label for="emby-trigger-percent" class="form-label">Trigger %</label>
-                                            <input type="number" class="form-control" id="emby-trigger-percent" name="emby-trigger-percent"
-                                                   value="{{ emby_trigger_percent or '50.0' }}" step="0.1" min="0" max="100">
-                                        </div>
-                                        <div class="alert alert-info mt-3 mb-0">
-                                        <small><strong>Webhook Setup:</strong><br>
-                                        In Emby → Settings → Webhooks:<br>
-                                        • Enable: <code>playback.start</code> and <code>playback.stop</code><br>
-                                        &nbsp;&nbsp;→ Start fires once, triggers polling every 15 min until threshold<br>
-                                        &nbsp;&nbsp;→ Stop is a safety net - checks final % in case polling hasn't caught it yet<br>
-                                        • URL: <code>http://&lt;episeerr-ip&gt;:5002/emby-webhook</code></small>
-                                    
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Iframe Option -->
-                            <div class="mb-3">
-                                <div class="form-check">
-                                    <input type="checkbox" class="form-check-input" id="emby-open_in_iframe" name="emby-open_in_iframe">
-                                    <label class="form-check-label" for="emby-open_in_iframe">
-                                        Open in Episeerr sidebar (iframe)
-                                    </label>
-                                    <small class="form-text text-muted d-block">
-                                        When checked, this service will open inside Episeerr instead of a new tab
-                                    </small>
-                                </div>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <button type="button" class="btn btn-secondary" onclick="testConnection('emby')">
-                                    <i class="fas fa-plug me-1"></i>Test
-                                </button>
-                                <button type="submit" class="btn btn-success">
-                                    <i class="fas fa-save me-1"></i>Save
-                                </button>
-                            </div>
-                            <div id="emby-test-result" class="mt-3" style="display: none;"></div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
+    
+
+    
 
     <!-- Plex/Tautulli -->
     <div class="row mb-4">
@@ -409,68 +181,6 @@
         </div>
     </div>
 
-    <!-- Jellyseerr -->
-    <div class="row mb-3">
-        <div class="col-12">
-            <div class="card">
-                <div class="card-header d-flex justify-content-between align-items-center">
-                    <div>
-                        <h6 class="mb-0">
-                            <i class="fas fa-ticket-alt me-2"></i>Jellyseerr/Overseerr
-                            {% if jellyseerr_connected %}
-                                <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
-                            {% else %}
-                                <span class="badge bg-secondary ms-2">Optional</span>
-                            {% endif %}
-                        </h6>
-                        <small class="text-muted">Removes requests when Episeerr tags detected</small>
-                    </div>
-                    <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#jellyseerr-config">
-                        <i class="fas fa-cog"></i>
-                    </button>
-                </div>
-                <div id="jellyseerr-config" class="collapse">
-                    <div class="card-body">
-                        <form id="jellyseerr-form">
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="jellyseerr-url" class="form-label">URL</label>
-                                    <input type="url" class="form-control" id="jellyseerr-url" name="jellyseerr-url"
-                                           placeholder="http://192.168.1.100:5055" value="{{ jellyseerr_url or '' }}">
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="jellyseerr-apikey" class="form-label">API Key</label>
-                                    <input type="text" class="form-control" id="jellyseerr-apikey" name="jellyseerr-apikey"
-                                           placeholder="API Key" value="{{ jellyseerr_apikey or '' }}">
-                                </div>
-                            </div>
-                            <!-- Iframe Option -->
-                            <div class="mb-3">
-                                <div class="form-check">
-                                    <input type="checkbox" class="form-check-input" id="jellyseerr-open_in_iframe" name="jellyseerr-open_in_iframe">
-                                    <label class="form-check-label" for="jellyseerr-open_in_iframe">
-                                        Open in Episeerr sidebar (iframe)
-                                    </label>
-                                    <small class="form-text text-muted d-block">
-                                        When checked, this service will open inside Episeerr instead of a new tab
-                                    </small>
-                                </div>
-                            </div>
-                            <div class="d-flex justify-content-between">
-                                <button type="button" class="btn btn-secondary" onclick="testConnection('jellyseerr')">
-                                    <i class="fas fa-plug me-1"></i>Test
-                                </button>
-                                <button type="submit" class="btn btn-success">
-                                    <i class="fas fa-save me-1"></i>Save
-                                </button>
-                            </div>
-                            <div id="jellyseerr-test-result" class="mt-3" style="display: none;"></div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
     <!-- TMDB -->
     <div class="row mb-4">
         <div class="col-12">
@@ -516,10 +226,10 @@
             </div>
         </div>
     </div>
-    <!-- Dashboard Integrations (AUTO-GENERATED) -->
+    <!-- Integrations (AUTO-GENERATED) -->
     <div class="row mb-3">
         <div class="col-12">
-            <h4><i class="fas fa-puzzle-piece text-info me-2"></i>Dashboard Integrations</h4>
+            <h4><i class="fas fa-puzzle-piece text-info me-2"></i>Integrations</h4>
         </div>
     </div>
 
@@ -562,13 +272,12 @@
                                 {% endfor %}
                             </div>
                             
-                            <!-- Iframe Option — hidden for integrations without a web URL (e.g. Docker) -->
-                            {% if not integration.service_name == 'docker' %}
+                            <!-- Iframe Option -->
                             <div class="mb-3">
                                 <div class="form-check">
-                                    <input type="checkbox" 
-                                        class="form-check-input" 
-                                        id="{{ integration.service_name }}-open_in_iframe" 
+                                    <input type="checkbox"
+                                        class="form-check-input"
+                                        id="{{ integration.service_name }}-open_in_iframe"
                                         name="{{ integration.service_name }}-open_in_iframe"
                                         {% if integration_configs[integration.service_name].saved_values.get('open_in_iframe') %}checked{% endif %}>
                                     <label class="form-check-label" for="{{ integration.service_name }}-open_in_iframe">
@@ -579,7 +288,6 @@
                                     </small>
                                 </div>
                             </div>
-                            {% endif %}
                             
                             {% if integration.get_custom_setup_html is defined %}
                                 {{ integration.get_custom_setup_html(integration_configs[integration.service_name].saved_values) | safe }}
@@ -617,58 +325,58 @@
                     <h6 class="mb-0"><i class="fas fa-external-link-alt me-2"></i>Configured Links</h6>
                 </div>
                 <div class="card-body">
-                    <!-- Connected Services (Auto-generated) -->
+
+                    <!-- Required Services -->
                     <div class="mb-4">
-                        <h6 class="text-muted mb-3">Connected Services</h6>
-                        <div id="service-links" class="d-flex flex-wrap gap-2">
+                        <h6 class="text-muted mb-2">
+                            <i class="fas fa-star text-danger me-1"></i>Required Services
+                        </h6>
+                        <div class="d-flex flex-wrap gap-2">
                             {% if sonarr_connected %}
                             <a href="{{ sonarr_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
-                                <i class="fas fa-tv me-1"></i>Sonarr
+                                <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" width="16" height="16" class="me-1" alt="Sonarr">Sonarr
                             </a>
-                            {% endif %}
-                            {% if jellyfin_connected %}
-                            <a href="{{ jellyfin_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
-                                <i class="fas fa-film me-1"></i>Jellyfin
-                            </a>
-                            {% endif %}
-                            {% if emby_connected %}
-                            <a href="{{ emby_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
-                                <i class="fas fa-film me-1"></i>Emby
-                            </a>
-                            {% endif %}
-                            {% if tautulli_connected %}
-                            <a href="{{ tautulli_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
-                                <i class="fas fa-chart-line me-1"></i>Tautulli
-                            </a>
-                            {% endif %}
-                            {% if jellyseerr_connected %}
-                            <a href="{{ jellyseerr_url }}" target="_blank" class="btn btn-outline-primary btn-sm">
-                                <i class="fas fa-ticket-alt me-1"></i>Jellyseerr
-                            </a>
-                            {% endif %}
-                            
-                            {% if not (sonarr_connected or jellyfin_connected or emby_connected or tautulli_connected or jellyseerr_connected) %}
-                            <p class="text-muted mb-0">
-                                <i class="fas fa-info-circle me-1"></i>
-                                No external services configured in .env
-                            </p>
+                            {% else %}
+                            <span class="text-muted small"><i class="fas fa-exclamation-triangle text-warning me-1"></i>Sonarr not configured</span>
                             {% endif %}
                         </div>
                     </div>
 
-                    <!-- Custom Quick Links -->
+                    <!-- Media Server -->
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-2">
+                            <i class="fas fa-film me-1"></i>Media Server
+                        </h6>
+                        <div id="media-server-link" class="d-flex flex-wrap gap-2">
+                            <span class="text-muted small"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</span>
+                        </div>
+                    </div>
+
+                    <!-- Optional Integrations -->
+                    <div class="mb-4">
+                        <h6 class="text-muted mb-2">
+                            <i class="fas fa-puzzle-piece me-1"></i>Optional Integrations
+                        </h6>
+                        <div id="optional-integrations-links" class="d-flex flex-wrap gap-2">
+                            <span class="text-muted small"><i class="fas fa-spinner fa-spin me-1"></i>Loading...</span>
+                        </div>
+                    </div>
+
+                    <!-- Custom Links -->
                     <div>
-                        <div class="d-flex justify-content-between align-items-center mb-3">
-                            <h6 class="text-muted mb-0">Custom Links</h6>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <h6 class="text-muted mb-0">
+                                <i class="fas fa-bookmark me-1"></i>Custom Links
+                            </h6>
                             <button type="button" class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addLinkModal">
                                 <i class="fas fa-plus me-1"></i>Add Link
                             </button>
                         </div>
-                        
                         <div id="custom-links" class="d-flex flex-wrap gap-2">
-                            <!-- Custom links will be loaded here via JavaScript -->
+                            <!-- Custom links loaded via JavaScript -->
                         </div>
                     </div>
+
                 </div>
             </div>
         </div>
@@ -728,9 +436,11 @@
 <script>
 
 
-// Load custom links on page load
+// Load media server and optional integrations on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadCustomLinks();
+    loadMediaServer();
+    loadOptionalIntegrations();
     
     // Jellyfin method toggle
     const pollingRadio = document.getElementById('jellyfin-polling');
@@ -767,34 +477,94 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// Load custom links from API
-function loadCustomLinks() {
-    fetch('/api/quick-links')
-        .then(res => res.json())
-        .then(data => {
-            if (data.status === 'success' && data.links && data.links.length > 0) {
-                displayCustomLinks(data.links);
-            } else {
-                document.getElementById('custom-links').innerHTML = 
-                    '<p class="text-muted mb-0"><i class="fas fa-info-circle me-1"></i>No custom links added yet</p>';
-            }
-        })
-        .catch(err => {
-            console.error('Error loading custom links:', err);
-            document.getElementById('custom-links').innerHTML = 
-                '<p class="text-danger mb-0"><i class="fas fa-exclamation-triangle me-1"></i>Error loading links</p>';
-        });
+// Load configured media servers (array — may have multiple)
+async function loadMediaServer() {
+    const container = document.getElementById('media-server-link');
+    if (!container) return;
+    try {
+        const response = await fetch('/api/media-server');
+        const servers = await response.json();
+        if (!servers || servers.length === 0) {
+            container.innerHTML = '<span class="text-muted small">Not configured — set up Plex (via Tautulli), Jellyfin, or Emby</span>';
+            return;
+        }
+        container.innerHTML = servers.map(server => {
+            const isImageIcon = server.icon && (server.icon.startsWith('http') || server.icon.startsWith('/'));
+            const iconHtml = isImageIcon
+                ? `<img src="${server.icon}" width="16" height="16" alt="${server.name}" class="me-1">`
+                : `<i class="fas fa-film me-1"></i>`;
+            return `<a href="${server.url}" target="_blank" class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1">
+                ${iconHtml}${server.name}
+            </a>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = '<span class="text-danger small">Error loading media server</span>';
+    }
+}
+
+// Load optional integrations
+async function loadOptionalIntegrations() {
+    const container = document.getElementById('optional-integrations-links');
+    if (!container) return;
+    try {
+        const response = await fetch('/api/optional-integrations');
+        const integrations = await response.json();
+        if (!integrations || integrations.length === 0) {
+            container.innerHTML = '<span class="text-muted small">No optional integrations configured</span>';
+            return;
+        }
+        container.innerHTML = integrations.map(integration => {
+            const isImageIcon = integration.icon && (integration.icon.startsWith('http') || integration.icon.startsWith('/'));
+            const iconHtml = isImageIcon
+                ? `<img src="${integration.icon}" width="16" height="16" alt="${integration.name}" class="me-1">`
+                : `<i class="fas fa-link me-1"></i>`;
+            return `<a href="${integration.url}" target="_blank" class="btn btn-outline-secondary btn-sm d-flex align-items-center gap-1">
+                ${iconHtml}${integration.name}
+            </a>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = '<span class="text-danger small">Error loading integrations</span>';
+    }
+}
+
+// Load custom links — excludes URLs already shown in media server / integrations sections
+async function loadCustomLinks() {
+    const container = document.getElementById('custom-links');
+    try {
+        const [linksData, mediaServers, integrations] = await Promise.all([
+            fetch('/api/quick-links').then(r => r.json()).catch(() => ({links: []})),
+            fetch('/api/media-server').then(r => r.json()).catch(() => []),
+            fetch('/api/optional-integrations').then(r => r.json()).catch(() => [])
+        ]);
+
+        // Build set of URLs already displayed in other sections
+        const systemNames = new Set(['Sonarr', 'Tautulli']);
+        const managedUrls = new Set([
+            ...(mediaServers || []).map(s => s.url),
+            ...(integrations || []).map(i => i.url)
+        ]);
+
+        const allLinks = linksData.links || [];
+        const bookmarks = allLinks.filter(l =>
+            !systemNames.has(l.name) && !managedUrls.has(l.url)
+        );
+
+        displayCustomLinks(bookmarks);
+    } catch (err) {
+        console.error('Error loading custom links:', err);
+        container.innerHTML = '<p class="text-danger mb-0"><i class="fas fa-exclamation-triangle me-1"></i>Error loading links</p>';
+    }
 }
 
 // Display custom links
 function displayCustomLinks(links) {
     const container = document.getElementById('custom-links');
-    
+
     if (!links || links.length === 0) {
-        container.innerHTML = '<p class="text-muted mb-0"><i class="fas fa-info-circle me-1"></i>No custom links added yet</p>';
+        container.innerHTML = '<p class="text-muted mb-0"><i class="fas fa-info-circle me-1"></i>No custom bookmarks added yet</p>';
         return;
     }
-    
+
     container.innerHTML = links.map(link => `
         <div class="btn-group" role="group">
             <a href="${link.url}" target="_blank" class="btn btn-outline-secondary btn-sm">

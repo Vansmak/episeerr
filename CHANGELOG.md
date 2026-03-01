@@ -1,8 +1,39 @@
 # Changelog
 
 ## [Unreleased / Dev]
-- added docker integration - see containsers in sidbar and start restrat them
-- moved plex watchlist if used above calendar on dashboard
+
+### v3.3.9
+- **Fix** — `get_rule_for_series` phantom import removed from `media_processor.py`; replaced with inline lookup over `config['rules']` (function never existed, caused import error during webhook processing)
+
+### v3.3.8 - TBD
+
+⚠️ **BREAKING CHANGES**
+- **Webhook URLs Changed** - Update webhook configurations:
+  - Jellyfin: `/jellyfin-webhook` → `/api/integration/jellyfin/webhook`
+  - Emby: `/emby-webhook` → `/api/integration/emby/webhook`
+  - Jellyseerr: `/seerr-webhook` → `/api/integration/seerr/webhook`
+
+🏗️ **Integrations Refactor**
+- Jellyfin, Emby, and Jellyseerr migrated to modular integration system (~1500 lines refactored)
+- Self-contained integration modules with auto-discovery
+- Easier maintenance and future extensibility
+
+🔐 **Security**
+- Optional password authentication
+- Session-based login with configurable timeout (default 24 hours)
+- Localhost bypass for admin access
+- Environment variables: `REQUIRE_AUTH`, `AUTH_USERNAME`, `AUTH_PASSWORD`
+
+🎨 **UI/UX**
+- Reorganized System Links with clearer categories (Required Services, Media Servers, Optional Integrations, Custom Links)
+- Docker integration now supports optional web UI URL
+- All configured media servers shown (Plex, Jellyfin, Emby)
+
+### v3.3.6 - 2026-02-25
+- **Sidebar**
+  - rearranged and cleaned up sidebar
+- **Integrations**
+  - added docker, if you set it up it can show your running containers in sidebar, can select just a compose or stack instead of all
 ### v3.3.5 - 2026-02-24
 - **Notifications**
   - Added notification option if episodes released but not in library

@@ -153,23 +153,26 @@ class DockerIntegration(ServiceIntegration):
     def get_setup_fields(self) -> Optional[List[Dict]]:
         return [
             {
-                'name': 'url',
+                'name': 'docker_host',
                 'label': 'Docker Host',
                 'type': 'text',
                 'placeholder': 'unix:///var/run/docker.sock',
                 'required': True,
-                'help_text': (
-                    'Unix socket (unix:///var/run/docker.sock) or TCP '
-                    '(tcp://192.168.1.10:2375). '
-                    'For socket, mount it in your compose: '
-                    '/var/run/docker.sock:/var/run/docker.sock:ro'
-                )
+                'help_text': 'Docker socket path or TCP URL (e.g., tcp://192.168.1.100:2375)'
             },
             {
-                'name': 'api_key',
+                'name': 'url',
+                'label': 'Web UI URL (Optional)',
+                'type': 'text',
+                'placeholder': 'http://192.168.1.100:9000',
+                'required': False,
+                'help_text': 'Optional: URL for Portainer, Dockge, or Composerr. Leave blank to only use sidebar controls (Docker won\'t appear in System Links).'
+            },
+            {
+                'name': 'compose_stack',
                 'label': 'Compose Stack Name (optional)',
                 'type': 'text',
-                'placeholder': 'mediastack',
+                'placeholder': 'media',
                 'required': False,
                 'help_text': (
                     'Show all containers belonging to a specific Docker Compose stack. '
@@ -197,7 +200,8 @@ class DockerIntegration(ServiceIntegration):
     # -----------------------------------------------------------------------
 
     def test_connection(self, url: str, api_key: str) -> Tuple[bool, str]:
-        host = url or 'unix:///var/run/docker.sock'
+        # url is now the optional Web UI URL — get the actual Docker host from saved config
+        host, _, _ = self._get_full_config()
         try:
             info = _docker_get(host, '/info')
             containers = _docker_get(host, '/containers/json', {'all': 'true'})
@@ -304,9 +308,11 @@ class DockerIntegration(ServiceIntegration):
         try:
             from settings_db import get_service
             svc = get_service('docker') or {}
-            host = svc.get('url') or 'unix:///var/run/docker.sock'
             config = svc.get('config') or {}
-            stack = config.get('api_key', '').strip()          # Compose stack name
+            # docker_host stored in config (new). Fall back to legacy svc['url'] or default socket.
+            host = config.get('docker_host') or svc.get('url') or 'unix:///var/run/docker.sock'
+            # compose_stack stored in config (new). Fall back to legacy api_key field.
+            stack = (config.get('compose_stack') or config.get('api_key', '')).strip()
             filter_str = config.get('container_filter', '').strip()
             return host, stack, filter_str
         except Exception:

@@ -1,5 +1,5 @@
 __version__ = "3.5.5"
-from flask import Flask, render_template, request, redirect, url_for, jsonify
+from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
 import atexit
@@ -37,6 +37,19 @@ app = Flask(__name__)
 register_integration_blueprints(app)
 app.register_blueprint(dashboard_bp)
 
+# Session / Auth configuration
+_secret = os.getenv('SECRET_KEY')
+if not _secret:
+    app.logger.warning("SECRET_KEY not set — sessions will not survive restarts. Set SECRET_KEY env var.")
+    _secret = os.urandom(24).hex()
+app.config['SECRET_KEY'] = _secret
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_SECURE', 'false').lower() == 'true'
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_DOMAIN'] = None  # Accept cookies on any domain/IP
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(
+    seconds=int(os.getenv('AUTH_SESSION_TIMEOUT', '86400'))
+)
 
 
 # Load environment variables
@@ -51,13 +64,6 @@ init_settings_db()
 sonarr_config = get_sonarr_config()
 SONARR_URL = normalize_url(sonarr_config.get('url')) if sonarr_config else None
 SONARR_API_KEY = sonarr_config.get('api_key') if sonarr_config else None
-
-# Jellyseerr/Overseerr variables (keep as-is for now)
-JELLYSEERR_URL = normalize_url(os.getenv('JELLYSEERR_URL', ''))
-JELLYSEERR_API_KEY = os.getenv('JELLYSEERR_API_KEY')
-OVERSEERR_URL = normalize_url(os.getenv('OVERSEERR_URL'))
-OVERSEERR_API_KEY = os.getenv('OVERSEERR_API_KEY')
-SEERR_ENABLED = bool((JELLYSEERR_URL and JELLYSEERR_API_KEY) or (OVERSEERR_URL and OVERSEERR_API_KEY))
 
 # TMDB API Key - check database first
 tmdb_service = get_service('tmdb', 'default')
@@ -75,8 +81,89 @@ os.makedirs(REQUESTS_DIR, exist_ok=True)
 LAST_PROCESSED_FILE = os.path.join(os.getcwd(), 'data', 'last_processed.json')
 os.makedirs(os.path.dirname(LAST_PROCESSED_FILE), exist_ok=True)
 
-LAST_PROCESSED_JELLYFIN_EPISODES = {}
-LAST_PROCESSED_LOCK = Lock()
+
+# ============================================================================
+# AUTHENTICATION
+# ============================================================================
+
+# Endpoints that are always accessible without authentication
+_AUTH_EXEMPT_ENDPOINTS = {
+    'login',
+    'logout',
+    'static',
+    'process_sonarr_webhook',
+    'handle_server_webhook',
+}
+
+
+@app.before_request
+def check_authentication():
+    """Global authentication gate. Skipped when REQUIRE_AUTH != 'true'."""
+    if not os.getenv('REQUIRE_AUTH', 'false').lower() == 'true':
+        return None
+
+    if os.getenv('AUTH_BYPASS_LOCALHOST', 'true').lower() == 'true':
+        if request.remote_addr in ('127.0.0.1', '::1'):
+            return None
+
+    # endpoint is None when URL doesn't match any route (404)
+    if not request.endpoint or request.endpoint in _AUTH_EXEMPT_ENDPOINTS:
+        return None
+
+    if not session.get('authenticated'):
+        # API paths and AJAX calls always get 401, never a redirect
+        if (request.path.startswith('/api/')
+                or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+                or request.is_json):
+            return jsonify({'error': 'Unauthorized', 'redirect': url_for('login')}), 401
+        return redirect(url_for('login', next=request.url))
+
+    return None
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page using username/password authentication."""
+    if not os.getenv('REQUIRE_AUTH', 'false').lower() == 'true':
+        return redirect(url_for('index'))
+
+    if session.get('authenticated'):
+        next_url = request.args.get('next')
+        return redirect(next_url or url_for('index'))
+
+    if request.method == 'POST':
+        username = request.form.get('username', '').strip()
+        password = request.form.get('password', '').strip()
+
+        valid_username = os.getenv('AUTH_USERNAME', 'admin')
+        valid_password = os.getenv('AUTH_PASSWORD', '')
+
+        if not valid_password:
+            return render_template('login.html',
+                                   error='Authentication not configured — set AUTH_PASSWORD environment variable',
+                                   username=username)
+
+        if username == valid_username and password == valid_password:
+            session['authenticated'] = True
+            session['username'] = username
+            session.permanent = True
+            app.logger.info(f"Successful login for user '{username}' from {request.remote_addr}")
+            next_url = request.args.get('next')
+            return redirect(next_url or url_for('index'))
+
+        app.logger.warning(f"Failed login attempt for user '{username}' from {request.remote_addr}")
+        return render_template('login.html',
+                               error='Invalid username or password',
+                               username=username)
+
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    """Clear session and redirect to login."""
+    session.clear()
+    return redirect(url_for('login'))
 
 
 def reload_module_configs():
@@ -126,9 +213,9 @@ def auto_add_quick_link(name, url, icon, open_in_iframe=False):
 @app.before_request
 def check_first_run():
     # Skip check for setup page itself, static files, and API routes
-    if request.endpoint in ['setup', 'static', 'test_connection', 'save_service_config', 
-                            'manage_quick_links', 'delete_quick_link_route', 'handle_emby_webhook',
-                            'iframe_view', 'services_sidebar', 'iframe_service_view']:  # ADD THESE TWO
+    if request.endpoint in ['setup', 'static', 'test_connection', 'save_service_config',
+                            'manage_quick_links', 'delete_quick_link_route',
+                            'iframe_view', 'services_sidebar', 'iframe_service_view']:
         return
     
     # Check if Sonarr is configured (required service)
@@ -144,10 +231,7 @@ def setup():
     """Service setup page"""
     # Get all service configurations (existing)
     sonarr = get_service('sonarr', 'default')
-    jellyfin = get_service('jellyfin', 'default')
-    emby = get_service('emby', 'default')
     tautulli = get_service('tautulli', 'default')
-    jellyseerr = get_service('jellyseerr', 'default')
     tmdb = get_service('tmdb', 'default')
     
         # NEW: Get integration configurations with guaranteed fields
@@ -205,7 +289,7 @@ def setup():
         }
     
     # Check if setup is complete
-    setup_complete = (sonarr and (jellyfin or emby or tautulli))
+    setup_complete = (sonarr and tautulli)
     
     # Quick links
     from settings_db import get_all_quick_links
@@ -216,25 +300,9 @@ def setup():
         sonarr_connected=sonarr is not None,
         sonarr_url=sonarr['url'] if sonarr else None,
         sonarr_apikey=sonarr['api_key'] if sonarr else None,
-        jellyfin_connected=jellyfin is not None,
-        jellyfin_url=jellyfin['url'] if jellyfin else None,
-        jellyfin_apikey=jellyfin['api_key'] if jellyfin else None,
-        jellyfin_userid=jellyfin['config'].get('user_id') if jellyfin and jellyfin.get('config') else None,
-        jellyfin_method=jellyfin['config'].get('method', 'polling') if jellyfin and jellyfin.get('config') else 'polling',
-        jellyfin_trigger_min=jellyfin['config'].get('trigger_min', 50.0) if jellyfin and jellyfin.get('config') else 50.0,
-        jellyfin_trigger_max=jellyfin['config'].get('trigger_max', 55.0) if jellyfin and jellyfin.get('config') else 55.0,
-        jellyfin_poll_interval=jellyfin['config'].get('poll_interval', 900) if jellyfin and jellyfin.get('config') else 900,
-        jellyfin_trigger_percent=jellyfin['config'].get('trigger_percentage', 50.0) if jellyfin and jellyfin.get('config') else 50.0,emby_connected=emby is not None,
-        emby_url=emby['url'] if emby else None,
-        emby_apikey=emby['api_key'] if emby else None,
-        emby_userid=emby['config'].get('user_id') if emby and emby.get('config') else None,
-        emby_poll_interval=emby['config'].get('poll_interval', 900) if emby and emby.get('config') else 900,emby_trigger_percent=emby['config'].get('trigger_percentage', 50.0) if emby and emby.get('config') else 50.0,
         tautulli_connected=tautulli is not None,
         tautulli_url=tautulli['url'] if tautulli else None,
         tautulli_apikey=tautulli['api_key'] if tautulli else None,
-        jellyseerr_connected=jellyseerr is not None,
-        jellyseerr_url=jellyseerr['url'] if jellyseerr else None,
-        jellyseerr_apikey=jellyseerr['api_key'] if jellyseerr else None,
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
         integrations=get_all_integrations(),
@@ -272,7 +340,9 @@ def test_connection(service):
                        integration_data.get('path') or
                        '')
             
-            if api_key or url:  # Test if we have either — some integrations (e.g. Docker) need only url
+            # Allow test if we have url, api_key, or any other integration field (e.g. docker_host)
+            has_data = api_key or url or any(v for v in integration_data.values() if v)
+            if has_data:
                 success, message = integration.test_connection(url, api_key)
                 
                 if success:
@@ -316,26 +386,7 @@ def test_connection(service):
             update_service_test_result('tautulli', 'default', 'success')
             return jsonify({'status': 'success', 'message': 'Connected to Tautulli successfully'})
         
-        elif service == 'jellyfin':
-            url = data.get('jellyfin-url')
-            api_key = data.get('jellyfin-apikey')
-            
-            if not url or not api_key:
-                return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
-            
-            response = requests.get(f"{url}/System/Info",
-                                  headers={'X-Emby-Token': api_key},
-                                  timeout=10)
-            response.raise_for_status()
-            
-            update_service_test_result('jellyfin', 'default', 'success')
-            return jsonify({'status': 'success', 'message': 'Connected to Jellyfin successfully'})
         
-        # Add other legacy services as needed...
-        
-        else:
-            return jsonify({'status': 'error', 'message': f'Unknown service: {service}'}), 400
-            
     except Exception as e:
         app.logger.error(f"Test connection error for {service}: {e}")
         update_service_test_result(service, 'default', 'failed')
@@ -378,11 +429,32 @@ def save_service_config(service):
                 # No integration fields found, fall through to legacy handlers
                 pass
             elif not api_key and not url:
-                # Neither api_key nor url — nothing useful to save
+                # Neither api_key nor url — check for other meaningful fields (e.g. docker_host)
+                other_data = {k: v for k, v in integration_data.items()
+                              if k not in ('url', 'api_key', 'apikey', 'open_in_iframe') and v}
+                if not other_data:
+                    return jsonify({
+                        'status': 'error',
+                        'message': 'At least a URL or API key is required'
+                    }), 400
+                # Fall through — has other required fields (like docker_host)
+                from integrations import get_integration as _get_int
+                _int = _get_int(service)
+                normalized_data = integration_data.copy()
+                save_service(
+                    service_type=service,
+                    name='default',
+                    url=url,
+                    api_key=api_key,
+                    config=normalized_data
+                )
+                reload_module_configs()
+                if _int and hasattr(_int, 'on_after_save'):
+                    _int.on_after_save(normalized_data)
                 return jsonify({
-                    'status': 'error',
-                    'message': 'At least a URL or API key is required'
-                }), 400
+                    'status': 'success',
+                    'message': f'{integration.display_name} saved successfully'
+                })
             else:
                 # We have valid integration data - save it
                 # Normalize field names for storage
@@ -457,62 +529,7 @@ def save_service_config(service):
                 'message': 'Sonarr saved successfully'
             })
         
-        elif service == 'jellyfin':
-            url = data.get('jellyfin-url')
-            apikey = data.get('jellyfin-apikey')
-            open_in_iframe = data.get('jellyfin-open_in_iframe', False)
-            if not url or not apikey:
-                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
-            
-            method = data.get('jellyfin-method', 'polling')  # Changed: read 'jellyfin-method' and default to 'polling'
-            
-            config = {
-                'user_id': data.get('jellyfin-userid'),
-                'method': method
-            }
-            
-            # Only save relevant fields based on method
-            if method == 'polling':
-                config.update({
-                    'poll_interval': int(data.get('jellyfin-poll-interval', 900)),
-                    'trigger_percentage': float(data.get('jellyfin-trigger-percent', 50.0))
-                })
-            else:  # progress
-                config.update({
-                    'trigger_min': float(data.get('jellyfin-trigger-min', 50.0)),
-                    'trigger_max': float(data.get('jellyfin-trigger-max', 55.0))
-                })
-            
-            save_service('jellyfin', 'default', url, apikey, config)
-            auto_add_quick_link('Jellyfin', url,
-                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png', open_in_iframe)
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Jellyfin saved successfully'
-            })
         
-        elif service == 'emby':
-            url = data.get('emby-url')
-            apikey = data.get('emby-apikey')
-            open_in_iframe = data.get('emby-open_in_iframe', False)
-
-            if not url or not apikey:
-                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
-            
-            config = {
-                'user_id': data.get('emby-userid'),
-                'poll_interval': int(data.get('emby-poll-interval', 5)),
-                'trigger_percentage': float(data.get('emby-trigger-percent', 50.0))
-            }
-            save_service('emby', 'default', url, apikey, config)
-            auto_add_quick_link('Emby', url,
-                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/emby.png', open_in_iframe)
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Emby saved successfully'
-            })
         
         elif service == 'tautulli':
             url = data.get('tautulli-url')
@@ -529,23 +546,6 @@ def save_service_config(service):
             return jsonify({
                 'status': 'success',
                 'message': 'Tautulli saved successfully'
-            })
-        
-        elif service == 'jellyseerr':
-            url = data.get('jellyseerr-url')
-            apikey = data.get('jellyseerr-apikey')
-            open_in_iframe = data.get('jellyseerr-open_in_iframe', False)
-
-            if not url or not apikey:
-                return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
-            
-            save_service('jellyseerr', 'default', url, apikey)
-            auto_add_quick_link('Jellyseerr', url,
-                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyseerr.png', open_in_iframe)
-            
-            return jsonify({
-                'status': 'success',
-                'message': 'Jellyseerr saved successfully'
             })
         
         elif service == 'tmdb':
@@ -614,83 +614,112 @@ def iframe_view(service_id):
 
 @app.route('/api/services-sidebar')
 def services_sidebar():
-    """Get all configured services for sidebar display with iframe settings
-    Also auto-manages quick links for integrations"""
-    from settings_db import get_service, get_all_quick_links, add_quick_link, delete_quick_link
+    """Get all configured integrations for sidebar display"""
+    from settings_db import get_service
     from integrations import get_all_integrations
-    
+
     services = []
-    existing_links = get_all_quick_links()
-    integration_urls = set()
-    
-    # Get all integrations
+
     for integration in get_all_integrations():
         config = get_service(integration.service_name, 'default')
         if config:  # Only include if configured
-            # Check if open_in_iframe is in config
             open_in_iframe = False
             if config.get('config'):
                 open_in_iframe = config['config'].get('open_in_iframe', False)
-            
-            service_url = config['url'].rstrip('/')
-            integration_urls.add(service_url.lower())
-            
-            # Check if a quick link already exists for this service
-            existing_link = None
-            for link in existing_links:
-                if link['url'].rstrip('/').lower() == service_url.lower():
-                    existing_link = link
-                    break
-            
-            if existing_link:
-                # Use the existing quick link ID
-                services.append({
-                    'id': existing_link['id'],
-                    'name': integration.display_name,
-                    'url': config['url'],
-                    'icon': integration.icon,
-                    'service_type': integration.service_name,
-                    'open_in_iframe': open_in_iframe
-                })
-            else:
-                # Auto-create a quick link for this integration
-                link_id = add_quick_link(
-                    name=integration.display_name,
-                    url=config['url'],
-                    icon=integration.icon,
-                    open_in_iframe=open_in_iframe
-                )
-                
-                services.append({
-                    'id': link_id,
-                    'name': integration.display_name,
-                    'url': config['url'],
-                    'icon': integration.icon,
-                    'service_type': integration.service_name,
-                    'open_in_iframe': open_in_iframe
-                })
-                
-                app.logger.info(f"Auto-created quick link for {integration.display_name}")
-    
-    # Clean up orphaned quick links that match integration URLs but service is no longer configured
-    for link in existing_links:
-        link_url = link['url'].rstrip('/').lower()
-        # If this link's URL matches an integration URL but wasn't processed above, delete it
-        # (This happens when you unconfigure a service)
-        if link_url in integration_urls:
-            # Check if this link was included in services
-            found = False
-            for service in services:
-                if service.get('id') == link['id']:
-                    found = True
-                    break
-            
-            if not found:
-                # Orphaned integration link - remove it
-                delete_quick_link(link['id'])
-                app.logger.info(f"Removed orphaned quick link: {link['name']}")
+
+            service_entry = {
+                'id': f'integration-{integration.service_name}',
+                'name': integration.display_name,
+                'icon': integration.icon,
+                'service_type': integration.service_name,
+                'open_in_iframe': open_in_iframe,
+                'iframe_url': f'/iframe-service/{integration.service_name}'
+            }
+
+            # Only include url if it exists (e.g. Docker may have no web UI URL)
+            if config.get('url'):
+                service_entry['url'] = config['url']
+
+            services.append(service_entry)
     
     return jsonify({'status': 'success', 'services': services})
+
+
+@app.route('/api/media-server')
+def get_media_server():
+    """Get all configured media servers (Plex via Tautulli, Jellyfin, Emby)."""
+    from integrations import get_integration
+    from settings_db import get_service
+
+    media_servers = []
+
+    # Plex via Tautulli (legacy)
+    tautulli = get_service('tautulli', 'default')
+    if tautulli:
+        media_servers.append({
+            'type': 'tautulli',
+            'name': 'Tautulli',
+            'url': tautulli['url'],
+            'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png'
+        })
+
+    # Jellyfin
+    jellyfin = get_integration('jellyfin')
+    if jellyfin:
+        data = get_service('jellyfin', 'default')
+        if data:
+            media_servers.append({
+                'type': 'jellyfin',
+                'name': 'Jellyfin',
+                'url': data['url'],
+                'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png'
+            })
+
+    # Emby
+    emby = get_integration('emby')
+    if emby:
+        data = get_service('emby', 'default')
+        if data:
+            media_servers.append({
+                'type': 'emby',
+                'name': 'Emby',
+                'url': data['url'],
+                'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/emby.png'
+            })
+
+    return jsonify(media_servers)
+
+
+@app.route('/api/optional-integrations')
+def get_optional_integrations():
+    """Get configured optional integrations (excludes media servers)."""
+    from integrations import get_all_integrations
+    from settings_db import get_service
+
+    # Only exclude the actual media server integrations (Jellyfin/Emby webhooks).
+    # 'plex' integration is for watchlists/widgets — keep it in optional integrations.
+    media_servers = {'jellyfin', 'emby'}
+    connected = []
+
+    for integration in get_all_integrations():
+        service_name = integration.service_name
+        if service_name in media_servers:
+            continue
+        data = get_service(service_name, 'default')
+        # Only include if configured AND has a URL (e.g. Docker without web UI URL is excluded)
+        if data and data.get('url'):
+            config = data.get('config') or {}
+            connected.append({
+                'name': integration.display_name,
+                'url': data['url'],
+                'icon': integration.icon,
+                'service_name': service_name,
+                'open_in_iframe': bool(config.get('open_in_iframe', False)),
+                'iframe_url': f'/iframe-service/{service_name}'
+            })
+
+    return jsonify(connected)
+
 
 @app.route('/iframe-service/<service_type>')
 def iframe_service_view(service_type):
@@ -722,222 +751,6 @@ def delete_quick_link_route(link_id):
     from settings_db import delete_quick_link
     delete_quick_link(link_id)
     return jsonify({'status': 'success'})
-
-# ============================================================
-# EMBY WEBHOOK HANDLER
-# ============================================================
-# Emby field mapping (vs Jellyfin):
-#   Event                         → "playback.start / pause / stop"
-#   Item.Type                     → "Episode"
-#   Item.SeriesName               → series name
-#   Item.ParentIndexNumber        → season number
-#   Item.IndexNumber              → episode number
-#   Item.RunTimeTicks             → total runtime
-#   PlaybackInfo.PositionTicks    → current position
-#   Session.Id                    → session ID (NOT PlaySessionId!)
-#   User.Name                     → username
-#   Item.ProviderIds.sonarr       → Sonarr series ID (bonus - skips lookup)
-#
-# Emby setup:
-#   User Preferences → Notifications → Add Notification → Webhooks
-#   URL: http://<episeerr-host>:5002/emby-webhook
-#   Events: playback.start, playback.stop
-# ============================================================
-
-@app.route('/emby-webhook', methods=['POST'])
-def handle_emby_webhook():
-    """Handle Emby webhooks - maps Emby event structure to Episeerr's watched logic."""
-    app.logger.info("Received webhook from Emby")
-    data = request.json
-    if not data:
-        return jsonify({'status': 'error', 'message': 'No data received'}), 400
-
-    try:
-        # ── Extract Emby fields ──
-        event = data.get('Event', '')
-        item = data.get('Item', {})
-        user = data.get('User', {})
-        session = data.get('Session', {})
-        playback_info = data.get('PlaybackInfo', {})
-
-        item_type = item.get('Type')
-        series_name = item.get('SeriesName')
-        season_number = item.get('ParentIndexNumber')
-        episode_number = item.get('IndexNumber')
-        runtime_ticks = item.get('RunTimeTicks', 0)
-        position_ticks = playback_info.get('PositionTicks', 0)
-        session_id = session.get('Id', '')  # Use Session.Id - Emby API doesn't populate PlayState.PlaySessionId
-        user_name = user.get('Name', 'Unknown')
-
-        # Bonus: Emby includes Sonarr ID directly — skips name-based lookup
-        provider_ids = item.get('ProviderIds', {})
-        sonarr_id = provider_ids.get('sonarr')
-        tvdb_id = provider_ids.get('Tvdb')
-
-        app.logger.info(f"Emby event: {event} | Type: {item_type} | User: {user_name} | Session: {session_id}")
-
-        # Only process Episodes
-        if item_type != 'Episode':
-            app.logger.debug(f"Emby: skipping non-episode type '{item_type}'")
-            return jsonify({'status': 'success', 'message': 'Not an episode'}), 200
-
-        if not all([series_name, season_number is not None, episode_number is not None]):
-            app.logger.warning(f"Emby: missing fields - series={series_name}, season={season_number}, ep={episode_number}")
-            return jsonify({'status': 'error', 'message': 'Missing episode fields'}), 400
-
-        app.logger.info(f"📺 Emby: {series_name} S{season_number}E{episode_number} [{event}] (User: {user_name}, sonarr_id: {sonarr_id})")
-
-        # ============================================================
-        # playback.start — user check + start polling session
-        # ============================================================
-        if event == 'playback.start':
-            try:
-                from media_processor import start_emby_polling, check_emby_user
-
-                if not check_emby_user(user_name):
-                    app.logger.info(f"Emby: User '{user_name}' not configured, skipping")
-                    return jsonify({'status': 'success', 'message': 'User not configured'}), 200
-
-                app.logger.info(f"▶️  Emby started: {series_name} S{season_number}E{episode_number}")
-
-                episode_info = {
-                    'user_name': user_name,
-                    'series_name': series_name,
-                    'season_number': int(season_number),
-                    'episode_number': int(episode_number),
-                    'progress_percent': 0.0,
-                    'is_paused': False,
-                    'sonarr_id': sonarr_id,
-                    'tvdb_id': tvdb_id
-                }
-
-                polling_started = start_emby_polling(session_id, episode_info)
-                if polling_started:
-                    app.logger.info(f"✅ Emby: Started polling for {series_name} S{season_number}E{episode_number}")
-
-            except Exception as e:
-                app.logger.error(f"Emby: Error on playback.start: {e}")
-
-            return jsonify({'status': 'success', 'message': 'Playback started'}), 200
-
-        # ============================================================
-        # playback.pause — ignore (polling handles progress tracking)
-        # ============================================================
-        elif event == 'playback.pause':
-            app.logger.debug(f"⏸️  Emby paused: {series_name} S{season_number}E{episode_number}")
-            return jsonify({'status': 'success', 'message': 'Pause acknowledged'}), 200
-
-        # ============================================================
-        # playback.stop — final progress check + process if threshold met
-        # ============================================================
-        elif event == 'playback.stop':
-            progress_percent = (position_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
-            app.logger.info(f"⏹️  Emby stopped: {series_name} S{season_number}E{episode_number} — {progress_percent:.1f}% watched")
-
-            # Stop polling for this session
-            try:
-                from media_processor import stop_emby_polling
-                stopped = stop_emby_polling(session_id)
-                if stopped:
-                    app.logger.info(f"🛑 Emby: Stopped polling for session {session_id}")
-            except Exception as e:
-                app.logger.debug(f"Emby: No polling to stop: {e}")
-
-            try:
-                from media_processor import (
-                    get_episode_tracking_key,
-                    processed_jellyfin_episodes,
-                    check_emby_user,
-                    EMBY_TRIGGER_PERCENTAGE
-                )
-
-                if not check_emby_user(user_name):
-                    app.logger.info(f"Emby: User '{user_name}' not configured, skipping")
-                    return jsonify({'status': 'success', 'message': 'User not configured'}), 200
-
-                # Already processed via polling? Skip.
-                tracking_key = get_episode_tracking_key(series_name, season_number, episode_number, user_name)
-                if tracking_key in processed_jellyfin_episodes:
-                    app.logger.info(f"✅ Emby: Already processed via polling — skipping")
-                    processed_jellyfin_episodes.discard(tracking_key)
-                    return jsonify({'status': 'success', 'message': 'Already processed'}), 200
-
-                # Check against EMBY_TRIGGER_PERCENTAGE
-                if progress_percent >= EMBY_TRIGGER_PERCENTAGE:
-                    app.logger.info(f"🎯 Emby: Processing at {progress_percent:.1f}% (threshold: {EMBY_TRIGGER_PERCENTAGE}%)")
-
-                    # ── Tag sync & drift correction ──
-                    from media_processor import get_series_id, move_series_in_config
-                    from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
-
-                    # Use Sonarr ID from Emby ProviderIds if available, else look up by name
-                    series_id = int(sonarr_id) if sonarr_id else get_series_id(series_name, tvdb_id)
-
-                    if series_id:
-                        config = load_config()
-                        config_rule = None
-                        series_id_str = str(series_id)
-
-                        for rule_name, rule_details in config['rules'].items():
-                            if series_id_str in rule_details.get('series', {}):
-                                config_rule = rule_name
-                                break
-
-                        if config_rule:
-                            matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                            if not matches:
-                                if actual_tag_rule:
-                                    app.logger.warning(f"EMBY DRIFT - config: {config_rule} → tag: {actual_tag_rule}")
-                                    move_series_in_config(series_id, config_rule, actual_tag_rule)
-                                else:
-                                    app.logger.warning(f"Emby: No episeerr tag on {series_id} → restoring episeerr_{config_rule}")
-                                    sync_rule_tag_to_sonarr(series_id, config_rule)
-
-                    # ── Write temp file and run media_processor ──
-                    temp_dir = os.path.join(os.getcwd(), 'temp')
-                    os.makedirs(temp_dir, exist_ok=True)
-
-                    plex_data = {
-                        "server_title": series_name,
-                        "server_season_num": int(season_number),
-                        "server_ep_num": int(episode_number),
-                        "thetvdb_id": tvdb_id,
-                        "themoviedb_id": None,
-                        "sonarr_series_id": int(sonarr_id) if sonarr_id else series_id,
-                        "source": "emby"
-                    }
-
-                    temp_file_path = os.path.join(temp_dir, 'data_from_server.json')
-                    with open(temp_file_path, 'w') as f:
-                        json.dump(plex_data, f)
-
-                    result = subprocess.run(
-                        ["python3", os.path.join(os.getcwd(), "media_processor.py")],
-                        capture_output=True,
-                        text=True
-                    )
-
-                    if result.returncode != 0:
-                        app.logger.error(f"Emby: media_processor failed (rc={result.returncode}): {result.stderr}")
-                        return jsonify({'status': 'error', 'message': 'Processor failed'}), 500
-                    else:
-                        app.logger.info(f"✅ Emby: Processed {series_name} S{season_number}E{episode_number}")
-                else:
-                    app.logger.info(f"⏭️  Emby: {progress_percent:.1f}% watched (need {EMBY_TRIGGER_PERCENTAGE}%) — skipping")
-
-            except Exception as e:
-                app.logger.error(f"Emby: Error on playback.stop: {e}")
-                return jsonify({'status': 'error', 'message': str(e)}), 500
-
-            return jsonify({'status': 'success'}), 200
-
-        else:
-            app.logger.debug(f"Emby: Unhandled event '{event}'")
-            return jsonify({'status': 'success', 'message': f'Unhandled event: {event}'}), 200
-
-    except Exception as e:
-        app.logger.error(f"Emby webhook error: {str(e)}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 # Configuration management
 config_path = os.path.join(app.root_path, 'config', 'config.json')
@@ -3857,7 +3670,9 @@ def process_sonarr_webhook():
                     app.logger.info(f"✓ Found Jellyseerr request file: {jellyseerr_request_id}")
                     
                     app.logger.info(f"Cancelling Jellyseerr request {jellyseerr_request_id}")
-                    episeerr_utils.delete_overseerr_request(jellyseerr_request_id)
+                    seerr = get_integration('jellyseerr')
+                    if seerr and jellyseerr_request_id:
+                        seerr.delete_request(jellyseerr_request_id)
                     
                     try:
                         from activity_storage import save_request_event
@@ -4437,81 +4252,6 @@ def handle_episode_grab(json_data):
         return jsonify({"status": "error", "message": str(e)}), 500
                         
 
-@app.route('/seerr-webhook', methods=['POST'])
-def process_seerr_webhook():
-    """Handle incoming Jellyseerr webhooks."""
-    try:
-        app.logger.info("=== JELLYSEERR WEBHOOK RECEIVED ===")
-        json_data = request.json
-        
-        # Log the full webhook data for debugging
-        app.logger.info(f"Jellyseerr webhook data: {json.dumps(json_data, indent=2)}")
-        
-        # Get the request ID
-        request_info = json_data.get('request', {})
-        request_id = (
-            request_info.get('request_id') or 
-            request_info.get('id') or 
-            json_data.get('request_id') or
-            json_data.get('id')
-        )
-        
-        # Get media info
-        media_info = json_data.get('media', {})
-        media_type = media_info.get('media_type')
-        
-        app.logger.info(f"Request ID: {request_id}, Media Type: {media_type}")
-        
-        # Only process TV show requests
-        if media_type != 'tv':
-            app.logger.info(f"Request is not a TV show (media_type={media_type}), skipping")
-            return jsonify({"status": "success", "message": "Not a TV request"}), 200
-        
-        # Get identifiers
-        tvdb_id = media_info.get('tvdbId')
-        tmdb_id = media_info.get('tmdbId')
-        title = json_data.get('subject', 'Unknown Show')
-        
-        app.logger.info(f"TVDB ID: {tvdb_id}, TMDB ID: {tmdb_id}, Title: {title}")
-        
-        # ADDED: Extract requested seasons from webhook
-        requested_seasons_str = None
-        extra = json_data.get('extra', [])
-        for item in extra:
-            if item.get('name') == 'Requested Seasons':
-                requested_seasons_str = item.get('value')
-                break
-        
-        if tvdb_id and request_id:
-            tvdb_id_str = str(tvdb_id)
-            request_file = os.path.join(REQUESTS_DIR, f"jellyseerr-{tvdb_id_str}.json")
-            
-            # Get poster path from TMDB
-            poster_path = get_tmdb_poster_path(tmdb_id) if tmdb_id else None
-
-            request_data = {
-                'request_id': request_id,
-                'title': title,
-                'tmdb_id': poster_path or str(tmdb_id),  # Use poster path if available, fallback to ID
-                'tvdb_id': tvdb_id,
-                'requested_seasons': requested_seasons_str,
-                'timestamp': int(time.time())
-}
-            
-            os.makedirs(REQUESTS_DIR, exist_ok=True)
-            with open(request_file, 'w') as f:
-                json.dump(request_data, f)
-            
-            app.logger.info(f"✓ Stored Jellyseerr request {request_id} for TVDB ID {tvdb_id_str} ({title}) - Seasons: {requested_seasons_str}")
-        else:
-            app.logger.warning(f"Missing required data - TVDB ID: {tvdb_id}, Request ID: {request_id}")
-
-        return jsonify({"status": "success"}), 200
-        
-    except Exception as e:
-        app.logger.error(f"Error processing Jellyseerr webhook: {str(e)}", exc_info=True)
-        return jsonify({"status": "error", "message": str(e)}), 500
-
 @app.route('/webhook', methods=['POST'])
 def handle_server_webhook():
     app.logger.info("Received webhook from Tautulli")
@@ -4666,247 +4406,6 @@ def handle_server_webhook():
         app.logger.error(f"Failed to process Tautulli webhook: {str(e)}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Replace your webhook handler with this version that uses SessionStart
-
-@app.route('/jellyfin-webhook', methods=['POST'])
-def handle_jellyfin_webhook():
-    """Handle Jellyfin webhooks - Supports polling (SessionStart) OR real-time (PlaybackProgress)."""
-    app.logger.info("Received webhook from Jellyfin")
-    data = request.json
-    if not data:
-        return jsonify({'status': 'error', 'message': 'No data received'}), 400
-
-    try:
-        notification_type = data.get('NotificationType')
-        app.logger.info(f"Jellyfin webhook type: {notification_type}")
-
-        # ============================================================================
-        # REAL-TIME MODE: PlaybackProgress (NEW)
-        # ============================================================================
-        if notification_type == 'PlaybackProgress':
-            item_type = data.get('ItemType')
-            if item_type == 'Episode':
-                series_name = data.get('SeriesName')
-                season = data.get('SeasonNumber')
-                episode = data.get('EpisodeNumber')
-                
-                # Calculate progress percentage
-                progress_ticks = data.get('PlaybackPositionTicks', 0)
-                runtime_ticks = data.get('RunTimeTicks', 1)
-                progress_percent = (progress_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
-                
-                session_id = data.get('SessionId') or data.get('PlaySessionId') or data.get('Id')
-                user_name = data.get('NotificationUsername', 'Unknown')
-                
-                if all([series_name, season is not None, episode is not None]):
-                    from media_processor import (
-                        process_jellyfin_progress_webhook,
-                        check_jellyfin_user,
-                        JELLYFIN_TRIGGER_MIN
-                    )
-                    
-                    if not check_jellyfin_user(user_name):
-                        return jsonify({'status': 'success', 'message': 'User not configured'}), 200
-                    
-                    if progress_percent >= JELLYFIN_TRIGGER_MIN:
-                        success = process_jellyfin_progress_webhook(
-                            session_id=session_id,
-                            series_name=series_name,
-                            season_number=season,
-                            episode_number=episode,
-                            progress_percent=progress_percent,
-                            user_name=user_name
-                        )
-                        
-                        if success:
-                            app.logger.info(f"✅ Processed {series_name} S{season}E{episode}")
-                    
-                    return jsonify({'status': 'success'}), 200
-                    
-                else:
-                    app.logger.warning("Missing episode data in PlaybackProgress")
-                    return jsonify({'status': 'error', 'message': 'Missing episode data'}), 400
-            else:
-                return jsonify({'status': 'success', 'message': 'Not an episode'}), 200
-
-        # ============================================================================
-        # POLLING MODE: SessionStart or PlaybackStart (OLD - backward compatible)
-        # ============================================================================
-        elif notification_type in ['SessionStart', 'PlaybackStart']:
-            item_type = data.get('ItemType')
-            if item_type == 'Episode':
-                series_name = data.get('SeriesName')
-                season = data.get('SeasonNumber')
-                episode = data.get('EpisodeNumber')
-                webhook_id = data.get('Id')
-                user_name = data.get('NotificationUsername', 'Unknown')
-
-                if all([series_name, season is not None, episode is not None]):
-                    app.logger.info(f"📺 Jellyfin session started: {series_name} S{season}E{episode} (User: {user_name})")
-                    
-                    try:
-                        from media_processor import start_jellyfin_polling
-                        
-                        episode_info = {
-                            'user_name': user_name,
-                            'series_name': series_name,
-                            'season_number': int(season),
-                            'episode_number': int(episode),
-                            'progress_percent': 0.0,
-                            'is_paused': False
-                        }
-                        
-                        polling_started = start_jellyfin_polling(webhook_id, episode_info)
-                        
-                        if polling_started:
-                            app.logger.info(f"✅ Started polling for {series_name} S{season}E{episode}")
-                            return jsonify({'status': 'success', 'message': 'Started polling'}), 200
-                        else:
-                            app.logger.warning(f"⚠️ Failed to start polling (may already be active)")
-                            return jsonify({'status': 'warning', 'message': 'Polling may already be active'}), 200
-                            
-                    except Exception as e:
-                        app.logger.error(f"Error starting Jellyfin polling: {str(e)}")
-                        return jsonify({'status': 'error', 'message': f'Failed to start polling: {str(e)}'}), 500
-                else:
-                    app.logger.warning("Missing required fields for SessionStart")
-                    return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
-            else:
-                app.logger.info(f"Item type '{item_type}' is not an episode")
-                return jsonify({'status': 'success', 'message': 'Not an episode'}), 200
-
-        # ============================================================================
-        # CLEANUP: PlaybackStop
-        # ============================================================================
-        elif notification_type == 'PlaybackStop':
-            webhook_id = data.get('Id')
-            series_name = data.get('SeriesName', 'Unknown')
-            season = data.get('SeasonNumber')
-            episode = data.get('EpisodeNumber')
-            user_name = data.get('NotificationUsername', 'Unknown')
-            
-            app.logger.info(f"📺 Jellyfin playback stopped: {series_name} S{season}E{episode} (User: {user_name})")
-            
-            # Stop polling if active
-            try:
-                from media_processor import stop_jellyfin_polling
-                stopped = stop_jellyfin_polling(webhook_id)
-                if stopped:
-                    app.logger.info(f"🛑 Stopped polling for {series_name}")
-            except Exception as e:
-                app.logger.debug(f"No polling to stop: {e}")
-            
-            # Clean up progress tracking
-            try:
-                from media_processor import cleanup_jellyfin_tracking
-                # cleanup_jellyfin_tracking()  # DISABLED: Clears shared set used by Emby polling
-                app.logger.debug("Tracking cleanup skipped (shared with Emby)")
-            except Exception as e:
-                app.logger.debug(f"No tracking to clean: {e}")
-            
-            # Fallback processing if watched enough
-            if all([series_name, season is not None, episode is not None]):
-                try:
-                    from media_processor import (
-                        get_episode_tracking_key,
-                        processed_jellyfin_episodes,
-                        process_jellyfin_episode,
-                        check_jellyfin_user,
-                        JELLYFIN_TRIGGER_PERCENTAGE
-                    )
-                    
-                    if not check_jellyfin_user(user_name):
-                        return jsonify({'status': 'success'}), 200
-                    
-                    progress_ticks = data.get('PlaybackPositionTicks', 0)
-                    runtime_ticks = data.get('RunTimeTicks', 1)
-                    progress_percent = (progress_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
-                    
-                    app.logger.info(f"Final progress: {progress_percent:.1f}%")
-                    
-                    tracking_key = get_episode_tracking_key(series_name, season, episode, user_name)
-                    if tracking_key in processed_jellyfin_episodes:
-                        app.logger.info(f"Already processed via PlaybackProgress")
-                        processed_jellyfin_episodes.clear()
-                        return jsonify({'status': 'success', 'message': 'Already processed'}), 200
-                    
-                    if progress_percent >= JELLYFIN_TRIGGER_PERCENTAGE:
-                        app.logger.info(f"🎯 Processing on stop at {progress_percent:.1f}%")
-                        
-                        # ─── NEW: Tag sync & drift correction BEFORE processing ───
-                        series_id = get_series_id(series_name)
-                        final_rule = None
-                        
-                        if series_id:
-                            config = load_config()
-                            config_rule = None
-                            series_id_str = str(series_id)
-                            
-                            for rule_name, rule_details in config['rules'].items():
-                                if series_id_str in rule_details.get('series', {}):
-                                    config_rule = rule_name
-                                    break
-                            
-                            if config_rule:
-                                matches, actual_tag_rule = episeerr_utils.validate_series_tag(series_id, config_rule)
-                                
-                                if not matches:
-                                    if actual_tag_rule:
-                                        logger.warning(f"JELLYFIN STOP DRIFT - config: {config_rule} → tag: {actual_tag_rule}")
-                                        episeerr_utils.move_series_in_config(series_id, config_rule, actual_tag_rule)
-                                        final_rule = actual_tag_rule
-                                    else:
-                                        logger.warning(f"No tag on {series_id} → restoring episeerr_{config_rule}")
-                                        episeerr_utils.sync_rule_tag_to_sonarr(series_id, config_rule)
-                                        final_rule = config_rule
-                        
-                        # ─── Pass to processing ───
-                        episode_info = {
-                            'user_name': user_name,
-                            'series_name': series_name,
-                            'season_number': int(season),
-                            'episode_number': int(episode),
-                            'progress_percent': progress_percent,
-                            'sonarr_series_id': series_id,  # NEW
-                            'rule': final_rule             # NEW
-                        }
-                        
-                        process_jellyfin_episode(episode_info)
-                        return jsonify({'status': 'success', 'message': 'Processed on stop'}), 200
-                    else:
-                        app.logger.info(f"Skipped - only watched {progress_percent:.1f}%")
-                        
-                except Exception as e:
-                    app.logger.error(f"Error processing on stop: {e}")
-            
-            return jsonify({'status': 'success', 'message': 'Playback stopped'}), 200
-
-        else:
-            app.logger.info(f"Jellyfin notification type '{notification_type}' not handled")
-            return jsonify({'status': 'success', 'message': 'Event not handled'}), 200
-
-    except Exception as e:
-        app.logger.error(f"Error handling Jellyfin webhook: {str(e)}")
-        import traceback
-        app.logger.error(f"Traceback: {traceback.format_exc()}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-# Add a debug endpoint to check polling status
-@app.route('/api/jellyfin-polling-status')
-def jellyfin_polling_status():
-    """Get current Jellyfin polling status for debugging."""
-    try:
-        from media_processor import get_jellyfin_polling_status
-        status = get_jellyfin_polling_status()
-        return jsonify({
-            'status': 'success',
-            'polling_status': status
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
 
 # ============================================================================
 # DEBUG & TEST ROUTES (Simplified)
@@ -5007,22 +4506,7 @@ def sync_all_tags_endpoint():
             "status": "error",
             "message": str(e)
         }), 500
-# ADD this new API endpoint to episeerr.py:
-@app.route('/api/jellyfin-active-polling-status')
-def jellyfin_active_polling_status():
-    """Get Jellyfin active polling status."""
-    try:
-        from media_processor import get_jellyfin_active_polling_status
-        status = get_jellyfin_active_polling_status()
-        return jsonify({
-            'status': 'success',
-            'polling_status': status
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        }), 500
+
     
 # Add this API route to episeerr.py (near other @app.route definitions)
 
@@ -5315,18 +4799,7 @@ def initialize_episeerr():
     except Exception as e:
         app.logger.error(f"Error updating delay profile with control tags: {str(e)}")
     
-    # NEW: Add Jellyfin active polling
-    try:
-        from media_processor import start_jellyfin_active_polling
-        started = start_jellyfin_active_polling()
-        if started:
-            app.logger.info("✅ Jellyfin active polling started (every 15 minutes)")
-        else:
-            app.logger.info("⏭️ Jellyfin not configured - active polling disabled")
-    except Exception as e:
-        app.logger.error(f"Error starting Jellyfin active polling: {str(e)}")
     
-    app.logger.debug("Exiting initialize_episeerr()")
 
 # Run initialization (after function is defined!)
 initialize_episeerr()

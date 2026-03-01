@@ -19,4 +19,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=INFO
+      - REQUIRE_AUTH=true
+      - AUTH_USERNAME=admin
+      - AUTH_PASSWORD=changeme
+      - SECRET_KEY=supersecretkey
+      #- AUTH_BYPASS_LOCALHOST=true
+      #- AUTH_SESSION_TIMEOUT=86400
+      #- SESSION_SECURE=false
     
