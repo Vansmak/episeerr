@@ -1368,59 +1368,516 @@ A: Settings → Global Settings → Set "Storage Threshold" (e.g., 20GB). Cleanu
 A: No! Grace periods reset when you watch episodes. Only inactive shows are cleaned up.
 
 **Q: Can I protect certain shows?**  
-A: Yes! Create a rule with empty Grace and Dormant settings, assign those shows to it.
+# Episeerr
+
+**Smart episode management for Sonarr** - Get episodes as you watch, clean up automatically when storage gets low.
+
+⚠️ **Security:** For internet access, enable authentication (`REQUIRE_AUTH=true`) or use VPN/reverse proxy with auth.
+
+This project started as scratching my own itch - I wanted more granular series management and couldn't find exactly what I wanted. I'm not a programmer by trade, but I had a clear vision for the solution I needed. I used AI as a development tool to help implement my ideas faster, just like any other tool. The creativity, problem-solving, architecture decisions, and feature design are all mine - AI helped with code, syntax and implementation details. Although I run everything in my own production environment first, it is catered to my environment and is use at your own risk. All code is open source for anyone to review and audit. The tool has been useful for me, and I shared it in case others can benefit from it too - but I absolutely understand if some prefer to stick with established solutions.
+
+[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/vansmak)
+
+---
+[![Docker Pulls](https://img.shields.io/docker/pulls/vansmak/episeerr)](https://hub.docker.com/r/vansmak/episeerr)
+[![GitHub Issues](https://img.shields.io/github/issues/vansmak/episeerr)](https://github.com/Vansmak/episeerr/issues)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange)](https://buymeacoffee.com/vansmak)
 
 ---
 
-## Support
+## 📋 Table of Contents
 
-### Get Help
+- [What It Does](#what-it-does)
+- [Quick Start](#quick-start)
+- [Installation](#installation)
+  - [Docker Compose](#docker-compose-recommended)
+  - [Unraid](#unraid)
+  - [Environment Variables](#environment-variables)
+- [Plex Watchlist Sync](#plex-watchlist-sync)
+  - [Setup](#setup)
+  - [Getting Your Plex Token](#getting-your-plex-token)
+- [Webhook Setup](#webhook-setup)
+  - [Sonarr](#1-sonarr-webhook-required)
+  - [Tautulli (Plex)](#2-tautulli-webhook-for-viewing-automation)
+  - [Jellyfin](#3-jellyfin-webhook-for-viewing-automation)
+  - [Jellyseerr/Overseerr](#4-jellyseerroverseerr-webhook-optional)
+- [How to Use](#how-to-use)
+  - [Create Your First Rule](#create-your-first-rule)
+  - [Add Series](#add-series-four-ways)
+  - [Episode Selection](#episode-selection)
+  - [Selection Flow and Rule Picker](#selection-flow-and-rule-picker)
+- [Features Explained](#features-explained)
+- [Configuration Examples](#configuration-examples)
+- [Troubleshooting](#troubleshooting)
+- [Screenshots](#screenshots)
+- [FAQ](#faq)
+- [Support](#support)
 
-- 📖 **In-App Documentation:** `http://your-episeerr:5002/documentation`
-- 🐛 **Report Issues:** [GitHub Issues](https://github.com/Vansmak/episeerr/issues)
-- 💬 **Discussions:** [GitHub Discussions](https://github.com/Vansmak/episeerr/discussions)
-- ☕ **Support Development:** [Buy Me A Coffee](https://buymeacoffee.com/vansmak)
+---
 
-### Logs Location
+## What It Does
+
+Episeerr gives you **four independent features** for TV episode management:
+
+| Feature | What It Does | Use Case |
+|---------|--------------|----------|
+| 🎯 **Episode Selection** | Choose specific episodes to download | Try pilots, skip seasons, selective downloads |
+| ⚡ **Viewing Automation** | Next episode ready when you watch | Binge watching, always-ready episodes |
+| 💾 **Storage Management** | Automatic cleanup based on time/viewing | Limited storage, inactive show cleanup |
+| 🔄 **Plex Watchlist Sync** | Add to Plex watchlist, Episeerr handles the rest | Zero-effort adding, full selection control |
+| 📌 **Always Have** | Baseline episodes always present and protected | Showcase libraries, permanent pilots, season placeholders |
+
+**Use one, some, or all** - they work independently!
+
+---
+
+## Quick Start
+
+**Get running in 5 minutes:**
 
 ```bash
-# Docker
-docker logs episeerr
+# 1. Create docker-compose.yml (minimal setup)
+services:
+  episeerr:
+    image: vansmak/episeerr:latest
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+      - ./data:/app/data
+    ports:
+      - "5002:5002"
+    restart: unless-stopped
 
-# Logs directory
-./logs/app.log
+# 2. Start container
+docker-compose up -d
 
-# Live monitoring
-docker logs -f episeerr
+# 3. Open http://your-server:5002/setup
+# 4. Configure Sonarr, TMDB, and optional services
+# 5. Create a rule, add a series, start watching!
+```
+**Restart container for changes to take effect**
+**That's it!** No `.env` file needed - configure everything via the GUI.
+
+**For automation:** [Set up webhooks](#webhook-setup) ⬇️
+
+---
+
+## Installation
+
+### Two Ways to Configure:
+
+1. **GUI Setup (Recommended)** - Use `/setup` page, no `.env` file needed
+2. **Environment Variables** - Traditional `.env` file (still supported)
+
+---
+
+### Docker Compose (Recommended)
+
+**Create `docker-compose.yml`:**
+
+```yaml
+services:
+  episeerr:
+    image: vansmak/episeerr:latest
+    container_name: episeerr
+    environment:
+      # ============================================
+      # REQUIRED
+      # ============================================
+      - SONARR_URL=http://your-sonarr:8989
+      - SONARR_API_KEY=your_sonarr_api_key
+      - TMDB_API_KEY=your_tmdb_read_access_token
+      
+      # ============================================
+      # OPTIONAL - For Viewing Automation
+      # ============================================
+      
+      # Option 1: Tautulli (Plex)
+      - TAUTULLI_URL=http://your-tautulli:8181
+      - TAUTULLI_API_KEY=your_tautulli_key
+      
+      # Option 2: Jellyfin (choose one mode below)
+      environment:
+      # --- Jellyfin: uncomment Option A OR Option B, not both ---
+      #
+      # Option A: Real-time (Jellyfin sends PlaybackProgress webhooks)
+      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
+      #   Notification type: PlaybackProgress
+      #
+      # - JELLYFIN_URL=http://your-jellyfin:8096
+      # - JELLYFIN_API_KEY=your_jellyfin_api_key
+      # - JELLYFIN_USER_ID=your_username
+      # - JELLYFIN_TRIGGER_MIN=50.0
+      # - JELLYFIN_TRIGGER_MAX=55.0
+      #
+      # Option B: Polling (Jellyfin sends PlaybackStart, Episeerr polls /Sessions)
+      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
+      #   Notification type: PlaybackStart
+      #
+      # - JELLYFIN_URL=http://your-jellyfin:8096
+      # - JELLYFIN_API_KEY=your_jellyfin_api_key
+      # - JELLYFIN_USER_ID=your_username
+      # - JELLYFIN_TRIGGER_PERCENTAGE=50.0
+      # - JELLYFIN_POLL_INTERVAL=900
+
+      # --- Emby: uncomment to enable ---
+      #   Configure in Emby: User Prefs → Notifications → Webhooks
+      #   URL: http://<episeerr>:5002/api/integration/emby/webhook
+      #   Events: playback.start, playback.stop
+      #
+      # - EMBY_URL=http://your-emby:8096
+      # - EMBY_API_KEY=your_emby_api_key
+      # - EMBY_USER_ID=your_username
+      # - EMBY_TRIGGER_PERCENTAGE=50.0
+      # - EMBY_POLL_INTERVAL=900
+      
+      # ============================================
+      # OPTIONAL - For Request Integration
+      # ============================================
+      - JELLYSEERR_URL=http://your-jellyseerr:5055
+      - JELLYSEERR_API_KEY=your_jellyseerr_key
+      # OR
+      - OVERSEERR_URL=http://your-overseerr:5055
+      - OVERSEERR_API_KEY=your_overseerr_key
+      
+      # ============================================
+      # OPTIONAL - Authentication (Security)
+      # ============================================
+      # Uncomment to enable password protection:
+      # - REQUIRE_AUTH=true
+      # - AUTH_USERNAME=admin
+      # - AUTH_PASSWORD=your-password-here
+      # - SECRET_KEY=generate-random-key  # Optional: auto-generated if not set
+      
+      # ============================================
+      # OPTIONAL - Quick Links in Sidebar
+      # ============================================
+      - CUSTOMAPP_URL=http://192.168.1.100:8080
+      - CUSTOMAPP_NAME=My Custom App
+      - CUSTOMAPP_ICON=fas fa-cog
+
+    volumes:
+      - ./config:/app/config     # Configuration files
+      - ./logs:/app/logs         # Log files
+      - ./data:/app/data         # Database and temp data
+      - ./temp:/app/temp         # Temporary processing
+    ports:
+      - "5002:5002"
+    restart: unless-stopped
 ```
 
-### Common Log Searches
+**Start:**
+```bash
+docker-compose up -d
+```
+
+**Access:**
+```
+http://your-server:5002
+```
+
+---
+
+### Unraid  Untested by me
+
+**1. Add Custom Template**
+
+Create `/boot/config/plugins/community.applications/private/episeerr/my-episeerr.xml`:
+
+```xml
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>episeerr</Name>
+  <Repository>vansmak/episeerr:latest</Repository>
+  <Registry>https://hub.docker.com/r/vansmak/episeerr</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/Vansmak/episeerr/issues</Support>
+  <Project>https://github.com/Vansmak/episeerr</Project>
+  <Overview>Smart episode management for Sonarr</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:5002]</WebUI>
+  <Icon>https://raw.githubusercontent.com/Vansmak/episeerr/main/static/logo_icon.png</Icon>
+  
+  <Config Name="WebUI Port" Target="5002" Default="5002" Mode="tcp" Description="Episeerr WebUI" Type="Port" Display="always" Required="true" Mask="false"/>
+  
+  <Config Name="Config" Target="/app/config" Default="/mnt/user/appdata/episeerr/config" Mode="rw" Description="Configuration files" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Logs" Target="/app/logs" Default="/mnt/user/appdata/episeerr/logs" Mode="rw" Description="Log files" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Data" Target="/app/data" Default="/mnt/user/appdata/episeerr/data" Mode="rw" Description="Database files" Type="Path" Display="always" Required="true" Mask="false"/>
+  <Config Name="Temp" Target="/app/temp" Default="/mnt/user/appdata/episeerr/temp" Mode="rw" Description="Temporary files" Type="Path" Display="always" Required="false" Mask="false"/>
+  
+  <Config Name="SONARR_URL" Target="SONARR_URL" Default="" Description="Sonarr base URL (e.g., http://sonarr:8989)" Type="Variable" Display="always" Required="true" Mask="false"/>
+  <Config Name="SONARR_API_KEY" Target="SONARR_API_KEY" Default="" Description="Sonarr API key" Type="Variable" Display="always" Required="true" Mask="true"/>
+  <Config Name="TMDB_API_KEY" Target="TMDB_API_KEY" Default="" Description="TMDB Read Access Token (not API key)" Type="Variable" Display="always" Required="true" Mask="true"/>
+  
+  <Config Name="TAUTULLI_URL" Target="TAUTULLI_URL" Default="" Description="Tautulli URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="TAUTULLI_API_KEY" Target="TAUTULLI_API_KEY" Default="" Description="Tautulli API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
+  
+  <Config Name="JELLYFIN_URL" Target="JELLYFIN_URL" Default="" Description="Jellyfin URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="JELLYFIN_API_KEY" Target="JELLYFIN_API_KEY" Default="" Description="Jellyfin API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
+  <Config Name="JELLYFIN_USER_ID" Target="JELLYFIN_USER_ID" Default="" Description="Jellyfin Username (required if using Jellyfin)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  
+  <Config Name="JELLYSEERR_URL" Target="JELLYSEERR_URL" Default="" Description="Jellyseerr URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="JELLYSEERR_API_KEY" Target="JELLYSEERR_API_KEY" Default="" Description="Jellyseerr API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>
+```
+
+**2. Install from Apps**
+
+1. Unraid → Apps
+2. Search "episeerr"
+3. Click Install
+4. Fill in required fields
+
+---
+
+### GUI Setup Page (v3.2.0+)
+
+**The easiest way to configure Episeerr** - no `.env` file needed!
+
+**Access:** `http://your-server:5002/setup`
+
+**Configure:**
+1. **Sonarr** - URL and API key (required) **Initial setup Restart container for changes to take effect**
+2. **TMDB** - API Read Access Token (required)
+3. **Media Server** - Choose Jellyfin, Emby, or Plex/Tautulli (optional)
+4. **Overseerr/Jellyseerr** - Request integration (optional)
+
+**Features:**
+- ✅ Test connections before saving
+- ✅ Configuration stored in database
+- ✅ Auto-populate Quick Links in sidebar
+- ✅ No container restart needed
+- ✅ Works alongside `.env` files (database takes priority)
+
+**Migration from .env:**
+1. Open `/setup` page
+2. Your existing `.env` values appear as defaults
+3. Save to migrate to database
+4. Delete `.env` file when ready
+
+---
+
+### Environment Variables
+
+**Note:** As of v3.2.0, environment variables are **optional**. You can configure everything via the `/setup` page GUI. Environment variables still work for backward compatibility and can be used alongside database configuration (database takes priority).
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SONARR_URL` | ❌ Optional* | Sonarr base URL (e.g., `http://sonarr:8989`) |
+| `SONARR_API_KEY` | ❌ Optional* | Sonarr API key (Settings → General) |
+| `TMDB_API_KEY` | ❌ Optional* | TMDB **Read Access Token** ([Get one free](https://www.themoviedb.org/settings/api)) |
+| `TAUTULLI_URL` | ❌ Optional | For Plex viewing automation |
+| `TAUTULLI_API_KEY` | ❌ Optional | Tautulli API key |
+| `JELLYFIN_URL` | ❌ Optional | For Jellyfin viewing automation |
+| `JELLYFIN_API_KEY` | ❌ Optional | Jellyfin API key |
+| `JELLYFIN_USER_ID` | ⚠️ Required if using Jellyfin | Your Jellyfin username |
+| `JELLYSEERR_URL` | ❌ Optional | For request integration |
+| `JELLYSEERR_API_KEY` | ❌ Optional | Jellyseerr API key |
+
+| `EMBY_USER_ID` | ⚠️ Required if using emby | Your EMBY username |
+| `EMBY_URL` | ❌ Optional | For request integration |
+| `EMBY_API_KEY` | ❌ Optional | EMBY API key |
+
+**Authentication (Optional):**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `REQUIRE_AUTH` | `false` | Enable password authentication |
+| `AUTH_USERNAME` | `admin` | Login username |
+| `AUTH_PASSWORD` | - | Login password (required if auth enabled) |
+| `SECRET_KEY` | Auto-generated | Session encryption key (optional, auto-generated if not set) |
+| `AUTH_BYPASS_LOCALHOST` | `true` | Skip authentication for localhost access |
+| `AUTH_SESSION_TIMEOUT` | `86400` | Session timeout in seconds (24 hours) |
+
+**⚠️ Important Notes:**
+- TMDB requires the **Read Access Token**, not the API key v3
+- Jellyfin **requires** `JELLYFIN_USER_ID` to be set to your username
+- All URLs should NOT have trailing slashes
+- **Security:** If exposing Episeerr beyond your local network, enable `REQUIRE_AUTH` or use a reverse proxy with authentication (Cloudflare Access, Authelia, etc.)
+
+---
+Dashboard Integrations
+Overview
+Episeerr's beta plugin system allows you to connect additional services that display statistics on your dashboard. Services are configured through the Setup page and automatically appear once configured.
+Available Integrations
+
+Example, Radarr: Movie library management
+
+Displays total movies and storage usage
+Shows monitored vs total counts
+
+
+
+Setup Process
+
+Navigate to Setup: Go to the Setup page (/setup)
+Find Integration: Scroll to "Dashboard Integrations" section
+Configure Service:
+
+URL: Full service URL including http:// or https://
+API Key: Found in service settings (usually under Settings > General)
+
+
+Test Connection: Click "Test" button to verify
+Save: Click "Save" to store configuration
+Restart: Restart the Episeerr container
+Verify: Check Dashboard for new statistics pill
+Quick Link: Service link automatically appears in sidebar
+
+Important Notes
+
+Container restart required after initial configuration
+Configuration persists across restarts
+Services can be reconfigured at any time through Setup page
+Invalid configurations won't crash the dashboard - they simply won't display
+
+Creating Custom Integrations
+Advanced users can create custom integrations for any service with an API:
+
+Copy Template: Start with /integrations/_INTEGRATION_TEMPLATE.py
+Customize: Fill in service details, API calls, and widget configuration
+Save: Name file yourservice.py (no underscore prefix)
+Restart: Restart container to load new integration
+Configure: Service automatically appears in Setup page
+
+The template includes extensive documentation and examples for:
+
+Media library services (similar to Radarr)
+Download clients (qBittorrent, Transmission, etc.)
+Indexers and search services (Prowlarr, Jackett, etc.)
+Custom services with unique requirements
+
+
+## Plex Watchlist Sync
+
+**Add something to your Plex watchlist and Episeerr takes care of the rest.**
+
+- **TV shows** → get the `episeerr_select` tag in Sonarr → appear in Pending Requests → you pick a rule or specific episodes before anything downloads
+- **Movies** → go straight to Radarr (no selection step needed)
+
+**Optional:** Auto-remove movies from Radarr after you've watched them, with a configurable grace period.
+
+---
+
+### Setup
+
+1. Go to `http://your-server:5002/setup`
+2. Scroll to the **Plex** section under Dashboard Integrations
+3. Enter your **Plex URL** (e.g., `http://plex:32400`) and **Plex Token**
+4. In the **Watchlist Auto-Sync** section below the connection fields:
+   - Enable **automatic sync**
+   - Set your **sync interval** (default: 2 hours)
+   - Optionally enable **movie cleanup** with a grace period
+5. Click **Save**
+
+> **Prerequisites:** The `episeerr_select` delayed release profile in Sonarr must be set up or TV shows will start downloading immediately. See [Episode Selection setup](#episode-selection).
+
+---
+
+### Getting Your Plex Token
+
+A helper script is included in the repo. It requires the `requests` library.
 
 ```bash
-# Check webhook reception
-docker logs episeerr | grep "Received.*webhook"
+python get_plex_token.py
+```
 
-# Check rule processing
-docker logs episeerr | grep "Monitored.*episodes"
+Enter your Plex **username** (not email) and password when prompted. The token printed works for both local server access and the Plex.tv watchlist API.
 
-# Check errors
-docker logs episeerr | grep "Error\|Failed"
+**Manual method (no script):**
+1. Sign in to [plex.tv](https://plex.tv) in a browser
+2. Open any media item
+3. Click the `···` menu → **Get Info**
+4. In the URL bar you'll find `X-Plex-Token=YOURTOKEN`
 
-# Check specific series
-docker logs episeerr | grep "Breaking Bad"
+---
+
+### How It Works
+
+| What You Do | What Episeerr Does |
+|-------------|-------------------|
+| Add TV show to Plex watchlist | Creates a pending selection request, tags series in Sonarr with `episeerr_select` |
+| Add movie to Plex watchlist | Sends directly to Radarr |
+| Watch a movie (if cleanup enabled) | Schedules Radarr deletion after grace period |
+
+Sync runs on your configured interval. Items already in Sonarr/Radarr are skipped. Items already in your pending requests are not duplicated.
+
+---
+
+### Movie Cleanup
+
+When **Delete movies after watched** is enabled:
+- Episeerr checks for watched movies in your Plex library
+- Movies watched more than **Grace Period** days ago are removed from Radarr
+- Only movies that were added via watchlist sync are eligible
+
+---
+
+## Webhook Setup
+
+Webhooks let Episeerr respond to events automatically. **You only need the webhooks for features you want to use.**
+
+### 1. Sonarr Webhook (Required)
+
+**Enables:** Tag processing, auto-assignment, series addition detection
+
+**Setup:**
+
+1. **Sonarr** → Settings → Connect → Add → Webhook
+
+2. **Configure:**
+   - **Name:** Episeerr
+   - **URL:** `http://your-episeerr:5002/sonarr-webhook`
+   - **Method:** POST
+   - **Triggers:** Enable ONLY "On Series Add" and "on Grab"
+
+3. **Save**
+
+```
+[Sonarr webhook configuration screen]
+- Shows URL field
+- Shows "On Series Add" checkbox
+- Shows Save button
+```
+
+**Test it:**
+```bash
+# Add a series in Sonarr and check logs
+docker logs episeerr | grep "Received Sonarr webhook"
 ```
 
 ---
 
-## Contributing
+### 2. Tautulli Webhook (For Viewing Automation)
 
-Contributions welcome! Please open an issue or pull request on GitHub.
+**Enables:** Next episode ready when you watch
 
----
+**Configuration:**
 
-## License
+**Option 1: Setup Page (Recommended) - v3.2.0+**
+1. Go to `http://your-episeerr:5002/setup`
+2. Scroll to **Tautulli** section
+3. Enter Tautulli URL and API Key
+4. Click **Test Connection** to verify
+5. **Save**
 
-[MIT License](LICENSE)
+**Option 2: Environment Variables**
+```yaml
+- TAUTULLI_URL=http://your-tautulli:8181
+- TAUTULLI_API_KEY=your_tautulli_api_key
+```
+
+**Webhook Setup:**
+
+1. **Tautulli** → Settings → Notification Agents → Add → Webhook
+
+2. **Configure Webhook:**
+   - **Webhook URL:** `http://your-episeerr:5002/webhook`
+   - **Webhook Method:** POST
+
+3. **Configure TIT License](LICENSE)
 
 ---
 
