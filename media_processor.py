@@ -1527,9 +1527,13 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
     is_pilot = (season == 1 and episode_num == 1)
 
     if series_id is not None:
-        from episeerr import load_config, get_rule_for_series
         config = load_config()
-        rule = get_rule_for_series(series_id, config)
+        series_id_str = str(series_id)
+        rule = next(
+            (rule_data for rule_data in config.get('rules', {}).values()
+             if series_id_str in rule_data.get('series', {})),
+            None
+        )
 
         if rule:
             # keep_pilot: protect S01E01

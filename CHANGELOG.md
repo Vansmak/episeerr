@@ -2,7 +2,10 @@
 
 ## [Unreleased / Dev]
 
-### v3.3.8 
+### v3.3.9
+- **Fix** — `get_rule_for_series` phantom import removed from `media_processor.py`; replaced with inline lookup over `config['rules']` (function never existed, caused import error during webhook processing)
+
+### v3.3.8
 
 ⚠️ **BREAKING CHANGES**
 - **Webhook URLs Changed** - Update webhook configurations:
