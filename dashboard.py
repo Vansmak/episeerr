@@ -324,7 +324,10 @@ def dashboard_stats():
                     'configured': True
                 }
             except Exception as e:
-                logger.error(f"Error fetching Sonarr stats: {e}")
+                if isinstance(e, requests.exceptions.ConnectionError):
+                    logger.warning(f"Error fetching Sonarr stats: {e}")
+                else:
+                    logger.error(f"Error fetching Sonarr stats: {e}")
                 stats['sonarr'] = {
                     'configured': True,
                     'error': True,

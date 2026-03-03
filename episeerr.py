@@ -1,4 +1,4 @@
-__version__ = "3.5.5"
+__version__ = "3.4.0"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -93,6 +93,10 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'static',
     'process_sonarr_webhook',
     'handle_server_webhook',
+    # Integration webhooks (Blueprint endpoints — external services can't authenticate)
+    'jellyfin_integration.jellyfin_webhook',
+    'emby_integration.emby_webhook',
+    'seerr_integration.seerr_webhook',
 }
 
 
@@ -181,34 +185,54 @@ def reload_module_configs():
     except Exception as e:
         app.logger.error(f"Failed to reload module configs: {e}")
 
-def auto_add_quick_link(name, url, icon, open_in_iframe=False):
+def get_smart_url(service_data, req):
+    """Return the best URL for the current request context (HTTP vs HTTPS)."""
+    primary_url = service_data.get('url', '') or ''
+    config = service_data.get('config') or {}
+    alternate_url = config.get('alternate_url', '') or ''
+    is_https = (
+        req.is_secure or
+        req.headers.get('X-Forwarded-Proto') == 'https' or
+        req.headers.get('X-Forwarded-Ssl') == 'on'
+    )
+    if is_https and alternate_url:
+        return alternate_url
+    return primary_url or None
+
+
+def get_smart_url_for_link(link, req):
+    """Return the best URL for a quick_link dict."""
+    alternate_url = link.get('alternate_url', '') or ''
+    is_https = (
+        req.is_secure or
+        req.headers.get('X-Forwarded-Proto') == 'https' or
+        req.headers.get('X-Forwarded-Ssl') == 'on'
+    )
+    if is_https and alternate_url:
+        return alternate_url
+    return link.get('url', '')
+
+
+def auto_add_quick_link(name, url, icon, open_in_iframe=False, alternate_url=None):
     """Automatically add or update a service quick link"""
     from settings_db import get_all_quick_links, add_quick_link, delete_quick_link
-    
-    # Check if link already exists (by URL)
+
     existing_links = get_all_quick_links()
-    
-    # Normalize URLs for comparison
     normalized_url = url.rstrip('/').lower()
-    
+
     for link in existing_links:
-        link_url = link['url'].rstrip('/').lower()
-        
-        if link_url == normalized_url:
+        if link['url'].rstrip('/').lower() == normalized_url:
             app.logger.debug(f"Quick link for {name} already exists (ID: {link['id']})")
-            
-            # UPDATE: Check if open_in_iframe setting changed
-            if link.get('open_in_iframe') != open_in_iframe:
-                # Need to update the quick link with new iframe setting
+            # Recreate if iframe or alternate_url changed
+            if (link.get('open_in_iframe') != open_in_iframe or
+                    (link.get('alternate_url') or '') != (alternate_url or '')):
                 delete_quick_link(link['id'])
-                new_id = add_quick_link(name, url, icon, open_in_iframe)
-                app.logger.info(f"Updated quick link {name} - iframe: {open_in_iframe} (ID: {new_id})")
-            
-            return  # Already exists (and updated if needed)
-    
-    # Add new link
-    add_quick_link(name, url, icon, open_in_iframe)
-    app.logger.info(f"Auto-added {name} to quick links - iframe: {open_in_iframe}")
+                new_id = add_quick_link(name, url, icon, open_in_iframe, alternate_url)
+                app.logger.info(f"Updated quick link {name} (ID: {new_id})")
+            return
+
+    add_quick_link(name, url, icon, open_in_iframe, alternate_url)
+    app.logger.info(f"Auto-added {name} to quick links")
 
 @app.before_request
 def check_first_run():
@@ -295,14 +319,21 @@ def setup():
     from settings_db import get_all_quick_links
     quick_links = get_all_quick_links()
     
+    sonarr_config   = (sonarr.get('config')   or {}) if sonarr   else {}
+    tautulli_config = (tautulli.get('config') or {}) if tautulli else {}
+
     return render_template('setup.html',
         setup_complete=setup_complete,
         sonarr_connected=sonarr is not None,
         sonarr_url=sonarr['url'] if sonarr else None,
         sonarr_apikey=sonarr['api_key'] if sonarr else None,
+        sonarr_alternate_url=sonarr_config.get('alternate_url', ''),
+        sonarr_open_in_iframe=sonarr_config.get('open_in_iframe', False),
         tautulli_connected=tautulli is not None,
         tautulli_url=tautulli['url'] if tautulli else None,
         tautulli_apikey=tautulli['api_key'] if tautulli else None,
+        tautulli_alternate_url=tautulli_config.get('alternate_url', ''),
+        tautulli_open_in_iframe=tautulli_config.get('open_in_iframe', False),
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
         integrations=get_all_integrations(),
@@ -480,14 +511,14 @@ def save_service_config(service):
                 # Auto-add/update quick links if URL provided
                 if url and url.startswith('http'):
                     try:
-                        # Get the open_in_iframe setting from normalized_data
                         open_in_iframe = normalized_data.get('open_in_iframe', False)
-                        
+                        alternate_url = normalized_data.get('alternate_url') or None
                         auto_add_quick_link(
                             integration.display_name,
                             url,
                             integration.icon,
-                            open_in_iframe  # Pass the iframe setting
+                            open_in_iframe,
+                            alternate_url
                         )
                     except Exception as e:
                         app.logger.warning(f"Failed to add/update quick link: {e}")
@@ -516,32 +547,38 @@ def save_service_config(service):
             url = data.get('sonarr-url')
             apikey = data.get('sonarr-apikey')
             open_in_iframe = data.get('sonarr-open_in_iframe', False)
+            alternate_url = data.get('sonarr-alternate_url') or None
 
             if not url or not apikey:
                 return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
-            
-            save_service('sonarr', 'default', url, apikey)
-            auto_add_quick_link('Sonarr', url, 
-                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png', open_in_iframe)
-            
+
+            save_service('sonarr', 'default', url, apikey,
+                         config={'alternate_url': alternate_url, 'open_in_iframe': open_in_iframe})
+            auto_add_quick_link('Sonarr', url,
+                                'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png',
+                                open_in_iframe, alternate_url)
+
             return jsonify({
                 'status': 'success',
                 'message': 'Sonarr saved successfully'
             })
-        
-        
-        
+
+
+
         elif service == 'tautulli':
             url = data.get('tautulli-url')
             apikey = data.get('tautulli-apikey')
             open_in_iframe = data.get('tautulli-open_in_iframe', False)
+            alternate_url = data.get('tautulli-alternate_url') or None
 
             if not url or not apikey:
                 return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
-            
-            save_service('tautulli', 'default', url, apikey)
+
+            save_service('tautulli', 'default', url, apikey,
+                         config={'alternate_url': alternate_url, 'open_in_iframe': open_in_iframe})
             auto_add_quick_link('Tautulli', url,
-                              'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png', open_in_iframe)
+                                'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png',
+                                open_in_iframe, alternate_url)
             
             return jsonify({
                 'status': 'success',
@@ -578,18 +615,22 @@ def save_service_config(service):
 def manage_quick_links():
     """Get or add quick links"""
     from settings_db import get_all_quick_links, add_quick_link
-    
+
     if request.method == 'GET':
         links = get_all_quick_links()
+        # Apply smart URL selection — swap in alternate_url when accessed via HTTPS
+        for link in links:
+            link['url'] = get_smart_url_for_link(link, request)
         return jsonify({'status': 'success', 'links': links})
-    
+
     else:  # POST
         data = request.json
         link_id = add_quick_link(
             data.get('name'),
             data.get('url'),
             data.get('icon', 'fas fa-link'),
-            data.get('open_in_iframe', False)  # NEW: Accept iframe flag
+            data.get('open_in_iframe', False),
+            data.get('alternate_url') or None
         )
         return jsonify({'status': 'success', 'id': link_id})
 
@@ -601,15 +642,16 @@ def iframe_view(service_id):
     from settings_db import get_quick_link_by_id
     
     service = get_quick_link_by_id(service_id)
-    
+
     if not service:
         return "Service not found", 404
-    
+
+    smart_url = get_smart_url_for_link(service, request)
+
     if not service.get('open_in_iframe'):
-        # If not configured for iframe, redirect to external URL
-        return redirect(service['url'])
-    
-    return render_template('iframe_view.html', service=service)
+        return redirect(smart_url)
+
+    return render_template('iframe_view.html', service={**service, 'url': smart_url})
 
 
 @app.route('/api/services-sidebar')
@@ -659,7 +701,7 @@ def get_media_server():
         media_servers.append({
             'type': 'tautulli',
             'name': 'Tautulli',
-            'url': tautulli['url'],
+            'url': get_smart_url(tautulli, request),
             'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/tautulli.png'
         })
 
@@ -671,7 +713,7 @@ def get_media_server():
             media_servers.append({
                 'type': 'jellyfin',
                 'name': 'Jellyfin',
-                'url': data['url'],
+                'url': get_smart_url(data, request),
                 'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/jellyfin.png'
             })
 
@@ -683,7 +725,7 @@ def get_media_server():
             media_servers.append({
                 'type': 'emby',
                 'name': 'Emby',
-                'url': data['url'],
+                'url': get_smart_url(data, request),
                 'icon': 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/emby.png'
             })
 
@@ -711,7 +753,7 @@ def get_optional_integrations():
             config = data.get('config') or {}
             connected.append({
                 'name': integration.display_name,
-                'url': data['url'],
+                'url': get_smart_url(data, request),
                 'icon': integration.icon,
                 'service_name': service_name,
                 'open_in_iframe': bool(config.get('open_in_iframe', False)),
@@ -736,13 +778,14 @@ def iframe_service_view(service_type):
     if service.get('config'):
         open_in_iframe = service['config'].get('open_in_iframe', False)
     
+    smart_url = get_smart_url(service, request)
+
     if not open_in_iframe:
-        # If not configured for iframe, redirect to external URL
-        return redirect(service['url'])
-    
+        return redirect(smart_url)
+
     return render_template('iframe_view.html', service={
         'name': service_type.replace('_', ' ').title(),
-        'url': service['url']
+        'url': smart_url
     })
 
 @app.route('/api/quick-links/<int:link_id>', methods=['DELETE'])
@@ -1063,7 +1106,10 @@ Add these routes to your Flask application to support the sidebar navigation.
 def rules_page():
     """Rules management page with series assignment interface."""
     config = load_config()
-    all_series = get_sonarr_series()
+    try:
+        all_series = get_sonarr_series()
+    except requests.exceptions.ConnectionError:
+        all_series = []
     
     # Get SONARR_URL for template links
     sonarr_preferences = sonarr_utils.load_preferences()
@@ -1747,6 +1793,9 @@ def get_sonarr_series():
         
         return all_series
         
+    except requests.exceptions.ConnectionError:
+        app.logger.warning("Sonarr not reachable - is it running?")
+        raise
     except Exception as e:
         app.logger.error(f"Error fetching Sonarr series: {str(e)}")
         return []
@@ -1771,7 +1820,11 @@ def index():
 def series_management():  # Changed from index to avoid confusion
     """Main series/rules management page."""
     config = load_config()
-    all_series = get_sonarr_series()
+    try:
+        all_series = get_sonarr_series()
+    except requests.exceptions.ConnectionError:
+        all_series = []
+        app.logger.warning("Sonarr not reachable - showing empty series list")
     sonarr_stats = get_sonarr_stats()
     
     # Get SONARR_URL for template links
@@ -2362,9 +2415,23 @@ def series_stats():
             count = sum(1 for sid in details.get('series', {}) if str(sid) in all_series_ids)
             stats['rule_breakdown'][rule_name] = count
         return jsonify(stats)
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "status": "error",
+            "message": "Sonarr unavailable",
+            "series_count": 0,
+            "monitored": 0,
+            "unassigned": 0
+        }), 503
     except Exception as e:
         app.logger.error(f"Error getting series stats: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            "status": "error",
+            "message": str(e),
+            "series_count": 0,
+            "monitored": 0,
+            "unassigned": 0
+        }), 500
 
 def cleanup_config_rules():
     """Clean up config by removing non-existent series AND comprehensive tag reconciliation."""
@@ -2510,6 +2577,9 @@ def cleanup_config_rules():
         else:
             app.logger.info("✓ Tag reconciliation complete: No changes needed")
             
+    except requests.exceptions.ConnectionError:
+        app.logger.warning("Sonarr not reachable during cleanup - skipping")
+        return
     except Exception as e:
         app.logger.error(f"Error during config cleanup: {str(e)}")
 
@@ -4610,7 +4680,10 @@ def migrate_create_rule_tags():
                     app.logger.info(f"✓ Created/verified tag: episeerr_{rule_name} (ID: {tag_id})")
                 else:
                     failed.append(rule_name)
-                    app.logger.error(f"✗ Failed to create tag for rule: {rule_name}")
+                    app.logger.warning(f"✗ Failed to create tag for rule: {rule_name}")
+            except requests.exceptions.ConnectionError:
+                failed.append(rule_name)
+                app.logger.warning(f"✗ Sonarr not reachable - skipping tag for rule: {rule_name}")
             except Exception as e:
                 failed.append(rule_name)
                 app.logger.error(f"✗ Error creating tag for {rule_name}: {str(e)}")
@@ -4786,9 +4859,11 @@ def initialize_episeerr():
         # Summary
         app.logger.info(f"✓ Tag reconciliation complete: {drift_fixed} moved, {drift_synced} synced, {orphaned} orphaned")
             
+    except requests.exceptions.ConnectionError:
+        app.logger.warning("Sonarr not ready - tags will be created when Sonarr becomes available")
     except Exception as e:
         app.logger.error(f"Error during tag reconciliation: {str(e)}")
-    
+
     # NEW: Ensure delay profile has control tags ONLY (default, select, delay)
     try:
         updated = episeerr_utils.update_delay_profile_with_control_tags()
@@ -4796,6 +4871,8 @@ def initialize_episeerr():
             app.logger.info("✓ Delay profile updated with control tags (default, select, delay)")
         else:
             app.logger.warning("Delay profile update skipped or failed (check logs)")
+    except requests.exceptions.ConnectionError:
+        app.logger.warning("Sonarr not ready yet - will retry delay profile sync later")
     except Exception as e:
         app.logger.error(f"Error updating delay profile with control tags: {str(e)}")
     

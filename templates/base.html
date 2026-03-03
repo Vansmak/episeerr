@@ -821,7 +821,7 @@ function renderSidebarLink(link) {
     const iconHtml = isImageIcon
         ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
         : `<i class="${link.icon || 'fas fa-link'}"></i>`;
-    if (link.open_in_iframe) {
+    if (link.open_in_iframe && window.location.protocol !== 'https:') {
         const href = link.iframe_url || `/iframe/${link.id}`;
         return `<a href="${href}" class="sidebar-rule-item" title="${link.name}">
                     ${iconHtml}

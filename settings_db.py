@@ -73,6 +73,12 @@ def init_settings_db():
     except sqlite3.OperationalError:
         cursor.execute('ALTER TABLE quick_links ADD COLUMN open_in_iframe BOOLEAN DEFAULT 0')
 
+    # Migration: Add alternate_url column if it doesn't exist
+    try:
+        cursor.execute('SELECT alternate_url FROM quick_links LIMIT 1')
+    except sqlite3.OperationalError:
+        cursor.execute('ALTER TABLE quick_links ADD COLUMN alternate_url TEXT')
+
     conn.commit()
     conn.close()
 
@@ -307,41 +313,43 @@ def get_all_quick_links():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    
+
     cursor.execute('''
-        SELECT id, name, url, icon, open_in_iframe, created_at
+        SELECT id, name, url, icon, open_in_iframe, alternate_url, created_at
         FROM quick_links
         ORDER BY created_at ASC
     ''')
-    
+
     links = []
     for row in cursor.fetchall():
+        keys = row.keys()
         links.append({
             'id': row['id'],
             'name': row['name'],
             'url': row['url'],
             'icon': row['icon'],
-            'open_in_iframe': bool(row['open_in_iframe']) if 'open_in_iframe' in row.keys() else False,
+            'open_in_iframe': bool(row['open_in_iframe']) if 'open_in_iframe' in keys else False,
+            'alternate_url': row['alternate_url'] if 'alternate_url' in keys else None,
             'created_at': row['created_at']
         })
-    
+
     conn.close()
     return links
 
-def add_quick_link(name, url, icon='fas fa-link', open_in_iframe=False):
+def add_quick_link(name, url, icon='fas fa-link', open_in_iframe=False, alternate_url=None):
     """Add a new quick link"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute('''
-        INSERT INTO quick_links (name, url, icon, open_in_iframe)
-        VALUES (?, ?, ?, ?)
-    ''', (name, url, icon, 1 if open_in_iframe else 0))
-    
+        INSERT INTO quick_links (name, url, icon, open_in_iframe, alternate_url)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (name, url, icon, 1 if open_in_iframe else 0, alternate_url or None))
+
     link_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
+
     return link_id
 
 def delete_quick_link(link_id):

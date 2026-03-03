@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: Dockerfile
     
-    #env_file:
-      #- .env
+    env_file:
+      - .env
     volumes:
       - ./logs:/app/logs
       - ./config:/app/config
@@ -19,10 +19,10 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=INFO
-      - REQUIRE_AUTH=true
-      - AUTH_USERNAME=admin
-      - AUTH_PASSWORD=changeme
-      - SECRET_KEY=supersecretkey
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-true}
+      - AUTH_USERNAME=${AUTH_USERNAME:-admin}
+      - AUTH_PASSWORD=${AUTH_PASSWORD}
+      - SECRET_KEY=${SECRET_KEY}
       #- AUTH_BYPASS_LOCALHOST=true
       #- AUTH_SESSION_TIMEOUT=86400
       #- SESSION_SECURE=false
