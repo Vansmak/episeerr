@@ -71,13 +71,19 @@ def init_settings_db():
     try:
         cursor.execute('SELECT open_in_iframe FROM quick_links LIMIT 1')
     except sqlite3.OperationalError:
-        cursor.execute('ALTER TABLE quick_links ADD COLUMN open_in_iframe BOOLEAN DEFAULT 0')
+        try:
+            cursor.execute('ALTER TABLE quick_links ADD COLUMN open_in_iframe BOOLEAN DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass  # Another worker already added it
 
     # Migration: Add alternate_url column if it doesn't exist
     try:
         cursor.execute('SELECT alternate_url FROM quick_links LIMIT 1')
     except sqlite3.OperationalError:
-        cursor.execute('ALTER TABLE quick_links ADD COLUMN alternate_url TEXT')
+        try:
+            cursor.execute('ALTER TABLE quick_links ADD COLUMN alternate_url TEXT')
+        except sqlite3.OperationalError:
+            pass  # Another worker already added it
 
     conn.commit()
     conn.close()
@@ -283,6 +289,50 @@ def get_jellyfin_config() -> Optional[Dict[str, Any]]:
         
         return base_config
     return None
+
+def get_plex_config() -> Optional[Dict[str, Any]]:
+    """Get Plex config from DB or env"""
+    service = get_service('plex', 'default')
+    if service and service.get('config'):
+        cfg = service['config']
+        return {
+            'url':                service['url'],
+            'api_key':            service['api_key'],
+            'detection_method':   cfg.get('detection_method', 'scrobble'),
+            'progress_threshold': float(cfg.get('progress_threshold', 50.0)),
+            'polling_interval':   int(cfg.get('polling_interval', 15)),
+        }
+    # Fallback to env
+    if os.getenv('PLEX_URL'):
+        return {
+            'url':                os.getenv('PLEX_URL'),
+            'api_key':            os.getenv('PLEX_TOKEN') or os.getenv('PLEX_API_KEY'),
+            'detection_method':   os.getenv('PLEX_DETECTION_METHOD', 'scrobble'),
+            'progress_threshold': float(os.getenv('PLEX_PROGRESS_THRESHOLD', '50.0')),
+            'polling_interval':   int(os.getenv('PLEX_POLLING_INTERVAL', '15')),
+        }
+    return None
+
+
+def get_tautulli_config() -> Optional[Dict[str, Any]]:
+    """Get Tautulli config from DB or env"""
+    service = get_service('tautulli', 'default')
+    if service:
+        cfg = service.get('config') or {}
+        return {
+            'url':           service['url'],
+            'api_key':       service['api_key'],
+            'override_plex': bool(cfg.get('override_plex', False)),
+        }
+    # Fallback to env
+    if os.getenv('TAUTULLI_URL'):
+        return {
+            'url':           os.getenv('TAUTULLI_URL'),
+            'api_key':       os.getenv('TAUTULLI_API_KEY'),
+            'override_plex': False,
+        }
+    return None
+
 
 def get_emby_config() -> Optional[Dict[str, Any]]:
     """Get Emby config from DB or env"""

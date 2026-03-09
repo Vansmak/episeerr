@@ -25,7 +25,8 @@ This project started as scratching my own itch - I wanted more granular series m
   - [Getting Your Plex Token](#getting-your-plex-token)
 - [Webhook Setup](#webhook-setup)
   - [Sonarr](#1-sonarr-webhook-required)
-  - [Tautulli (Plex)](#2-tautulli-webhook-for-viewing-automation)
+  - [Plex (native)](#2-plex-webhook-for-viewing-automation--plex-pass-required)
+  - [Tautulli (optional)](#2b-tautulli-webhook-optional--plex-users-who-prefer-tautulli-history)
   - [Jellyfin](#3-jellyfin-webhook-for-viewing-automation)
   - [Jellyseerr/Overseerr](#4-jellyseerroverseerr-webhook-optional)
 - [How to Use](#how-to-use)
@@ -116,40 +117,40 @@ services:
       - TMDB_API_KEY=your_tmdb_read_access_token
       
       # ============================================
-      # OPTIONAL - For Viewing Automation
+      # OPTIONAL - For Viewing Automation (pick ONE media server)
       # ============================================
-      
-      # Option 1: Tautulli (Plex)
-      - TAUTULLI_URL=http://your-tautulli:8181
-      - TAUTULLI_API_KEY=your_tautulli_key
-      
-      # Option 2: Jellyfin (choose one mode below)
-      environment:
-      # --- Jellyfin: uncomment Option A OR Option B, not both ---
-      #
-      # Option A: Real-time (Jellyfin sends PlaybackProgress webhooks)
-      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
-      #   Notification type: PlaybackProgress
-      #
-      # - JELLYFIN_URL=http://your-jellyfin:8096
-      # - JELLYFIN_API_KEY=your_jellyfin_api_key
-      # - JELLYFIN_USER_ID=your_username
-      # - JELLYFIN_TRIGGER_MIN=50.0
-      # - JELLYFIN_TRIGGER_MAX=55.0
-      #
-      # Option B: Polling (Jellyfin sends PlaybackStart, Episeerr polls /Sessions)
-      #   Configure in Jellyfin: http://<episeerr>:5002/api/integration/jellyfin/webhook
-      #   Notification type: PlaybackStart
-      #
-      # - JELLYFIN_URL=http://your-jellyfin:8096
-      # - JELLYFIN_API_KEY=your_jellyfin_api_key
-      # - JELLYFIN_USER_ID=your_username
-      # - JELLYFIN_TRIGGER_PERCENTAGE=50.0
-      # - JELLYFIN_POLL_INTERVAL=900
 
-      # --- Emby: uncomment to enable ---
-      #   Configure in Emby: User Prefs → Notifications → Webhooks
-      #   URL: http://<episeerr>:5002/api/integration/emby/webhook
+      # Option A: Plex (recommended — native webhooks, no Tautulli needed)
+      #   Requires Plex Pass for webhook support.
+      #   Configure webhook in Plex: Settings → Webhooks
+      #   URL: http://<episeerr>:5002/api/integration/plex/webhook
+      #   Detection mode + token configured via /setup page (GUI recommended)
+      #
+      # - PLEX_URL=http://your-plex:32400
+      # - PLEX_TOKEN=your_plex_token
+
+      # Option A2: Tautulli (Plex without Plex Pass, or for richer watch history)
+      #   ⚠️  Do NOT use alongside Plex native webhooks — configure one or the other.
+      #   Webhook URL: http://<episeerr>:5002/api/integration/tautulli/webhook
+      #   Legacy URL:  http://<episeerr>:5002/webhook  (still supported)
+      #
+      # - TAUTULLI_URL=http://your-tautulli:8181
+      # - TAUTULLI_API_KEY=your_tautulli_key
+
+      # Option B: Jellyfin (choose mode A or B in /setup, not via env vars)
+      #   Webhook URL: http://<episeerr>:5002/api/integration/jellyfin/webhook
+      #   Notification type: PlaybackProgress (real-time) or Session Start (polling)
+      #
+      # - JELLYFIN_URL=http://your-jellyfin:8096
+      # - JELLYFIN_API_KEY=your_jellyfin_api_key
+      # - JELLYFIN_USER_ID=your_username
+      # - JELLYFIN_TRIGGER_PERCENTAGE=50.0   # polling mode
+      # - JELLYFIN_POLL_INTERVAL=900          # polling mode
+      # - JELLYFIN_TRIGGER_MIN=50.0           # real-time mode
+      # - JELLYFIN_TRIGGER_MAX=55.0           # real-time mode
+
+      # Option C: Emby
+      #   Webhook URL: http://<episeerr>:5002/api/integration/emby/webhook
       #   Events: playback.start, playback.stop
       #
       # - EMBY_URL=http://your-emby:8096
@@ -268,7 +269,7 @@ Create `/boot/config/plugins/community.applications/private/episeerr/my-episeerr
 **Configure:**
 1. **Sonarr** - URL and API key (required) **Initial setup Restart container for changes to take effect**
 2. **TMDB** - API Read Access Token (required)
-3. **Media Server** - Choose Jellyfin, Emby, or Plex/Tautulli (optional)
+3. **Media Server** - Choose Plex, Jellyfin, or Emby (optional — needed for viewing automation)
 4. **Overseerr/Jellyseerr** - Request integration (optional)
 
 **Features:**
@@ -295,17 +296,18 @@ Create `/boot/config/plugins/community.applications/private/episeerr/my-episeerr
 | `SONARR_URL` | ❌ Optional* | Sonarr base URL (e.g., `http://sonarr:8989`) |
 | `SONARR_API_KEY` | ❌ Optional* | Sonarr API key (Settings → General) |
 | `TMDB_API_KEY` | ❌ Optional* | TMDB **Read Access Token** ([Get one free](https://www.themoviedb.org/settings/api)) |
-| `TAUTULLI_URL` | ❌ Optional | For Plex viewing automation |
+| `PLEX_URL` | ❌ Optional | Plex server URL (e.g. `http://plex:32400`) |
+| `PLEX_TOKEN` | ❌ Optional | Plex authentication token |
+| `TAUTULLI_URL` | ❌ Optional | Tautulli — only needed for watch-history override or if you don't have Plex Pass |
 | `TAUTULLI_API_KEY` | ❌ Optional | Tautulli API key |
 | `JELLYFIN_URL` | ❌ Optional | For Jellyfin viewing automation |
 | `JELLYFIN_API_KEY` | ❌ Optional | Jellyfin API key |
 | `JELLYFIN_USER_ID` | ⚠️ Required if using Jellyfin | Your Jellyfin username |
+| `EMBY_URL` | ❌ Optional | For Emby viewing automation |
+| `EMBY_API_KEY` | ❌ Optional | Emby API key |
+| `EMBY_USER_ID` | ⚠️ Required if using Emby | Your Emby username |
 | `JELLYSEERR_URL` | ❌ Optional | For request integration |
 | `JELLYSEERR_API_KEY` | ❌ Optional | Jellyseerr API key |
-
-| `EMBY_USER_ID` | ⚠️ Required if using emby | Your EMBY username |
-| `EMBY_URL` | ❌ Optional | For request integration |
-| `EMBY_API_KEY` | ❌ Optional | EMBY API key |
 
 **Authentication (Optional):**
 
@@ -462,55 +464,76 @@ Webhooks let Episeerr respond to events automatically. **You only need the webho
 
 3. **Save**
 
-```
-[Sonarr webhook configuration screen]
-- Shows URL field
-- Shows "On Series Add" checkbox
-- Shows Save button
-```
-
 **Test it:**
 ```bash
-# Add a series in Sonarr and check logs
 docker logs episeerr | grep "Received Sonarr webhook"
 ```
 
 ---
 
-### 2. Tautulli Webhook (For Viewing Automation)
+### 2. Plex Webhook (For Viewing Automation — Plex Pass required)
 
-**Enables:** Next episode ready when you watch
+**Enables:** Next episode ready when you watch, dashboard "Now Playing" widget
 
-**Configuration:**
+Episeerr now integrates with Plex **directly** — no Tautulli required for episode detection.
 
-**Option 1: Setup Page (Recommended) - v3.2.0+**
-1. Go to `http://your-episeerr:5002/setup`
-2. Scroll to **Tautulli** section
-3. Enter Tautulli URL and API Key
-4. Click **Test Connection** to verify
-5. **Save**
+> **⚠️ Plex OR Tautulli for episode detection — not both.**
+> Configure one webhook source per setup. Using both can cause double-processing.
 
-**Option 2: Environment Variables**
-```yaml
-- TAUTULLI_URL=http://your-tautulli:8181
-- TAUTULLI_API_KEY=your_tautulli_api_key
+**Setup:**
+
+1. Go to `http://your-episeerr:5002/setup` → **Integrations** → **Plex**
+2. Enter your **Plex Server URL** and **Plex Token** ([how to get token](#getting-your-plex-token))
+3. Choose your **Detection Method** (see table below)
+4. Click **Test** then **Save**
+
+**In Plex:**
+- **Plex Web / Desktop** → Settings → Webhooks → Add Webhook
+- **URL:** `http://your-episeerr:5002/api/integration/plex/webhook`
+
+**Detection Modes:**
+
+| Mode | How It Works | Best For |
+|------|-------------|----------|
+| **Scrobble (90%)** | Plex fires its native "watched" event. Episeerr processes immediately. | Simple setup, reliable |
+| **Stop + Threshold** | Process when you stop at ≥ your % (e.g. 50%). Scrobble fires at 90% as a **safety net** if the stop event is missed. Episodes are never double-processed. | Earlier triggering, no polling |
+| **Polling** | Background thread polls `/status/sessions` every N minutes. | Unreliable webhook environments |
+
+**Allowed Users (optional):** Enter comma-separated Plex usernames in setup to restrict processing to specific accounts. Leave blank for all users.
+
+**Test it:**
+```bash
+docker logs episeerr | grep "\[Plex webhook\]"
 ```
 
-**Webhook Setup:**
+---
+
+### 2b. Tautulli Webhook (Optional — Plex users who prefer Tautulli history)
+
+**Tautulli is now optional.** Use it only if you want richer watch history from Tautulli instead of Plex's native API (e.g. for grace period and dormant detection accuracy).
+
+> **⚠️ If you use Plex native webhooks (above), do NOT also set up a Tautulli "Watched" webhook.**
+> Tautulli's "Watched" webhook and Plex's scrobble/stop webhooks both trigger episode processing — running both will cause double downloads.
+
+**When to use Tautulli:**
+- You want Tautulli's richer per-user watch history for grace period / dormant decisions
+- You don't have Plex Pass (no native webhooks available)
+
+**Setup:**
+
+1. Go to `http://your-episeerr:5002/setup` → **Integrations** → **Tautulli**
+2. Enter Tautulli URL and API Key
+3. Optionally enable **"Use Tautulli for watch history"** — routes all watch-date lookups (grace, dormant) through Tautulli
+4. Click **Test** then **Save**
+
+**Tautulli Webhook (only if using Tautulli for episode detection):**
 
 1. **Tautulli** → Settings → Notification Agents → Add → Webhook
-
-2. **Configure Webhook:**
-   - **Webhook URL:** `http://your-episeerr:5002/webhook`
-   - **Webhook Method:** POST
-
-3. **Configure Triggers:**
-   - **Triggers:** Enable ONLY "Watched"
-   - **Conditions:** (Leave default)
-
-4. **Configure Data:**
-
-   **Text:**
+2. **Configure:**
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/tautulli/webhook`
+   - **Method:** POST
+   - **Trigger:** "Watched"
+3. **Data → Text:**
    ```json
    {
      "plex_title": "{show_name}",
@@ -520,27 +543,14 @@ docker logs episeerr | grep "Received Sonarr webhook"
      "themoviedb_id": "{themoviedb_id}"
    }
    ```
+4. **Save**
 
-5. **Save**
+> **Legacy URL:** `/webhook` still works if you have an existing Tautulli setup — no changes needed.
+
+In Tautulli → Settings → General, set **TV Episode Watched Percent** between 50–95% (recommended: 80%).
 
 ![webhook](https://github.com/Vansmak/OCDarr/assets/16037573/cf0db503-d730-4a9c-b83e-2d21a3430ece)![webhook2](https://github.com/Vansmak/OCDarr/assets/16037573/45be66c2-1869-49c1-8074-9081ed7c913b)
 ![webhook3](https://github.com/Vansmak/OCDarr/assets/16037573/24f02a75-2100-4b2a-9137-ce1e68803d1f)![webhook4](https://github.com/Vansmak/OCDarr/assets/16037573/f82198fc-e4c4-40ec-a9c7-551b2d8cdccd)
-```
-[Tautulli webhook configuration - Configuration tab]
-[Tautulli webhook configuration - Triggers tab]
-[Tautulli webhook configuration - Data tab with JSON]
-```
-
-**Important Settings:**
-
-In Tautulli → Settings → General:
-- **TV Episode Watched Percent:** Set between 50-95% (recommended: 80%)
-
-**Test it:**
-```bash
-# Watch an episode to 80% and check logs
-docker logs episeerr | grep "Received webhook"
-```
 
 ---
 

@@ -2,8 +2,44 @@
 
 ## [Unreleased / Dev]
 
-use :custom tag 
-## added alternate url to configs.  http can be in iframe but https will always open external.  
+### 🔌 New: Dispatcharr Integration
+- Dashboard stat pill shows active streams and queue count
+- Streaming widget on dashboard — live view of active sessions with channel, quality, and user info
+- Auto-generates sidebar quick link when configured
+- Fixed widget response format to return JSON `{success, html}` (was returning raw HTML string)
+
+### 🎬 Plex — Native Webhook Episode Detection (replaces Tautulli requirement)
+- Plex now has its own standalone integration module (`integrations/plex.py`)
+- **Three detection modes** — choose per your setup:
+  - **Scrobble (90%)**: Plex's native watched event. Zero config, most reliable.
+  - **Stop + Threshold**: Process when you stop at ≥ your threshold % (e.g. 50%). Triggers earlier, no polling needed. Scrobble fires automatically as a safety net — if the stop event is missed (crash, autoplay, network drop) processing happens at 90% instead. Episodes are never double-processed.
+  - **Polling**: Background thread checks `/status/sessions` every N minutes at custom threshold.
+- **Allowed Users** filter — comma-separated Plex usernames; blank = all users
+- **Webhook URL:** `http://your-episeerr:5002/api/integration/plex/webhook` (Plex Pass required)
+- Dashboard "Now Playing" widget driven by the same webhook (all modes)
+- Stale-state fallback: widget falls back to polling when webhook state is > 5 min old
+
+### 🔀 Tautulli — Standalone Optional Integration
+- Tautulli moved to its own module (`integrations/tautulli.py`), no longer hardcoded
+- **Tautulli is now optional** — only needed if you prefer its watch history over Plex's native API
+- **Override Plex** toggle: when enabled, all watch-history lookups (grace period, dormant detection) use Tautulli instead of Plex
+- Webhook URL updated: `http://your-episeerr:5002/api/integration/tautulli/webhook`
+- Legacy URL `/webhook` still works — existing Tautulli setups continue without changes
+- **⚠️ If you use Plex native webhooks for episode detection, do NOT also configure a Tautulli "Watched" webhook — use one or the other, not both**
+
+### 🏗️ Integration System Improvements
+- `setup.html` hardcoded Plex/Tautulli card removed — both now appear in auto-generated Integrations section
+- `setup_complete` check updated: Sonarr + any media server (Plex, Jellyfin, Emby) satisfies setup
+- `get_media_server()` endpoint now includes Plex directly (not via Tautulli)
+- `get_optional_integrations()` excludes Plex and Tautulli from the optional sidebar section
+- Auth bypass list updated for new integration webhook endpoints
+- Watch history router `get_episode_watch_history(rating_key)` added — routes to Tautulli (if override enabled) or Plex
+- `get_plex_series_watch_history()` added — queries max `lastViewedAt` across all episodes in a series
+- `settings_db.py`: added `get_plex_config()` and `get_tautulli_config()` with env fallback
+
+### 🗝️ Misc
+- `use :custom tag` — alternate URL for configs (HTTP can open in iframe, HTTPS always opens externally)
+- Alternate URL added to quick link configs
 
 ### v3.4.0
 

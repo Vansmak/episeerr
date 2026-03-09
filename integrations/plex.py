@@ -18,6 +18,147 @@ from integrations.base import ServiceIntegration
 
 logger = logging.getLogger(__name__)
 
+# ══════════════════════════════════════════════════════════════════
+#  Webhook-driven Now Playing state
+#  Updated in real-time by POST /api/integration/plex/webhook
+# ══════════════════════════════════════════════════════════════════
+
+_wh_lock        = threading.Lock()
+_wh_session: Optional[Dict] = None   # Current session (None = nothing playing)
+_wh_last_played: Optional[Dict] = None  # Last known session (shown after stop)
+_wh_updated_at: Optional[datetime] = None  # When state was last written
+
+# Webhook state older than this is considered stale; widget falls back to polling
+_WEBHOOK_STALE_SECONDS = 300  # 5 minutes
+
+# ══════════════════════════════════════════════════════════════════
+#  Episode-detection polling state  (POLLING mode only)
+# ══════════════════════════════════════════════════════════════════
+
+_plex_poll_lock    = threading.Lock()
+_active_plex_sessions: Dict[str, Dict] = {}    # keyed by Plex session key
+_plex_poll_threads: Dict[str, threading.Thread] = {}
+
+# Dedup tracking for stop_threshold mode: prevents scrobble safety-net
+# from double-processing an episode already handled by media.stop.
+# Key: "SeriesName:SxEy"  Value: unix timestamp of processing
+_processed_lock: threading.Lock = threading.Lock()
+_recently_processed: Dict[str, float] = {}
+_RECENT_TTL = 7200  # 2 hours — enough to span a stop → scrobble gap
+
+
+def _ep_key(series_name: str, season, episode) -> str:
+    return f"{series_name}:S{season}E{episode}"
+
+
+def _mark_episode_processed(key: str) -> None:
+    import time
+    with _processed_lock:
+        _recently_processed[key] = time.time()
+
+
+def _was_episode_processed(key: str) -> bool:
+    import time
+    with _processed_lock:
+        ts = _recently_processed.get(key)
+        if ts and (time.time() - ts) < _RECENT_TTL:
+            return True
+        if ts:
+            del _recently_processed[key]  # expired — clean up
+        return False
+
+
+def _get_plex_detection_cfg() -> Dict:
+    """Load Plex episode-detection config from the database."""
+    try:
+        from settings_db import get_service
+        svc = get_service('plex', 'default')
+        if svc:
+            cfg = svc.get('config') or {}
+            return {
+                'url':               svc.get('url', '').rstrip('/'),
+                'api_key':           svc.get('api_key', ''),
+                'detection_method':  cfg.get('detection_method', 'scrobble'),
+                'progress_threshold': float(cfg.get('progress_threshold', 50.0)),
+                'polling_interval':  int(cfg.get('polling_interval', 15)),
+                'allowed_users':     cfg.get('allowed_users', []),  # [] = all users
+            }
+    except Exception as exc:
+        logger.warning(f"[Plex] Could not load detection config: {exc}")
+    return {
+        'url': '', 'api_key': '',
+        'detection_method': 'scrobble',
+        'progress_threshold': 50.0,
+        'polling_interval': 15,
+        'allowed_users': [],
+    }
+
+
+def get_plex_watch_history(rating_key: str) -> Optional[Dict]:
+    """
+    Query the Plex API for the most recent view timestamp of a media item.
+    Returns {'last_watched': <unix timestamp>} or None.
+    """
+    try:
+        cfg = _get_plex_detection_cfg()
+        url, api_key = cfg['url'], cfg['api_key']
+        if not url or not api_key:
+            return None
+
+        resp = requests.get(
+            f"{url}/library/metadata/{rating_key}",
+            headers={'X-Plex-Token': api_key, 'Accept': 'application/json'},
+            timeout=10,
+        )
+        if resp.ok:
+            meta = resp.json().get('MediaContainer', {}).get('Metadata', [])
+            if meta:
+                last_viewed = meta[0].get('lastViewedAt')
+                if last_viewed:
+                    return {'last_watched': int(last_viewed)}
+    except Exception as exc:
+        logger.warning(f"[Plex] get_plex_watch_history({rating_key}) error: {exc}")
+    return None
+
+
+def get_plex_series_watch_history(series_rating_key: str) -> Optional[Dict]:
+    """
+    Get the most recent watch timestamp across all episodes in a Plex series.
+    Returns {'last_watched': <unix timestamp>} or None.
+    Endpoint: /library/metadata/{ratingKey}/children (seasons), then
+              /library/metadata/{season_key}/children (episodes).
+    Uses the show-level endpoint with type=4 (episode) for efficiency.
+    """
+    try:
+        cfg = _get_plex_detection_cfg()
+        url, api_key = cfg['url'], cfg['api_key']
+        if not url or not api_key:
+            return None
+
+        # Fetch all episodes for the show via type=4 filter
+        resp = requests.get(
+            f"{url}/library/metadata/{series_rating_key}/allLeaves",
+            headers={'X-Plex-Token': api_key, 'Accept': 'application/json'},
+            timeout=15,
+        )
+        if not resp.ok:
+            return None
+
+        episodes = resp.json().get('MediaContainer', {}).get('Metadata', [])
+        if not episodes:
+            return None
+
+        last_viewed = max(
+            (int(ep['lastViewedAt']) for ep in episodes if ep.get('lastViewedAt')),
+            default=None,
+        )
+        if last_viewed:
+            return {'last_watched': last_viewed}
+    except Exception as exc:
+        logger.warning(f"[Plex] get_plex_series_watch_history({series_rating_key}) error: {exc}")
+    return None
+
+
 # ==========================================
 # Sync Data Manager (watchlist_sync.json)
 # ==========================================
@@ -108,38 +249,120 @@ class PlexIntegration(ServiceIntegration):
         ]
     
     def get_custom_setup_html(self, saved_values: dict = None) -> str:
-        """Return custom HTML for watchlist sync settings.
-        
-        This renders below the standard setup fields in the integration config card.
-        Only integrations that define this method get the extra section.
-        """
+        """Render episode-detection config + watchlist-sync settings below the standard fields."""
         saved_values = saved_values or {}
-        sync_config = saved_values.get('watchlist_sync', {})
-        
-        enabled = sync_config.get('enabled', False)
-        interval = sync_config.get('interval_minutes', 120)
+
+        # ── Episode Detection ─────────────────────────────────────
+        detection_method   = saved_values.get('detection_method', 'scrobble')
+        progress_threshold = saved_values.get('progress_threshold', 50)
+        polling_interval   = saved_values.get('polling_interval', 15)
+        allowed_users_raw  = saved_values.get('allowed_users', [])
+        allowed_users_str  = ', '.join(allowed_users_raw) if isinstance(allowed_users_raw, list) else (allowed_users_raw or '')
+
+        scrobble_sel      = 'selected' if detection_method == 'scrobble'       else ''
+        polling_sel       = 'selected' if detection_method == 'polling'        else ''
+        stop_thresh_sel   = 'selected' if detection_method == 'stop_threshold' else ''
+        threshold_hidden  = '' if detection_method in ('polling', 'stop_threshold') else 'display:none;'
+        interval_hidden   = '' if detection_method == 'polling' else 'display:none;'
+        stop_help         = 'Process episode when playback stops at or beyond this percentage.' if detection_method == 'stop_threshold' else 'Process episode when playback reaches this percentage.'
+
+        # ── Watchlist Sync ────────────────────────────────────────
+        sync_config           = saved_values.get('watchlist_sync', {})
+        sync_enabled          = sync_config.get('enabled', False)
+        sync_interval         = sync_config.get('interval_minutes', 120)
         movie_cleanup_enabled = sync_config.get('movie_cleanup', {}).get('enabled', False)
-        grace_days = sync_config.get('movie_cleanup', {}).get('grace_days', 7)
-        
-        enabled_checked = 'checked' if enabled else ''
-        mc_checked = 'checked' if movie_cleanup_enabled else ''
-        
-        # Build interval options
-        intervals = [
+        grace_days            = sync_config.get('movie_cleanup', {}).get('grace_days', 7)
+
+        enabled_checked = 'checked' if sync_enabled else ''
+        mc_checked      = 'checked' if movie_cleanup_enabled else ''
+
+        sync_intervals = [
             (30, '30 minutes'), (60, '1 hour'), (120, '2 hours'),
             (240, '4 hours'), (360, '6 hours'), (720, '12 hours'), (1440, '24 hours')
         ]
-        interval_options = ''
-        for val, label in intervals:
-            selected = 'selected' if val == interval else ''
-            interval_options += f'<option value="{val}" {selected}>{label}</option>'
-        
+        interval_options = ''.join(
+            f'<option value="{v}" {"selected" if v == sync_interval else ""}>{lbl}</option>'
+            for v, lbl in sync_intervals
+        )
+
         return f'''
-        <div id="plex-watchlist-sync-settings" style="border-top: 1px solid rgba(255,255,255,0.1); margin-top: 20px; padding-top: 20px;">
+        <!-- ── Episode Detection ─────────────────────────────── -->
+        <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:20px;padding-top:20px;">
+            <h6 class="mb-3">
+                <i class="fas fa-play-circle text-success me-2"></i>Episode Detection
+            </h6>
+            <small class="text-muted d-block mb-3">
+                Requires Plex Pass for webhooks.
+                Configure in Plex: <strong>Settings → Webhooks → Add Webhook</strong><br>
+                URL: <code>http://&lt;episeerr-host&gt;:5002/api/integration/plex/webhook</code>
+            </small>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label class="form-label">Detection Method</label>
+                    <select class="form-select form-select-sm" name="plex-detection-method"
+                            id="plex-detection-method"
+                            onchange="(function(v){{
+                                document.getElementById('plex-threshold-row').style.display=(v==='polling'||v==='stop_threshold')?'':'none';
+                                document.getElementById('plex-interval-row').style.display=(v==='polling')?'':'none';
+                            }})(this.value)">
+                        <option value="scrobble"       {scrobble_sel}>Scrobble (Plex native — 90%)</option>
+                        <option value="stop_threshold" {stop_thresh_sel}>Stop + Threshold (custom %)</option>
+                        <option value="polling"        {polling_sel}>Polling (custom % — background)</option>
+                    </select>
+                    <small class="text-muted">
+                        <strong>Scrobble:</strong> Plex&rsquo;s native 90% watched event triggers processing. Simple, no config needed.<br>
+                        <strong>Stop&nbsp;+&nbsp;Threshold:</strong> Process when you stop playback at or beyond your threshold (e.g. 50%).
+                        Triggers earlier than scrobble and needs no background polling.
+                        Scrobble (90%) still fires automatically as a <em>safety net</em> — if the stop event was missed
+                        (crash, network drop, autoplay) Episeerr catches it at 90% instead. Episodes are never double-processed.<br>
+                        <strong>Polling:</strong> Background thread checks playback progress every N minutes. Useful if webhooks are unreliable.
+                    </small>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-8 mb-3">
+                    <label class="form-label">Allowed Users <small class="text-muted">(comma-separated, blank = all)</small></label>
+                    <input type="text" class="form-control form-control-sm"
+                           name="plex-allowed-users" value="{allowed_users_str}"
+                           placeholder="e.g. Alice, Bob">
+                    <small class="text-muted">Only process episodes watched by these Plex usernames. Leave blank to process all users.</small>
+                </div>
+            </div>
+
+            <div id="plex-threshold-row" style="{threshold_hidden}">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Progress Threshold (%)</label>
+                        <input type="number" class="form-control form-control-sm"
+                               name="plex-progress-threshold" value="{progress_threshold}"
+                               min="1" max="99" style="max-width:100px;">
+                        <small class="text-muted">{stop_help}</small>
+                    </div>
+                </div>
+            </div>
+
+            <div id="plex-interval-row" style="{interval_hidden}">
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <label class="form-label">Polling Interval (minutes)</label>
+                        <input type="number" class="form-control form-control-sm"
+                               name="plex-polling-interval" value="{polling_interval}"
+                               min="1" max="60" style="max-width:100px;">
+                        <small class="text-muted">How often to check playback progress</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Watchlist Auto-Sync ───────────────────────────── -->
+        <div id="plex-watchlist-sync-settings"
+             style="border-top:1px solid rgba(255,255,255,0.1);margin-top:20px;padding-top:20px;">
             <h6 class="mb-3">
                 <i class="fas fa-sync-alt text-info me-2"></i>Watchlist Auto-Sync
             </h6>
-            
+
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <div class="form-check form-switch">
@@ -157,8 +380,8 @@ class PlexIntegration(ServiceIntegration):
                 </div>
             </div>
 
-            <div style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 10px; padding-top: 15px;">
-                <h6 class="mb-2" style="font-size: 14px;">
+            <div style="border-top:1px solid rgba(255,255,255,0.05);margin-top:10px;padding-top:15px;">
+                <h6 class="mb-2" style="font-size:14px;">
                     <i class="fas fa-film text-warning me-2"></i>Movie Cleanup
                 </h6>
                 <div class="row">
@@ -173,7 +396,8 @@ class PlexIntegration(ServiceIntegration):
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Grace Period (days)</label>
                         <input type="number" class="form-control form-control-sm" id="plex-grace-days"
-                               name="plex-grace-days" value="{grace_days}" min="0" max="90" style="max-width: 100px;">
+                               name="plex-grace-days" value="{grace_days}" min="0" max="90"
+                               style="max-width:100px;">
                         <small class="text-muted">Days to keep after watching before deleting</small>
                     </div>
                 </div>
@@ -183,24 +407,51 @@ class PlexIntegration(ServiceIntegration):
     
     def preprocess_save_data(self, normalized_data: dict) -> None:
         """Called by save_service_config before writing to DB.
-        Pulls flat sync fields out of normalized_data and nests them
-        under watchlist_sync, preserving any existing fields not in the form.
+        Normalises flat form fields and nests watchlist_sync appropriately.
         """
         from settings_db import get_service
-        existing_sync = ((get_service('plex') or {}).get('config') or {}).get('watchlist_sync', {})
+        existing_cfg  = ((get_service('plex') or {}).get('config') or {})
+        existing_sync = existing_cfg.get('watchlist_sync', {})
 
-        sync_enabled   = normalized_data.pop('sync-enabled',   existing_sync.get('enabled', False))
-        sync_interval  = int(normalized_data.pop('sync-interval', existing_sync.get('interval_minutes', 120)) or 120)
-        movie_cleanup  = normalized_data.pop('movie-cleanup',  existing_sync.get('movie_cleanup', {}).get('enabled', False))
-        grace_days     = int(normalized_data.pop('grace-days', existing_sync.get('movie_cleanup', {}).get('grace_days', 7)) or 7)
+        # ── Episode detection fields ──────────────────────────────
+        normalized_data['detection_method'] = normalized_data.pop(
+            'detection-method', existing_cfg.get('detection_method', 'scrobble')
+        )
+        normalized_data['progress_threshold'] = float(
+            normalized_data.pop('progress-threshold',
+                                existing_cfg.get('progress_threshold', 50.0)) or 50.0
+        )
+        normalized_data['polling_interval'] = int(
+            normalized_data.pop('polling-interval',
+                                existing_cfg.get('polling_interval', 15)) or 15
+        )
+        raw_users = normalized_data.pop('allowed-users', None)
+        if raw_users is None:
+            normalized_data['allowed_users'] = existing_cfg.get('allowed_users', [])
+        else:
+            normalized_data['allowed_users'] = [
+                u.strip() for u in str(raw_users).split(',') if u.strip()
+            ]
+
+        # ── Watchlist sync fields ─────────────────────────────────
+        sync_enabled  = normalized_data.pop('sync-enabled',  existing_sync.get('enabled', False))
+        sync_interval = int(
+            normalized_data.pop('sync-interval', existing_sync.get('interval_minutes', 120)) or 120
+        )
+        movie_cleanup = normalized_data.pop(
+            'movie-cleanup', existing_sync.get('movie_cleanup', {}).get('enabled', False)
+        )
+        grace_days    = int(
+            normalized_data.pop('grace-days', existing_sync.get('movie_cleanup', {}).get('grace_days', 7)) or 7
+        )
 
         normalized_data['watchlist_sync'] = {
             **existing_sync,
-            'enabled': sync_enabled,
+            'enabled':          sync_enabled,
             'interval_minutes': sync_interval,
             'movie_cleanup': {
                 **existing_sync.get('movie_cleanup', {}),
-                'enabled': movie_cleanup,
+                'enabled':    movie_cleanup,
                 'grace_days': grace_days,
             }
         }
@@ -1159,10 +1410,187 @@ class PlexIntegration(ServiceIntegration):
             'has_dashboard_section': True
         }
     
+    # ══════════════════════════════════════════════════════════════
+    # Episode Detection (Scrobble / Polling)
+    # ══════════════════════════════════════════════════════════════
+
+    def process_episode(self, episode_info: Dict) -> bool:
+        """
+        Process a Plex episode for Sonarr upgrade logic.
+        Writes a temp file and spawns media_processor.py — same pattern
+        as the Jellyfin/Emby integrations.
+        """
+        import subprocess
+        from media_processor import get_series_id, get_episode_tracking_key
+        from episeerr import load_config, save_config
+        import episeerr_utils
+
+        series_name = episode_info.get('series_name', '')
+        season      = episode_info.get('season_number')
+        episode     = episode_info.get('episode_number')
+        user        = episode_info.get('user_name', 'Unknown')
+        progress    = episode_info.get('progress_percent', 0)
+
+        try:
+            series_id = get_series_id(series_name)
+            final_rule = None
+
+            if series_id:
+                from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
+                from media_processor import move_series_in_config
+                config = load_config()
+                series_id_str = str(series_id)
+                config_rule = None
+
+                for rule_name, rule_details in config['rules'].items():
+                    if series_id_str in rule_details.get('series', {}):
+                        config_rule = rule_name
+                        break
+
+                if config_rule:
+                    matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
+                    if not matches:
+                        if actual_tag_rule:
+                            logger.warning(f"[Plex] DRIFT: config={config_rule} → tag={actual_tag_rule}")
+                            move_series_in_config(series_id, config_rule, actual_tag_rule)
+                            final_rule = actual_tag_rule
+                        else:
+                            logger.warning(f"[Plex] No tag on {series_id} → restoring episeerr_{config_rule}")
+                            sync_rule_tag_to_sonarr(series_id, config_rule)
+                            final_rule = config_rule
+                    else:
+                        final_rule = config_rule
+
+            temp_dir  = os.path.join(os.getcwd(), 'temp')
+            os.makedirs(temp_dir, exist_ok=True)
+
+            payload = {
+                'server_title':     series_name,
+                'server_season_num': int(season),
+                'server_ep_num':    int(episode),
+                'sonarr_series_id': series_id,
+                'rule':             final_rule,
+                'source':           'plex',
+            }
+
+            temp_path = os.path.join(temp_dir, 'data_from_server.json')
+            with open(temp_path, 'w') as fh:
+                import json as _json
+                _json.dump(payload, fh)
+
+            result = subprocess.run(
+                ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+                capture_output=True, text=True,
+            )
+
+            if result.returncode != 0:
+                logger.error(f"[Plex] media_processor failed (rc={result.returncode}): {result.stderr}")
+                return False
+
+            logger.info(f"[Plex] Processed {series_name} S{season}E{episode} for {user} at {progress:.1f}%")
+            return True
+
+        except Exception as exc:
+            logger.error(f"[Plex] process_episode error: {exc}", exc_info=True)
+            return False
+
+    def poll_plex_session(self, session_key: str, episode_info: Dict):
+        """Background thread: poll /status/sessions until threshold or session ends."""
+        cfg              = _get_plex_detection_cfg()
+        url              = cfg['url']
+        api_key          = cfg['api_key']
+        threshold        = cfg['progress_threshold']
+        interval_seconds = cfg['polling_interval'] * 60
+
+        logger.info(
+            f"[Plex] Polling started for session {session_key}: "
+            f"{episode_info.get('series_name')} S{episode_info.get('season_number')}E{episode_info.get('episode_number')} "
+            f"(trigger at {threshold}%)"
+        )
+
+        try:
+            processed  = False
+            poll_count = 0
+
+            while session_key in _active_plex_sessions and not processed:
+                poll_count += 1
+                current_progress = 0.0
+
+                try:
+                    resp = requests.get(
+                        f"{url}/status/sessions",
+                        headers={'X-Plex-Token': api_key},
+                        timeout=10,
+                    )
+                    if resp.ok and resp.text:
+                        import xml.etree.ElementTree as ET
+                        root = ET.fromstring(resp.text)
+                        for video in root.findall('.//Video'):
+                            if video.get('sessionKey') == session_key:
+                                view_offset = int(video.get('viewOffset', 0))
+                                duration    = int(video.get('duration', 1))
+                                current_progress = (view_offset / duration * 100) if duration else 0
+                                break
+                        else:
+                            # Session no longer in active list
+                            logger.info(f"[Plex] Session {session_key} ended — stopping polling (poll #{poll_count})")
+                            break
+                    else:
+                        logger.debug(f"[Plex] Sessions API returned {resp.status_code}")
+
+                except Exception as poll_err:
+                    logger.warning(f"[Plex] Poll error for {session_key}: {poll_err}")
+
+                logger.info(f"[Plex] Poll #{poll_count}: {current_progress:.1f}% (threshold {threshold}%)")
+
+                if current_progress >= threshold:
+                    logger.info(f"[Plex] Threshold reached — processing episode")
+                    ep_info = {**episode_info, 'progress_percent': current_progress}
+                    success = self.process_episode(ep_info)
+                    if success:
+                        processed = True
+
+                if not processed:
+                    time.sleep(interval_seconds)
+
+        except Exception as exc:
+            logger.error(f"[Plex] poll_plex_session error for {session_key}: {exc}", exc_info=True)
+        finally:
+            with _plex_poll_lock:
+                _active_plex_sessions.pop(session_key, None)
+                _plex_poll_threads.pop(session_key, None)
+            logger.info(f"[Plex] Polling cleaned up for session {session_key}")
+
+    def start_polling(self, session_key: str, episode_info: Dict) -> bool:
+        with _plex_poll_lock:
+            if session_key in _active_plex_sessions:
+                logger.info(f"[Plex] Already polling session {session_key} — skipping")
+                return False
+            _active_plex_sessions[session_key] = episode_info
+
+        thread = threading.Thread(
+            target=self.poll_plex_session,
+            args=(session_key, episode_info),
+            daemon=True,
+            name=f"PlexPoll-{session_key[:8]}",
+        )
+        thread.start()
+        with _plex_poll_lock:
+            _plex_poll_threads[session_key] = thread
+        return True
+
+    def stop_polling(self, session_key: str) -> bool:
+        with _plex_poll_lock:
+            if session_key in _active_plex_sessions:
+                logger.info(f"[Plex] Stopping polling for session {session_key}")
+                del _active_plex_sessions[session_key]
+                return True
+        return False
+
     # ==========================================
     # Flask Routes
     # ==========================================
-    
+
     def create_blueprint(self) -> Blueprint:
         """Create Flask blueprint with Plex-specific routes"""
         bp = Blueprint('plex_integration', __name__, url_prefix='/api/integration/plex')
@@ -1193,67 +1621,350 @@ class PlexIntegration(ServiceIntegration):
                 import traceback
                 return f"<pre>Error: {str(e)}\n\n{traceback.format_exc()}</pre>", 500, {'Content-Type': 'text/html'}
         
+        # ── Plex webhook receiver ─────────────────────────────────────
+        @bp.route('/webhook', methods=['POST'])
+        def webhook():
+            """
+            Receive Plex webhook events.
+
+            Drives two things simultaneously:
+              1. Dashboard "Now Playing" widget state (all play/pause/stop events)
+              2. Episode detection for Sonarr management:
+                   scrobble mode → process on media.scrobble (90% Plex native)
+                   polling mode  → start polling on media.play; process at threshold %
+
+            Requires Plex Pass.  Configure in Plex:
+              Settings → Webhooks → Add Webhook
+              URL: http://<episeerr-host>:5002/api/integration/plex/webhook
+
+            Plex sends multipart/form-data with a 'payload' field containing JSON.
+            """
+            global _wh_session, _wh_last_played, _wh_updated_at
+
+            try:
+                raw = request.form.get('payload') or request.get_data(as_text=True)
+                if not raw:
+                    return jsonify({'status': 'error', 'message': 'Empty payload'}), 400
+                data = json.loads(raw)
+            except Exception as exc:
+                logger.warning(f"[Plex webhook] Could not parse payload: {exc}")
+                return jsonify({'status': 'error', 'message': 'Invalid JSON'}), 400
+
+            event       = data.get('event', '')
+            metadata    = data.get('Metadata', {})
+            player      = data.get('Player', {})
+            account     = data.get('Account', {})
+            media_type  = metadata.get('type', '')          # 'episode', 'movie', etc.
+            session_key = player.get('key') or player.get('machineIdentifier', '')
+
+            logger.debug(f"[Plex webhook] event={event!r} type={media_type!r} title={metadata.get('title')!r}")
+
+            now = datetime.now()
+
+            # ── 1. Dashboard display state ────────────────────────────
+            if event in ('media.play', 'media.resume', 'media.pause'):
+                view_offset = int(metadata.get('viewOffset', 0))
+                duration    = int(metadata.get('duration', 0))
+                progress    = int((view_offset / duration) * 100) if duration else 0
+                state       = 'paused' if event == 'media.pause' else player.get('state', 'playing')
+                raw_thumb   = metadata.get('thumb') or metadata.get('art')
+
+                wh_session_data = {
+                    'title':         metadata.get('grandparentTitle') or metadata.get('title', 'Unknown'),
+                    'episode_title': metadata.get('title') if metadata.get('grandparentTitle') else None,
+                    'season':        metadata.get('parentIndex'),
+                    'episode':       metadata.get('index'),
+                    'thumb_path':    raw_thumb,
+                    'thumb':         None,
+                    'type':          media_type,
+                    'user':          account.get('title', 'Unknown'),
+                    'state':         state,
+                    'progress':      progress,
+                    'source':        'webhook',
+                }
+
+                with _wh_lock:
+                    _wh_session     = wh_session_data
+                    _wh_last_played = wh_session_data
+                    _wh_updated_at  = now
+
+                logger.info(
+                    f"[Plex webhook] {event} — {wh_session_data['title']}"
+                    + (f" S{wh_session_data['season']}E{wh_session_data['episode']}"
+                       if wh_session_data.get('season') else '')
+                    + f" ({wh_session_data['user']}) {progress}%"
+                )
+
+                # ── 2a. Polling detection: start on media.play ────────
+                if event == 'media.play' and media_type == 'episode':
+                    det_cfg = _get_plex_detection_cfg()
+                    _play_user = account.get('title', '')
+                    _allowed   = det_cfg.get('allowed_users', [])
+                    if _allowed and _play_user not in _allowed:
+                        logger.debug(f"[Plex] Ignoring play from user '{_play_user}' (not in allowed_users)")
+                    elif det_cfg['detection_method'] == 'polling' and session_key:
+                        episode_info = {
+                            'series_name':    metadata.get('grandparentTitle', 'Unknown'),
+                            'season_number':  metadata.get('parentIndex'),
+                            'episode_number': metadata.get('index'),
+                            'user_name':      account.get('title', 'Unknown'),
+                            'progress_percent': progress,
+                        }
+                        if all([episode_info['series_name'], episode_info['season_number'] is not None,
+                                episode_info['episode_number'] is not None]):
+                            started = integration.start_polling(session_key, episode_info)
+                            if started:
+                                logger.info(
+                                    f"[Plex] Polling started for "
+                                    f"{episode_info['series_name']} "
+                                    f"S{episode_info['season_number']}E{episode_info['episode_number']}"
+                                )
+
+            elif event == 'media.stop':
+                with _wh_lock:
+                    _wh_session    = None
+                    _wh_updated_at = now
+
+                # Stop any active polling for this session
+                if session_key:
+                    integration.stop_polling(session_key)
+
+                # ── 2b. Stop + Threshold detection ───────────────────
+                if media_type == 'episode':
+                    det_cfg = _get_plex_detection_cfg()
+                    if det_cfg['detection_method'] == 'stop_threshold':
+                        view_offset = int(metadata.get('viewOffset', 0))
+                        duration    = int(metadata.get('duration', 0))
+                        progress    = round((view_offset / duration) * 100, 1) if duration else 0.0
+                        series_name = metadata.get('grandparentTitle', '')
+                        season      = metadata.get('parentIndex')
+                        ep_num      = metadata.get('index')
+                        user        = account.get('title', 'Unknown')
+                        threshold   = det_cfg['progress_threshold']
+
+                        logger.info(
+                            f"[Plex webhook] media.stop — clearing display session "
+                            f"({series_name} S{season}E{ep_num} {progress}%)"
+                        )
+
+                        _allowed = det_cfg.get('allowed_users', [])
+                        if _allowed and user not in _allowed:
+                            logger.debug(f"[Plex] Stop ignored — user '{user}' not in allowed_users")
+                        elif series_name and season is not None and ep_num is not None:
+                            if progress >= threshold:
+                                ep_key = _ep_key(series_name, season, ep_num)
+                                _mark_episode_processed(ep_key)
+                                logger.info(
+                                    f"[Plex] Stop+Threshold: {series_name} S{season}E{ep_num} "
+                                    f"at {progress}% >= {threshold}% ({user})"
+                                )
+                                episode_info = {
+                                    'series_name':    series_name,
+                                    'season_number':  season,
+                                    'episode_number': ep_num,
+                                    'user_name':      user,
+                                    'progress_percent': progress,
+                                }
+                                threading.Thread(
+                                    target=integration.process_episode,
+                                    args=(episode_info,),
+                                    daemon=True,
+                                    name="PlexStopThreshold",
+                                ).start()
+                            else:
+                                logger.debug(
+                                    f"[Plex] Stop below threshold: {series_name} S{season}E{ep_num} "
+                                    f"{progress}% < {threshold}% — not processed"
+                                )
+                    else:
+                        logger.info(f"[Plex webhook] media.stop — clearing display session")
+
+            # ── 2c. Scrobble detection ────────────────────────────────
+            elif event == 'media.scrobble' and media_type == 'episode':
+                det_cfg     = _get_plex_detection_cfg()
+                series_name = metadata.get('grandparentTitle', '')
+                season      = metadata.get('parentIndex')
+                ep_num      = metadata.get('index')
+                user        = account.get('title', 'Unknown')
+                method      = det_cfg['detection_method']
+
+                _allowed = det_cfg.get('allowed_users', [])
+                if _allowed and user not in _allowed:
+                    logger.debug(f"[Plex] Ignoring scrobble from user '{user}' (not in allowed_users)")
+                elif not (series_name and season is not None and ep_num is not None):
+                    logger.warning("[Plex] Scrobble event missing episode metadata")
+                elif method == 'scrobble':
+                    logger.info(f"[Plex] Scrobble: {series_name} S{season}E{ep_num} ({user})")
+                    episode_info = {
+                        'series_name':    series_name,
+                        'season_number':  season,
+                        'episode_number': ep_num,
+                        'user_name':      user,
+                        'progress_percent': 90.0,
+                    }
+                    threading.Thread(
+                        target=integration.process_episode,
+                        args=(episode_info,),
+                        daemon=True,
+                        name="PlexScrobble",
+                    ).start()
+                elif method == 'stop_threshold':
+                    # Scrobble fires as safety net — only process if stop didn't already catch it
+                    ep_key = _ep_key(series_name, season, ep_num)
+                    if _was_episode_processed(ep_key):
+                        logger.info(
+                            f"[Plex] Already processed: {series_name} S{season}E{ep_num} — skipping scrobble"
+                        )
+                    else:
+                        logger.info(
+                            f"[Plex] Scrobble (safety net): {series_name} S{season}E{ep_num} ({user})"
+                        )
+                        _mark_episode_processed(ep_key)
+                        episode_info = {
+                            'series_name':    series_name,
+                            'season_number':  season,
+                            'episode_number': ep_num,
+                            'user_name':      user,
+                            'progress_percent': 90.0,
+                        }
+                        threading.Thread(
+                            target=integration.process_episode,
+                            args=(episode_info,),
+                            daemon=True,
+                            name="PlexScrobbleSafetyNet",
+                        ).start()
+                else:
+                    logger.debug(
+                        f"[Plex] Scrobble ignored — detection_method is '{method}'"
+                    )
+
+            else:
+                logger.debug(f"[Plex webhook] Unhandled event: {event!r}")
+
+            return jsonify({'status': 'ok'}), 200
+
+        # ── Now Playing widget ────────────────────────────────────────
         @bp.route('/widget')
         def widget():
-            """Return Now Playing widget HTML"""
+            """Return Now Playing widget HTML.
+
+            Priority:
+              1. Webhook state (if updated within _WEBHOOK_STALE_SECONDS) — instant
+              2. Poll /status/sessions via get_dashboard_stats() — fallback
+            """
             try:
                 from settings_db import get_service
-                
+
                 plex_config = get_service('plex')
-                
+
                 if not plex_config or not plex_config.get('enabled'):
                     return jsonify({'success': False, 'message': 'Plex not enabled'})
-                
-                url = plex_config.get('url')
-                api_key = plex_config.get('api_key')
-                
+
+                url     = plex_config.get('url', '').rstrip('/')
+                api_key = plex_config.get('api_key', '')
+
                 if not url or not api_key:
                     return jsonify({'success': False, 'message': 'Plex not configured'})
-                
-                stats = integration.get_dashboard_stats(url, api_key)
-                
-                if not stats.get('configured'):
-                    return jsonify({'success': False, 'message': 'Plex not configured'})
-                
-                now_playing = stats.get('now_playing')
-                
-                if not now_playing:
-                    html = '''
-                    <div class="d-flex align-items-center gap-2 px-2 py-1 rounded" style="background:rgba(255,255,255,0.04); min-height:36px;">
-                        <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width:16px;height:16px;opacity:0.6;flex-shrink:0;">
-                        <i class="fas fa-tv text-muted" style="font-size:11px;opacity:0.4;"></i>
-                        <span class="text-muted" style="font-size:12px;">Nothing playing</span>
-                    </div>
-                    '''
+
+                # ── 1. Try webhook state first ────────────────────────
+                with _wh_lock:
+                    wh_session    = _wh_session
+                    wh_updated_at = _wh_updated_at
+
+                webhook_fresh = (
+                    wh_updated_at is not None
+                    and (datetime.now() - wh_updated_at).total_seconds() < _WEBHOOK_STALE_SECONDS
+                )
+
+                if webhook_fresh:
+                    now_playing = wh_session  # may be None (stopped)
+                    # Resolve the relative thumb path to a full URL
+                    if now_playing and now_playing.get('thumb_path'):
+                        now_playing = {
+                            **now_playing,
+                            'thumb': f"{url}{now_playing['thumb_path']}?X-Plex-Token={api_key}",
+                        }
                 else:
-                    thumb = f'<img src="{now_playing["thumb"]}" class="rounded" style="width:36px;height:36px;object-fit:cover;flex-shrink:0;">' if now_playing.get('thumb') else ''
+                    # ── 2. Fall back to polling /status/sessions ──────
+                    try:
+                        import xml.etree.ElementTree as ET
+                        resp = requests.get(
+                            f"{url}/status/sessions",
+                            headers={'X-Plex-Token': api_key},
+                            timeout=5,
+                        )
+                        now_playing = None
+                        if resp.ok and resp.text:
+                            root  = ET.fromstring(resp.text)
+                            video = root.find('.//Video')
+                            if video is not None:
+                                player_el = video.find('Player')
+                                user_el   = video.find('User')
+                                view_offset = int(video.get('viewOffset', 0))
+                                duration    = int(video.get('duration', 1))
+                                progress    = int((view_offset / duration) * 100) if duration else 0
+                                thumb = video.get('thumb')
+                                now_playing = {
+                                    'title':         video.get('grandparentTitle') or video.get('title'),
+                                    'episode_title': video.get('title') if video.get('grandparentTitle') else None,
+                                    'season':        video.get('parentIndex'),
+                                    'episode':       video.get('index'),
+                                    'thumb':         f"{url}{thumb}?X-Plex-Token={api_key}" if thumb else None,
+                                    'user':          user_el.get('title') if user_el is not None else 'Unknown',
+                                    'state':         player_el.get('state') if player_el is not None else 'playing',
+                                    'progress':      progress,
+                                    'source':        'poll',
+                                }
+                    except Exception as poll_err:
+                        logger.warning(f"[Plex widget] Polling fallback failed: {poll_err}")
+                        now_playing = None
+
+                # ── Render HTML ───────────────────────────────────────
+                if not now_playing:
+                    html = (
+                        '<div class="d-flex align-items-center gap-2 px-2 py-1 rounded"'
+                        ' style="background:rgba(255,255,255,0.04); min-height:36px;">'
+                        '<img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg"'
+                        ' style="width:16px;height:16px;opacity:0.6;flex-shrink:0;">'
+                        '<i class="fas fa-tv text-muted" style="font-size:11px;opacity:0.4;"></i>'
+                        '<span class="text-muted" style="font-size:12px;">Nothing playing</span>'
+                        '</div>'
+                    )
+                else:
+                    thumb_html = (
+                        f'<img src="{now_playing["thumb"]}" class="rounded"'
+                        f' style="width:36px;height:36px;object-fit:cover;flex-shrink:0;">'
+                        if now_playing.get('thumb') else ''
+                    )
 
                     if now_playing.get('episode_title') and now_playing.get('season') and now_playing.get('episode'):
-                        title = now_playing['title']
+                        title    = now_playing['title']
                         subtitle = f"S{now_playing['season']}E{now_playing['episode']} · {now_playing['episode_title']}"
                     else:
-                        title = now_playing['title']
+                        title    = now_playing['title']
                         subtitle = now_playing.get('user', 'Unknown User')
 
-                    state_icon = 'play' if now_playing['state'] == 'playing' else 'pause'
-                    progress = now_playing['progress']
+                    state_icon = 'play' if now_playing.get('state') == 'playing' else 'pause'
+                    progress   = now_playing.get('progress', 0)
 
-                    html = f'''
-                    <div class="d-flex align-items-center gap-2 px-2 py-1 rounded" style="background:rgba(255,255,255,0.04); min-height:36px;">
-                        <img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg" style="width:16px;height:16px;flex-shrink:0;">
-                        {thumb}
-                        <div class="flex-grow-1 overflow-hidden">
-                            <div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{title}</div>
-                            <div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{subtitle}</div>
-                        </div>
-                        <span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">
-                            <i class="fas fa-{state_icon} me-1"></i>{progress}%
-                        </span>
-                    </div>
-                    '''
-                
+                    html = (
+                        f'<div class="d-flex align-items-center gap-2 px-2 py-1 rounded"'
+                        f' style="background:rgba(255,255,255,0.04); min-height:36px;">'
+                        f'<img src="https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg"'
+                        f' style="width:16px;height:16px;flex-shrink:0;">'
+                        f'{thumb_html}'
+                        f'<div class="flex-grow-1 overflow-hidden">'
+                        f'<div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{title}</div>'
+                        f'<div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{subtitle}</div>'
+                        f'</div>'
+                        f'<span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">'
+                        f'<i class="fas fa-{state_icon} me-1"></i>{progress}%'
+                        f'</span>'
+                        f'</div>'
+                    )
+
                 return jsonify({'success': True, 'html': html})
-                
+
             except Exception as e:
                 logger.error(f"Error generating Plex widget: {e}")
                 return jsonify({'success': False, 'message': str(e)})

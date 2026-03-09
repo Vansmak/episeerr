@@ -97,6 +97,8 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'jellyfin_integration.jellyfin_webhook',
     'emby_integration.emby_webhook',
     'seerr_integration.seerr_webhook',
+    'plex_integration.webhook',
+    'tautulli_integration.tautulli_webhook',
 }
 
 
@@ -139,8 +141,8 @@ def login():
         username = request.form.get('username', '').strip()
         password = request.form.get('password', '').strip()
 
-        valid_username = os.getenv('AUTH_USERNAME', 'admin')
-        valid_password = os.getenv('AUTH_PASSWORD', '')
+        valid_username = os.getenv('AUTH_USERNAME', 'admin').strip()
+        valid_password = os.getenv('AUTH_PASSWORD', '').strip()
 
         if not valid_password:
             return render_template('login.html',
@@ -312,15 +314,18 @@ def setup():
             'saved_values': saved_values  # for template pre-fill
         }
     
-    # Check if setup is complete
-    setup_complete = (sonarr and tautulli)
+    # Check if setup is complete — needs Sonarr + at least one media server
+    plex_svc     = get_service('plex',     'default')
+    jellyfin_svc = get_service('jellyfin', 'default')
+    emby_svc     = get_service('emby',     'default')
+    has_media_server = bool(tautulli or plex_svc or jellyfin_svc or emby_svc)
+    setup_complete = bool(sonarr and has_media_server)
     
     # Quick links
     from settings_db import get_all_quick_links
     quick_links = get_all_quick_links()
     
-    sonarr_config   = (sonarr.get('config')   or {}) if sonarr   else {}
-    tautulli_config = (tautulli.get('config') or {}) if tautulli else {}
+    sonarr_config = (sonarr.get('config') or {}) if sonarr else {}
 
     return render_template('setup.html',
         setup_complete=setup_complete,
@@ -329,11 +334,6 @@ def setup():
         sonarr_apikey=sonarr['api_key'] if sonarr else None,
         sonarr_alternate_url=sonarr_config.get('alternate_url', ''),
         sonarr_open_in_iframe=sonarr_config.get('open_in_iframe', False),
-        tautulli_connected=tautulli is not None,
-        tautulli_url=tautulli['url'] if tautulli else None,
-        tautulli_apikey=tautulli['api_key'] if tautulli else None,
-        tautulli_alternate_url=tautulli_config.get('alternate_url', ''),
-        tautulli_open_in_iframe=tautulli_config.get('open_in_iframe', False),
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
         integrations=get_all_integrations(),
@@ -687,15 +687,65 @@ def services_sidebar():
     return jsonify({'status': 'success', 'services': services})
 
 
+def get_episode_watch_history(rating_key: str):
+    """
+    Route watch-history queries to the correct integration.
+
+    Priority:
+      1. Tautulli — if configured with override_plex=True
+      2. Plex     — if configured
+      3. Jellyfin — if configured
+      4. Emby     — if configured
+      5. None
+
+    Returns {'last_watched': <unix timestamp>} or None.
+    """
+    from settings_db import get_tautulli_config, get_plex_config, get_jellyfin_config, get_emby_config
+
+    tautulli_cfg = get_tautulli_config()
+    if tautulli_cfg and tautulli_cfg.get('override_plex'):
+        from integrations.tautulli import get_tautulli_watch_history
+        result = get_tautulli_watch_history(rating_key)
+        if result:
+            return result
+
+    plex_cfg = get_plex_config()
+    if plex_cfg and plex_cfg.get('url') and plex_cfg.get('api_key'):
+        from integrations.plex import get_plex_watch_history
+        return get_plex_watch_history(rating_key)
+
+    jellyfin_cfg = get_jellyfin_config()
+    if jellyfin_cfg and jellyfin_cfg.get('url') and jellyfin_cfg.get('api_key'):
+        # Jellyfin uses internal item IDs, not Plex rating_keys — return None here;
+        # callers that use Jellyfin should query get_jellyfin_config() directly.
+        return None
+
+    emby_cfg = get_emby_config()
+    if emby_cfg and emby_cfg.get('url') and emby_cfg.get('api_key'):
+        return None  # Same note as Jellyfin above
+
+    return None
+
+
 @app.route('/api/media-server')
 def get_media_server():
-    """Get all configured media servers (Plex via Tautulli, Jellyfin, Emby)."""
+    """Get all configured media servers (Plex, Jellyfin, Emby)."""
     from integrations import get_integration
     from settings_db import get_service
 
     media_servers = []
 
-    # Plex via Tautulli (legacy)
+    # Plex (direct integration)
+    plex_data = get_service('plex', 'default')
+    if plex_data:
+        media_servers.append({
+            'type': 'plex',
+            'name': 'Plex',
+            'url': get_smart_url(plex_data, request),
+            'icon': 'https://www.plex.tv/wp-content/themes/plex/assets/img/plex-logo.svg'
+        })
+
+    # Tautulli — kept for backward compat; users may still rely on this link
     tautulli = get_service('tautulli', 'default')
     if tautulli:
         media_servers.append({
@@ -738,9 +788,8 @@ def get_optional_integrations():
     from integrations import get_all_integrations
     from settings_db import get_service
 
-    # Only exclude the actual media server integrations (Jellyfin/Emby webhooks).
-    # 'plex' integration is for watchlists/widgets — keep it in optional integrations.
-    media_servers = {'jellyfin', 'emby'}
+    # Exclude media server integrations from the optional list — they appear in /api/media-server
+    media_servers = {'jellyfin', 'emby', 'plex', 'tautulli'}
     connected = []
 
     for integration in get_all_integrations():
@@ -4324,7 +4373,22 @@ def handle_episode_grab(json_data):
 
 @app.route('/webhook', methods=['POST'])
 def handle_server_webhook():
-    app.logger.info("Received webhook from Tautulli")
+    """
+    Legacy Tautulli webhook endpoint — kept for backward compatibility.
+    New installs should use /api/integration/tautulli/webhook instead.
+    """
+    app.logger.info("Received webhook on legacy /webhook route — delegating to Tautulli integration")
+    data = request.get_json(silent=True) or {}
+    if not data:
+        return jsonify({'status': 'error', 'message': 'No data received'}), 400
+    try:
+        from integrations.tautulli import process_watch_event
+        result = process_watch_event(data)
+        return jsonify(result), 200 if result['status'] == 'success' else 500
+    except Exception as exc:
+        app.logger.error(f"Legacy /webhook delegation error: {exc}")
+        # Fall through to the original inline logic as a safety net
+    app.logger.info("Received webhook from Tautulli (fallback path)")
     data = request.json
     if not data:
         return jsonify({'status': 'error', 'message': 'No data received'}), 400
