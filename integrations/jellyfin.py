@@ -339,47 +339,43 @@ class JellyfinIntegration(ServiceIntegration):
             user_name = episode_info['user_name']
             progress = episode_info.get('progress_percent', 0)
             
-            # Check if already processed
-            tracking_key = get_episode_tracking_key(series_name, season, episode, user_name)
-            if tracking_key in processed_jellyfin_episodes:
-                logger.info(f"✅ Already processed - skipping")
-                return False
-            
-            # Mark as processed
-            processed_jellyfin_episodes.add(tracking_key)
-            
-            logger.info(f"🎯 Processing Jellyfin episode at {progress:.1f}%")
-            
+            logger.info(f"🎯 Processing Jellyfin episode: {series_name} S{season}E{episode} at {progress:.1f}%")
+
             # Get Sonarr series ID
             from media_processor import get_series_id
             series_id = get_series_id(series_name)
+            if not series_id:
+                logger.warning(f"❌ Sonarr series not found for '{series_name}' — check title matches Sonarr exactly")
+                return False
+            logger.info(f"✅ Found Sonarr series ID {series_id} for '{series_name}'")
             
             # Tag sync & drift correction
-            if series_id:
-                from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
-                from episeerr import load_config
-                from media_processor import move_series_in_config
-                
-                
-                config = load_config()
-                config_rule = None
-                series_id_str = str(series_id)
-                
-                for rule_name, rule_details in config['rules'].items():
-                    if series_id_str in rule_details.get('series', {}):
-                        config_rule = rule_name
-                        break
-                
-                if config_rule:
-                    matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                    if not matches:
-                        if actual_tag_rule:
-                            logger.warning(f"JELLYFIN DRIFT - config: {config_rule} → tag: {actual_tag_rule}")
-                            move_series_in_config(series_id, config_rule, actual_tag_rule)
-                        else:
-                            logger.warning(f"No tag on {series_id} → restoring episeerr_{config_rule}")
-                            sync_rule_tag_to_sonarr(series_id, config_rule)
-            
+            from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
+            from episeerr import load_config
+            from media_processor import move_series_in_config
+
+            config = load_config()
+            config_rule = None
+            series_id_str = str(series_id)
+
+            for rule_name, rule_details in config['rules'].items():
+                if series_id_str in rule_details.get('series', {}):
+                    config_rule = rule_name
+                    break
+
+            if config_rule:
+                logger.info(f"📋 Series assigned to rule '{config_rule}'")
+                matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
+                if not matches:
+                    if actual_tag_rule:
+                        logger.warning(f"JELLYFIN DRIFT - config: {config_rule} → tag: {actual_tag_rule}")
+                        move_series_in_config(series_id, config_rule, actual_tag_rule)
+                    else:
+                        logger.warning(f"No tag on {series_id} → restoring episeerr_{config_rule}")
+                        sync_rule_tag_to_sonarr(series_id, config_rule)
+            else:
+                logger.warning(f"⚠️ Series ID {series_id} not assigned to any rule — media_processor may skip it")
+
             # Write temp file for media_processor
             temp_dir = os.path.join(os.getcwd(), 'temp')
             os.makedirs(temp_dir, exist_ok=True)
@@ -406,10 +402,16 @@ class JellyfinIntegration(ServiceIntegration):
             )
             
             if result.returncode != 0:
-                logger.error(f"media_processor failed (rc={result.returncode}): {result.stderr}")
+                logger.error(f"❌ media_processor failed (rc={result.returncode})")
+                if result.stderr:
+                    logger.error(f"stderr: {result.stderr.strip()}")
+                if result.stdout:
+                    logger.error(f"stdout: {result.stdout.strip()}")
                 return False
             else:
-                logger.info(f"✅ Processed {series_name} S{season}E{episode}")
+                logger.info(f"✅ media_processor completed for {series_name} S{season}E{episode}")
+                if result.stdout:
+                    logger.info(f"media_processor output: {result.stdout.strip()}")
                 return True
         
         except Exception as e:
@@ -501,16 +503,15 @@ class JellyfinIntegration(ServiceIntegration):
                             trigger_min = float(config.get('trigger_min', 50.0))
                             trigger_max = float(config.get('trigger_max', 55.0))
 
+                            logger.debug(f"📊 Jellyfin progress: {progress_percent:.1f}% (trigger range: {trigger_min:.1f}%-{trigger_max:.1f}%)")
+
                             if trigger_min <= progress_percent <= trigger_max:
-                                # Check if already processed
                                 tracking_key = get_episode_tracking_key(series_name, season, episode, user_name)
                                 if tracking_key in processed_jellyfin_episodes:
-                                    logger.debug(f"Already processed {series_name} S{season}E{episode} - skipping")
+                                    logger.debug(f"⏭️ {series_name} S{season}E{episode} already processed - skipping")
                                     return jsonify({'status': 'success', 'message': 'Already processed'}), 200
-                                
-                                # Mark as processed BEFORE processing (prevent race condition)
-                                processed_jellyfin_episodes.add(tracking_key)
-                                
+                                logger.info(f"✅ In trigger range - processing {series_name} S{season}E{episode}")
+
                                 episode_info = {
                                     'series_name': series_name,
                                     'season_number': season,
@@ -520,8 +521,13 @@ class JellyfinIntegration(ServiceIntegration):
                                 }
                                 success = integration.process_episode(episode_info)
                                 if success:
+                                    processed_jellyfin_episodes.add(tracking_key)
                                     logger.info(f"✅ Processed {series_name} S{season}E{episode}")
-                            
+                                else:
+                                    logger.warning(f"⚠️ Processing failed for {series_name} S{season}E{episode} - will retry on next tick")
+                            else:
+                                logger.debug(f"⏭️ Outside trigger range - skipping")
+
                             return jsonify({'status': 'success'}), 200
                         else:
                             return jsonify({'status': 'error', 'message': 'Missing episode data'}), 400

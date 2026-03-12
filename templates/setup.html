@@ -210,13 +210,24 @@
                                 {% for field in integration_configs[integration.service_name].setup_fields %}
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">{{ field.label }}</label>
-                                    <input type="{{ field.type }}" 
+                                    {% if field.type == 'select' %}
+                                    <select class="form-select"
+                                        name="{{ integration.service_name }}-{{ field.name }}"
+                                        {% if field.required %}required{% endif %}>
+                                        {% set saved_val = integration_configs[integration.service_name].saved_values.get(field.name, field.default | default('')) %}
+                                        {% for option in field.options %}
+                                        <option value="{{ option.value }}" {% if saved_val == option.value %}selected{% endif %}>{{ option.label }}</option>
+                                        {% endfor %}
+                                    </select>
+                                    {% else %}
+                                    <input type="{{ field.type }}"
                                         class="form-control"
                                         name="{{ integration.service_name }}-{{ field.name }}"
                                         value="{{ integration_configs[integration.service_name].saved_values.get(field.name, '') | default('') }}"
                                         placeholder="{{ field.placeholder }}"
                                         {% if field.required %}required{% endif %}>
-                                    {% if field.help %}<small class="text-muted">{{ field.help }}</small>{% endif %}
+                                    {% endif %}
+                                    {% if field.help_text %}<small class="text-muted">{{ field.help_text }}</small>{% endif %}
                                 </div>
                                 {% endfor %}
                             </div>

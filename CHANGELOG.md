@@ -37,6 +37,14 @@
 - `get_plex_series_watch_history()` added — queries max `lastViewedAt` across all episodes in a series
 - `settings_db.py`: added `get_plex_config()` and `get_tautulli_config()` with env fallback
 
+### 🐛 Jellyfin Fixes (v3.4.1)
+- Detection Method field now renders as a dropdown in setup UI (was rendering as a text input)
+- Fixed critical bug in PlaybackProgress mode: episode was marked as processed *before* `process_episode()` ran, and a duplicate dedup check inside `process_episode()` caused it to immediately return `False` — subprocess never executed despite logs claiming success
+- Dedup check now happens before the "In trigger range" log so duplicate ticks are silent at debug level
+- Per-tick progress % log demoted to debug — no more log spam during playback
+- `process_episode()` now logs Sonarr series lookup result, assigned rule, and full media_processor output on failure
+- Sonarr series not found returns `False` immediately with a clear warning instead of silently continuing
+
 ### 🗝️ Misc
 - `use :custom tag` — alternate URL for configs (HTTP can open in iframe, HTTPS always opens externally)
 - Alternate URL added to quick link configs

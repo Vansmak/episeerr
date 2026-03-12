@@ -4,15 +4,24 @@ Dispatcharr Integration for Episeerr
 Provides:   Live IPTV stream monitoring — active channels, viewers, bitrate
 Auth:       X-Api-Key header (set via Profile → API Key in Dispatcharr)
 Widget:     Dashboard pill showing active stream count + per-stream detail rows
-Webhooks:   on_after_save() auto-registers episeerr as a webhook target in
-            Dispatcharr and subscribes to all relevant stream events.
-            Falls back to API polling if no callback URL is configured.
+Webhooks:   Two events only — channel_start (or channel_started) and
+            channel_stop (or channel_stopped).  Episeerr adds the stream
+            immediately on start and removes it immediately on stop, so the
+            widget always reflects exactly what is playing right now.
+            A background API sync fires after each start to fill in details
+            (bitrate, resolution, clients).  Falls back to a single API sync
+            on widget load if webhooks are not configured.
 
 Endpoints registered:
     POST /api/integration/dispatcharr/webhook   ← Dispatcharr posts events here
     GET  /api/integration/dispatcharr/widget    ← Dashboard fetches widget HTML
     GET  /api/integration/dispatcharr/status    ← Debug: raw state as JSON
     POST /api/integration/dispatcharr/sync      ← Force a full API re-sync
+
+Dispatcharr setup:
+    Connect → Integrations → Add Webhook
+    URL: http://<episeerr>:5002/api/integration/dispatcharr/webhook
+    Triggers: Channel Started, Channel Stopped  (only these two are needed)
 """
 
 import re
@@ -20,7 +29,7 @@ import time
 import threading
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
@@ -89,6 +98,7 @@ def _normalize_channel(ch: dict, now: Optional[datetime] = None) -> dict:
         "recording":    False,
         "failover":     False,
         "started_at":   now,
+        "last_seen":    now,   # updated on every API sync — used for staleness detection
     }
 
 
@@ -107,10 +117,20 @@ def _api_sync(url: str, api_key: str) -> bool:
 
         now = datetime.now(timezone.utc)
         with _lock:
+            # Build fresh state from API, but preserve started_at timestamps
+            # recorded when the webhook fired so live uptime stays accurate.
+            existing_starts = {
+                cid: s["started_at"]
+                for cid, s in _active_streams.items()
+                if s.get("started_at")
+            }
             _active_streams.clear()
             for ch in resp.json().get("channels", []):
-                cid = ch.get("channel_id", "")
-                _active_streams[cid] = _normalize_channel(ch, now)
+                cid  = ch.get("channel_id", "")
+                norm = _normalize_channel(ch, now)
+                if cid in existing_starts:
+                    norm["started_at"] = existing_starts[cid]
+                _active_streams[cid] = norm
             _last_sync = now
         return True
 
@@ -162,11 +182,16 @@ def _render_widget() -> str:
             '</div>'
         )
 
+    now_utc = datetime.now(timezone.utc)
     rows = []
     for s in streams:
         name    = s.get("channel_name", "Unknown")
         state   = s.get("state", "active")
-        uptime  = _fmt_uptime(s.get("uptime", 0))
+        started = s.get("started_at")
+        if started:
+            uptime = _fmt_uptime((now_utc - started).total_seconds())
+        else:
+            uptime = _fmt_uptime(s.get("uptime", 0))
         bitrate = s.get("avg_bitrate", "")
         res     = s.get("resolution", "")
         clients = s.get("clients", [])
@@ -392,12 +417,7 @@ class DispatcharrIntegration(ServiceIntegration):
         headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
         base    = url.rstrip("/")
 
-        events_to_subscribe = [
-            "channel_start", "channel_stop", "channel_reconnect", "channel_error",
-            "channel_failover", "stream_switch",
-            "client_connect", "client_disconnect",
-            "recording_start", "recording_end",
-        ]
+        events_to_subscribe = ["channel_start", "channel_stop"]
 
         try:
             integration_id = existing_id
@@ -493,14 +513,23 @@ class DispatcharrIntegration(ServiceIntegration):
         @bp.route("/webhook", methods=["POST"])
         def webhook():
             """
-            Receive stream lifecycle events from Dispatcharr.
-            Configure in Dispatcharr: Connect → Integrations → Add Webhook
-            URL: http://<episeerr-host>:5002/api/integration/dispatcharr/webhook
-            (or let on_after_save() do it automatically)
+            Receive channel_start / channel_stop events from Dispatcharr.
+
+            In Dispatcharr: Connect → Integrations → Add Webhook
+            URL:      http://<episeerr>:5002/api/integration/dispatcharr/webhook
+            Triggers: Channel Started, Channel Stopped  (only these two needed)
+
+            Accepts both naming variants Dispatcharr may use:
+              channel_start / channel_started
+              channel_stop  / channel_stopped
             """
             data  = request.get_json(silent=True) or {}
-            event = data.get("event", "")
-            cid   = data.get("channel_id", "")
+            event = data.get("event", "").lower()
+            cid   = (
+                data.get("channel_id") or
+                data.get("channelId") or
+                ""
+            )
 
             logger.debug(f"[Dispatcharr] event={event!r} channel_id={cid!r}")
 
@@ -508,17 +537,19 @@ class DispatcharrIntegration(ServiceIntegration):
             api_url = cfg.get("url", "") if cfg else ""
             api_key = cfg.get("api_key", "") if cfg else ""
 
-            # ── Channel lifecycle ─────────────────────────────────
-            if event == "channel_start":
-                # Seed a placeholder immediately; bg sync fills in full details
+            if event in ("channel_start", "channel_started"):
+                name = (
+                    data.get("stream_name") or
+                    data.get("channel_name") or
+                    data.get("channelName") or
+                    data.get("name") or
+                    "Unknown"
+                )
+                now = datetime.now(timezone.utc)
                 with _lock:
                     _active_streams[cid] = {
                         "channel_id":   cid,
-                        "channel_name": (
-                            data.get("stream_name") or
-                            data.get("channel_name") or
-                            "Unknown"
-                        ),
+                        "channel_name": name,
                         "state":        "active",
                         "clients":      [],
                         "client_count": 0,
@@ -529,83 +560,72 @@ class DispatcharrIntegration(ServiceIntegration):
                         "source_fps":   0,
                         "recording":    False,
                         "failover":     False,
-                        "started_at":   datetime.now(timezone.utc),
+                        "started_at":   now,
+                        "last_seen":    now,
                     }
+                logger.info(f"[Dispatcharr] Stream started: {name!r} ({cid})")
                 if api_url and api_key:
-                    _bg_sync(api_url, api_key, delay=1.5)  # let stream fully start
+                    _bg_sync(api_url, api_key, delay=1.5)  # fill in details after stream stabilises
 
-            elif event == "channel_stop":
+            elif event in ("channel_stop", "channel_stopped"):
                 with _lock:
-                    _active_streams.pop(cid, None)
+                    removed = _active_streams.pop(cid, None)
+                name = (removed or {}).get("channel_name", cid)
+                logger.info(f"[Dispatcharr] Stream stopped: {name!r} ({cid})")
 
-            elif event == "channel_error":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["state"] = "error"
-
-            elif event == "channel_reconnect":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["state"] = "reconnecting"
-
-            elif event == "channel_failover":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["failover"] = True
-                        _active_streams[cid]["state"]    = "active"
-                if api_url and api_key:
-                    _bg_sync(api_url, api_key, delay=1.0)  # new stream has fresh stats
-
-            elif event == "stream_switch":
-                if api_url and api_key:
-                    _bg_sync(api_url, api_key, delay=0.5)
-
-            # ── Client lifecycle ──────────────────────────────────
-            elif event == "client_connect":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["client_count"] = (
-                            _active_streams[cid].get("client_count", 0) + 1
-                        )
-                        _active_streams[cid].setdefault("clients", []).append({
-                            "id":    data.get("client_id", ""),
-                            "label": _parse_ua(data.get("user_agent", "")),
-                            "ip":    data.get("ip_address", ""),
-                            "since": 0,
-                        })
-
-            elif event == "client_disconnect":
-                disc_id = data.get("client_id", "")
-                with _lock:
-                    if cid in _active_streams:
-                        cnt = _active_streams[cid].get("client_count", 1)
-                        _active_streams[cid]["client_count"] = max(0, cnt - 1)
-                        _active_streams[cid]["clients"] = [
-                            c for c in _active_streams[cid].get("clients", [])
-                            if c.get("id") != disc_id
-                        ]
-
-            # ── Recording ─────────────────────────────────────────
-            elif event == "recording_start":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["recording"] = True
-
-            elif event == "recording_end":
-                with _lock:
-                    if cid in _active_streams:
-                        _active_streams[cid]["recording"] = False
+            else:
+                logger.debug(f"[Dispatcharr] Ignored unhandled event: {event!r}")
 
             return jsonify({"status": "ok"}), 200
 
         # ── Dashboard widget HTML ─────────────────────────────────
         @bp.route("/widget")
         def widget():
-            """Return live-stream widget HTML injected into the dashboard."""
+            """
+            Return live-stream widget HTML injected into the dashboard.
+
+            Staleness guard: if any stream's last_seen is older than 5 minutes
+            (missed stop webhook — app crash, network drop, etc.), a synchronous
+            API resync is done before rendering.  Streams the API no longer
+            reports are dropped, so the widget always reflects reality.
+            """
             cfg = _get_saved_config()
-            # If state is empty (e.g. after restart), re-sync from API once
-            if not _active_streams and cfg:
-                _api_sync(cfg.get("url", ""), cfg.get("api_key", ""))
+            api_url = cfg.get("url", "") if cfg else ""
+            api_key = cfg.get("api_key", "") if cfg else ""
+
+            now = datetime.now(timezone.utc)
+            stale_cutoff = timedelta(minutes=5)
+
+            with _lock:
+                stream_count = len(_active_streams)
+                stale = [
+                    cid for cid, s in _active_streams.items()
+                    if (now - s.get("last_seen", now)) > stale_cutoff
+                ]
+
+            if not _active_streams:
+                # Empty after restart — bootstrap from API
+                if api_url and api_key:
+                    _api_sync(api_url, api_key)
+            elif stale and api_url and api_key:
+                # One or more streams haven't been confirmed in 5+ minutes.
+                # Resync from the API; streams no longer active will be absent
+                # from the response and thus dropped from _active_streams.
+                logger.info(
+                    f"[Dispatcharr] {len(stale)}/{stream_count} stream(s) stale "
+                    f"(>5 min since last_seen) — resyncing from API"
+                )
+                _api_sync(api_url, api_key)
+
+            with _lock:
+                post_sync_count = len(_active_streams)
+
+            if stale and post_sync_count < stream_count:
+                logger.info(
+                    f"[Dispatcharr] Staleness check cleared "
+                    f"{stream_count - post_sync_count} ghost stream(s)"
+                )
+
             return jsonify({"success": True, "html": _render_widget()})
 
         # ── Force re-sync ─────────────────────────────────────────
