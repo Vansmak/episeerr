@@ -248,7 +248,7 @@
     .top-action-bar {
         background: var(--topbar-bg, #1a1d29);
         border-bottom: 1px solid var(--border-color, #2d3142);
-        padding: 12px 24px;
+        padding: 6px 16px;
         display: flex;
         align-items: center;
         gap: 16px;
@@ -328,7 +328,7 @@
 
     /* Content Container */
     .content-container {
-        padding: 24px;
+        padding: 12px 16px;
         max-width: 1920px;
         width: 100%;
         margin: 0 auto;
@@ -891,7 +891,12 @@ function containerAction(containerId, action) {
         .then(r => r.json())
         .then(data => {
             if (data.success) {
-                setTimeout(populateContainersSidebar, 1500); // refresh after action settles
+                // Invalidate server-side container cache so quick links reflect new state
+                fetch('/api/invalidate-container-cache', { method: 'POST' });
+                setTimeout(() => {
+                    populateContainersSidebar();
+                    populateSystemLinks();
+                }, 1500);
             } else {
                 alert(`Action failed: ${data.error || 'Unknown error'}`);
             }

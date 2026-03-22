@@ -215,6 +215,73 @@ def get_smart_url_for_link(link, req):
     return link.get('url', '')
 
 
+# ---------------------------------------------------------------------------
+# Container liveness filter (cached 30 s)
+# ---------------------------------------------------------------------------
+_container_cache: dict = {'data': None, 'ts': 0.0}
+_CONTAINER_CACHE_TTL = 30
+
+
+def get_running_containers():
+    """Return (running_names: set[str], running_ports: set[int]) or (None, None) if Docker unavailable."""
+    import time
+    global _container_cache
+    now = time.time()
+    if _container_cache['data'] is not None and now - _container_cache['ts'] < _CONTAINER_CACHE_TTL:
+        return _container_cache['data']
+    try:
+        from integrations.docker import _docker_get
+        from settings_db import get_service as _gs
+        docker_svc = _gs('docker', 'default')
+        if not docker_svc:
+            raise RuntimeError('Docker not configured')
+        cfg = docker_svc.get('config') or {}
+        host = cfg.get('docker_host') or docker_svc.get('url') or 'unix:///var/run/docker.sock'
+        containers = _docker_get(host, '/containers/json')  # no all=true → running only
+        running_names, running_ports = set(), set()
+        for c in containers:
+            for n in c.get('Names', []):
+                running_names.add(n.lstrip('/').lower())
+            for p in c.get('Ports', []):
+                if p.get('PublicPort'):
+                    running_ports.add(p['PublicPort'])
+        result = (running_names, running_ports)
+    except Exception as e:
+        app.logger.debug(f'Container liveness check unavailable: {e}')
+        result = (None, None)
+    _container_cache = {'data': result, 'ts': now}
+    return result
+
+
+def is_container_running(url, running_names, running_ports, name=None):
+    """True if the service appears to be running, or if Docker info is unavailable."""
+    if running_names is None:
+        return True  # Docker not configured/reachable — show everything
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url or '')
+        host = (parsed.hostname or '').lower()
+        is_local = (
+            host in ('localhost', '127.0.0.1') or
+            host.startswith('192.168.') or
+            host.startswith('10.') or
+            any(host.startswith(f'172.{i}.') for i in range(16, 32))
+        )
+        if not is_local:
+            return True  # External / public URL — always show
+        if parsed.port and parsed.port in running_ports:
+            return True
+    except Exception:
+        return True
+    # Port check failed (host-networked containers don't expose ports) — try name
+    if name:
+        nl = name.lower()
+        for cname in running_names:
+            if nl in cname or cname in nl:
+                return True
+    return False
+
+
 def auto_add_quick_link(name, url, icon, open_in_iframe=False, alternate_url=None):
     """Automatically add or update a service quick link"""
     from settings_db import get_all_quick_links, add_quick_link, delete_quick_link
@@ -618,10 +685,14 @@ def manage_quick_links():
 
     if request.method == 'GET':
         links = get_all_quick_links()
-        # Apply smart URL selection — swap in alternate_url when accessed via HTTPS
+        running_names, running_ports = get_running_containers()
+        result = []
         for link in links:
-            link['url'] = get_smart_url_for_link(link, request)
-        return jsonify({'status': 'success', 'links': links})
+            # Custom (manually-added) links always show; auto-added links require container check
+            if link.get('custom') or is_container_running(link.get('url', ''), running_names, running_ports, name=link.get('name')):
+                link['url'] = get_smart_url_for_link(link, request)
+                result.append(link)
+        return jsonify({'status': 'success', 'links': result})
 
     else:  # POST
         data = request.json
@@ -630,7 +701,8 @@ def manage_quick_links():
             data.get('url'),
             data.get('icon', 'fas fa-link'),
             data.get('open_in_iframe', False),
-            data.get('alternate_url') or None
+            data.get('alternate_url') or None,
+            custom=True
         )
         return jsonify({'status': 'success', 'id': link_id})
 
@@ -734,10 +806,11 @@ def get_media_server():
     from settings_db import get_service
 
     media_servers = []
+    running_names, running_ports = get_running_containers()
 
     # Plex (direct integration)
     plex_data = get_service('plex', 'default')
-    if plex_data:
+    if plex_data and is_container_running(plex_data.get('url', ''), running_names, running_ports, name='plex'):
         media_servers.append({
             'type': 'plex',
             'name': 'Plex',
@@ -747,7 +820,7 @@ def get_media_server():
 
     # Tautulli — kept for backward compat; users may still rely on this link
     tautulli = get_service('tautulli', 'default')
-    if tautulli:
+    if tautulli and is_container_running(tautulli.get('url', ''), running_names, running_ports, name='tautulli'):
         media_servers.append({
             'type': 'tautulli',
             'name': 'Tautulli',
@@ -759,7 +832,7 @@ def get_media_server():
     jellyfin = get_integration('jellyfin')
     if jellyfin:
         data = get_service('jellyfin', 'default')
-        if data:
+        if data and is_container_running(data.get('url', ''), running_names, running_ports, name='jellyfin'):
             media_servers.append({
                 'type': 'jellyfin',
                 'name': 'Jellyfin',
@@ -771,7 +844,7 @@ def get_media_server():
     emby = get_integration('emby')
     if emby:
         data = get_service('emby', 'default')
-        if data:
+        if data and is_container_running(data.get('url', ''), running_names, running_ports, name='emby'):
             media_servers.append({
                 'type': 'emby',
                 'name': 'Emby',
@@ -791,14 +864,15 @@ def get_optional_integrations():
     # Exclude media server integrations from the optional list — they appear in /api/media-server
     media_servers = {'jellyfin', 'emby', 'plex', 'tautulli'}
     connected = []
+    running_names, running_ports = get_running_containers()
 
     for integration in get_all_integrations():
         service_name = integration.service_name
         if service_name in media_servers:
             continue
         data = get_service(service_name, 'default')
-        # Only include if configured AND has a URL (e.g. Docker without web UI URL is excluded)
-        if data and data.get('url'):
+        # Only include if configured AND has a URL AND container is running
+        if data and data.get('url') and is_container_running(data.get('url', ''), running_names, running_ports, name=service_name):
             config = data.get('config') or {}
             connected.append({
                 'name': integration.display_name,
@@ -843,6 +917,14 @@ def delete_quick_link_route(link_id):
     from settings_db import delete_quick_link
     delete_quick_link(link_id)
     return jsonify({'status': 'success'})
+
+
+@app.route('/api/invalidate-container-cache', methods=['POST'])
+def invalidate_container_cache():
+    """Force next sidebar fetch to query Docker fresh (called after container start/stop)."""
+    global _container_cache
+    _container_cache['ts'] = 0.0
+    return jsonify({'status': 'ok'})
 
 # Configuration management
 config_path = os.path.join(app.root_path, 'config', 'config.json')

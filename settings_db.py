@@ -85,6 +85,15 @@ def init_settings_db():
         except sqlite3.OperationalError:
             pass  # Another worker already added it
 
+    # Migration: Add custom column if it doesn't exist
+    try:
+        cursor.execute('SELECT custom FROM quick_links LIMIT 1')
+    except sqlite3.OperationalError:
+        try:
+            cursor.execute('ALTER TABLE quick_links ADD COLUMN custom BOOLEAN DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass  # Another worker already added it
+
     conn.commit()
     conn.close()
 
@@ -365,7 +374,7 @@ def get_all_quick_links():
     cursor = conn.cursor()
 
     cursor.execute('''
-        SELECT id, name, url, icon, open_in_iframe, alternate_url, created_at
+        SELECT id, name, url, icon, open_in_iframe, alternate_url, custom, created_at
         FROM quick_links
         ORDER BY created_at ASC
     ''')
@@ -380,21 +389,22 @@ def get_all_quick_links():
             'icon': row['icon'],
             'open_in_iframe': bool(row['open_in_iframe']) if 'open_in_iframe' in keys else False,
             'alternate_url': row['alternate_url'] if 'alternate_url' in keys else None,
+            'custom': bool(row['custom']) if 'custom' in keys else False,
             'created_at': row['created_at']
         })
 
     conn.close()
     return links
 
-def add_quick_link(name, url, icon='fas fa-link', open_in_iframe=False, alternate_url=None):
+def add_quick_link(name, url, icon='fas fa-link', open_in_iframe=False, alternate_url=None, custom=False):
     """Add a new quick link"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
     cursor.execute('''
-        INSERT INTO quick_links (name, url, icon, open_in_iframe, alternate_url)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (name, url, icon, 1 if open_in_iframe else 0, alternate_url or None))
+        INSERT INTO quick_links (name, url, icon, open_in_iframe, alternate_url, custom)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (name, url, icon, 1 if open_in_iframe else 0, alternate_url or None, 1 if custom else 0))
 
     link_id = cursor.lastrowid
     conn.commit()
