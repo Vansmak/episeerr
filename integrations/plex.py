@@ -1697,7 +1697,8 @@ class PlexIntegration(ServiceIntegration):
                 duration    = int(metadata.get('duration', 0))
                 progress    = int((view_offset / duration) * 100) if duration else 0
                 state       = 'paused' if event == 'media.pause' else player.get('state', 'playing')
-                raw_thumb   = metadata.get('thumb') or metadata.get('art')
+                raw_thumb   = (metadata.get('grandparentThumb') or
+                               metadata.get('thumb') or metadata.get('art'))
 
                 wh_session_data = {
                     'title':         metadata.get('grandparentTitle') or metadata.get('title', 'Unknown'),
@@ -2061,8 +2062,19 @@ class PlexIntegration(ServiceIntegration):
                         title    = now_playing['title']
                         subtitle = now_playing.get('user', 'Unknown User')
 
-                    state_icon = 'play' if now_playing.get('state') == 'playing' else 'pause'
-                    progress   = now_playing.get('progress', 0)
+                    state = now_playing.get('state', 'playing')
+                    if state == 'playing':
+                        state_icon  = 'play'
+                        badge_class = 'bg-success'
+                        state_label = 'Playing'
+                    elif state == 'paused':
+                        state_icon  = 'pause'
+                        badge_class = 'bg-warning text-dark'
+                        state_label = 'Paused'
+                    else:
+                        state_icon  = 'circle'
+                        badge_class = 'bg-secondary'
+                        state_label = state.capitalize()
 
                     html = (
                         f'<div class="d-flex align-items-center gap-2 px-2 py-1 rounded"'
@@ -2074,8 +2086,8 @@ class PlexIntegration(ServiceIntegration):
                         f'<div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{title}</div>'
                         f'<div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{subtitle}</div>'
                         f'</div>'
-                        f'<span class="badge bg-warning text-dark flex-shrink-0" style="font-size:10px;">'
-                        f'<i class="fas fa-{state_icon} me-1"></i>{progress}%'
+                        f'<span class="badge {badge_class} flex-shrink-0" style="font-size:10px;">'
+                        f'<i class="fas fa-{state_icon} me-1"></i>{state_label}'
                         f'</span>'
                         f'</div>'
                     )
