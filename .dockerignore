@@ -63,4 +63,4 @@ Thumbs.db
 # Removed modules (not needed in lite version)
 tmdb_utils.py
 jellyfin_utils.py
-api/
+api/.claude/

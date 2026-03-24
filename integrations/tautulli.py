@@ -42,11 +42,31 @@ def process_watch_event(data: dict) -> dict:
     backward-compatibility route in episeerr.py.
     """
     try:
-        series_title   = data.get('plex_title')   or data.get('server_title')   or 'Unknown'
+        # {show_name} is TV-only in Tautulli; movies send it empty — fall back to {title}
+        series_title   = (data.get('plex_title') or data.get('plex_movie_title') or
+                          data.get('server_title') or 'Unknown')
         season_number  = data.get('plex_season_num') or data.get('server_season_num')
         episode_number = data.get('plex_ep_num')   or data.get('server_ep_num')
         thetvdb_id     = data.get('thetvdb_id')
         themoviedb_id  = data.get('themoviedb_id')
+
+        # Movie detection: no season/episode numbers = movie watch event
+        # Tautulli sends "0" for movies (not empty), so treat 0/"0" as absent
+        def _absent(val):
+            return not val or str(val).strip() in ('0', '')
+
+        if _absent(season_number) and _absent(episode_number):
+            logger.info(f"[Tautulli] Movie watched: '{series_title}' (tmdb={themoviedb_id or 'unknown'})")
+            if themoviedb_id:
+                try:
+                    from integrations.plex import PlexIntegration
+                    plex_integration = PlexIntegration()
+                    plex_integration.mark_item_watched(str(themoviedb_id), 'movie')
+                except Exception as e:
+                    logger.warning(f"[Tautulli] Could not mark movie watched in watchlist: {e}")
+            else:
+                logger.warning(f"[Tautulli] Movie '{series_title}' has no TMDB ID — watchlist not updated. Add {{themoviedb_id}} to your Tautulli template.")
+            return {'status': 'success'}
 
         from media_processor import get_series_id
         series_id = get_series_id(series_title, thetvdb_id, themoviedb_id)
@@ -280,10 +300,11 @@ class TautulliIntegration(ServiceIntegration):
             </h6>
             <p class="text-muted mb-0" style="font-size:12px;">
                 In Tautulli: <strong>Settings → Notification Agents → Webhook</strong><br>
-                Trigger: <em>Watched</em><br>
-                New URL:&nbsp;&nbsp;<code>/api/integration/tautulli/webhook</code><br>
-                Legacy URL: <code>/webhook</code> (both are accepted)
+                Trigger: <em>Watched</em> &nbsp;·&nbsp; URL: <code>/api/integration/tautulli/webhook</code><br>
+                <strong class="text-success">Leave Conditions blank</strong> — no media type filter needed. Episeerr detects TV vs movie automatically.<br>
+                <span class="text-warning">Note:</span> If using Plex native webhook for watch detection, do <strong>not</strong> also enable this Tautulli watched webhook — choose one source only.
             </p>
+            <pre class="mt-2 mb-0 p-2 rounded" style="background:#1a1a2e;font-size:11px;">{{\n  "plex_title": "{{show_name}}",\n  "plex_movie_title": "{{title}}",\n  "plex_season_num": "{{season_num}}",\n  "plex_ep_num": "{{episode_num}}",\n  "thetvdb_id": "{{thetvdb_id}}",\n  "themoviedb_id": "{{themoviedb_id}}"\n}}</pre>
         </div>
         '''
 

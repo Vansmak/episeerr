@@ -8,3 +8,4 @@ preferences.json
 /temp/*
 /config/*
 /data/*
+.claude/

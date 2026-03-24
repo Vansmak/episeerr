@@ -37,18 +37,18 @@ Result: Next episodes monitored, old ones deleted
 
 ### 1. Media Server Webhook (Required for Automation)
 
-**From:** Tautulli (Plex) or Jellyfin  
-**To:** Episeerr  
-**When:** You watch an episode  
-**Message:** "User watched S1E5 of Breaking Bad"
+**From:** Tautulli, Plex native webhook, or Jellyfin
+**To:** Episeerr
+**When:** You watch something
+**Message:** "User watched S1E5 of Breaking Bad" or "User watched Dune"
 
 **What Episeerr Does:**
-1. Finds the series in your rules
-2. Applies GET rule (monitors next episodes)
-3. Applies KEEP rule (deletes old episodes)
-4. Updates activity date
+- **TV shows** → finds the series in your rules, applies GET rule (monitors next episodes), applies KEEP rule (deletes old episodes), updates activity date
+- **Movies** → updates Plex Watchlist sync status to Watched (triggers cleanup grace period if enabled)
 
-**Without this:** Rules never trigger, manual management only
+**Plex users:** Choose either Tautulli or the Plex native webhook — not both. See [Webhook Setup Guide](../configuration/webhook-setup.md) for the comparison.
+
+**Without this:** Rules never trigger, watchlist statuses never update, manual management only
 
 **Setup:** [Webhook Setup Guide](../configuration/webhook-setup.md)
 
@@ -205,7 +205,7 @@ Result: Next episodes monitored, old ones deleted
 
 ## What Gets Sent in Webhooks?
 
-### Tautulli Webhook (Watch Event)
+### Tautulli Webhook — TV Episode
 
 ```json
 {
@@ -217,7 +217,23 @@ Result: Next episodes monitored, old ones deleted
 }
 ```
 
-**Episeerr uses:** Series title, season, episode to find and process
+**Episeerr uses:** Series title, season, episode to find and run rule automation
+
+### Tautulli Webhook — Movie
+
+```json
+{
+  "plex_title": "Dune: Part Two",
+  "plex_season_num": "",
+  "plex_ep_num": "",
+  "thetvdb_id": "",
+  "themoviedb_id": "693134"
+}
+```
+
+**Episeerr uses:** `themoviedb_id` (season/episode empty = movie) to update Plex Watchlist status to Watched
+
+> Same template for both — Episeerr detects the type automatically.
 
 ---
 

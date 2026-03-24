@@ -1947,6 +1947,11 @@ def index():
     """Redirect to dashboard as main page."""
     return redirect(url_for('dashboard.dashboard'))
 
+@app.route('/tv')
+def tv_dashboard():
+    """TV-optimized dashboard for Android TV."""
+    return render_template('tv_dashboard.html')
+
 @app.route('/series')  # or whatever you want to call it
 def series_management():  # Changed from index to avoid confusion
     """Main series/rules management page."""

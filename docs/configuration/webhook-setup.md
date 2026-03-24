@@ -7,7 +7,9 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
     - [❌ **Skip Webhooks If:**](#-skip-webhooks-if)
     - [✅ **Use Webhooks If:**](#-use-webhooks-if)
   - [🔗 Media Server Integration](#-media-server-integration)
-    - [Plex (via Tautulli) Setup](#plex-via-tautulli-setup)
+    - [Plex Setup](#plex-setup)
+      - [Option A: Tautulli](#option-a-tautulli-recommended-if-you-already-use-tautulli)
+      - [Option B: Plex Native Webhook](#option-b-plex-native-webhook-no-tautulli-required)
     - [Jellyfin Setup](#jellyfin-setup)
   - [Sonarr Setup (For Series Automation)](#sonarr-setup-for-series-automation)
   - [Jellyseerr/Overseerr Webhook Setup](#jellyseerroverseerr-webhook-setup)
@@ -40,18 +42,29 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 
 ## 🔗 Media Server Integration
 
-### Plex (via Tautulli) Setup
+### Plex Setup
+
+Plex users have two options for watch detection. **Choose one — do not use both at the same time** as this will cause double-processing.
+
+Both options handle **TV shows and movies**:
+- **TV shows** → triggers rule automation (next episode, cleanup)
+- **Movies** → updates Plex Watchlist sync status to Watched
+
+---
+
+#### Option A: Tautulli (Recommended if you already use Tautulli)
 
 1. **In Tautulli, go to Settings → Notification Agents**
 2. **Click "Add a new notification agent" and select "Webhook"**
 3. **Configure the webhook:**
    - **Webhook URL:** `http://your-episeerr-ip:5002/webhook`
-   - **Trigger:** Episode Watched
+   - **Trigger:** Watched
    - **JSON Data:** Use exactly this template:
 
 ```json
 {
   "plex_title": "{show_name}",
+  "plex_movie_title": "{title}",
   "plex_season_num": "{season_num}",
   "plex_ep_num": "{episode_num}",
   "thetvdb_id": "{thetvdb_id}",
@@ -62,7 +75,29 @@ Webhooks enable viewing-based automation - Episeerr responds when you watch epis
 ![webhook](https://github.com/Vansmak/OCDarr/assets/16037573/cf0db503-d730-4a9c-b83e-2d21a3430ece)![webhook2](https://github.com/Vansmak/OCDarr/assets/16037573/45be66c2-1869-49c1-8074-9081ed7c913b)
 ![webhook3](https://github.com/Vansmak/OCDarr/assets/16037573/24f02a75-2100-4b2a-9137-ce1e68803d1f)![webhook4](https://github.com/Vansmak/OCDarr/assets/16037573/f82198fc-e4c4-40ec-a9c7-551b2d8cdccd)
 
-**Important:** In Settings → General, set **TV Episode Watched Percent** to control when webhooks trigger. Set the percentage for a TV episode to be considered as watched. Minimum 50%, Maximum 95%.
+**Important:** In Tautulli Settings → General, set the **Watched Percent** threshold to control when the webhook fires (applies to both TV episodes and movies). Minimum 50%, Maximum 95%.
+
+> ⚠️ **The screenshots above are outdated** — they show a condition filtering to episodes only. **Leave the Conditions section blank.** No media type filter is needed; Episeerr detects TV vs movie automatically from the payload.
+
+---
+
+#### Option B: Plex Native Webhook (No Tautulli required)
+
+Configure watch detection directly in Episeerr's Plex integration settings (Integrations → Plex → Watch Detection).
+
+**Detection Modes:**
+
+| Mode | How It Works | Best For |
+|------|-------------|----------|
+| **Scrobble** | Fires at ~90% (Plex native scrobble event) | Simple setup, no extra config |
+| **Stop + Threshold** | Fires when you stop playback, if progress ≥ your threshold | Control over what counts as "watched" |
+| **Polling** | Checks progress every N minutes while playing, fires at threshold | Trigger mid-playback without stopping |
+
+**Progress Threshold:** Set in Plex integration settings. Applies to both TV and movies.
+
+**Allowed Users:** Optionally restrict to specific Plex usernames.
+
+All modes handle TV and movies automatically — no additional configuration needed.
 
 ### Jellyfin Setup
 

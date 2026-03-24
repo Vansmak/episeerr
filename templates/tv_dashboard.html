@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Episeerr — TV</title>
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg: #0d0f1a;
+            --card-bg: #1a1d29;
+            --border: #2d3142;
+            --text: #e8eaf0;
+            --muted: #8892a4;
+            --accent: #4f8ef7;
+            --success: #3ecf8e;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0; padding: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Segoe UI', sans-serif;
+            overflow-x: hidden;
+        }
+
+        /* ── Header ─────────────────────────────────── */
+        .tv-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 40px 12px;
+            border-bottom: 1px solid var(--border);
+            background: #10121e;
+        }
+
+        .tv-brand {
+            font-family: 'Orbitron', sans-serif;
+            font-size: 1.8rem;
+            font-weight: 900;
+            color: var(--accent);
+            letter-spacing: 2px;
+        }
+
+        .tv-clock {
+            font-size: 1.6rem;
+            color: var(--muted);
+            font-weight: 300;
+        }
+
+        /* ── Stats Bar ───────────────────────────────── */
+        .tv-stats-bar {
+            display: flex;
+            gap: 16px;
+            padding: 16px 40px;
+            background: #13162280;
+            flex-wrap: wrap;
+        }
+
+        .tv-stat-pill {
+            background: var(--card-bg);
+            border: 2px solid var(--border);
+            border-radius: 50px;
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: border-color 0.15s;
+        }
+
+        .tv-stat-pill:focus,
+        .tv-stat-pill:hover {
+            border-color: var(--accent);
+            outline: none;
+        }
+
+        /* ── Main Grid ───────────────────────────────── */
+        .tv-main {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+            padding: 24px 40px;
+        }
+
+        .tv-section-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--muted);
+            padding: 0 0 12px 0;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tv-section-title i { color: var(--accent); }
+
+        /* ── Episode Cards ───────────────────────────── */
+        .tv-episode-card {
+            background: var(--card-bg);
+            border: 2px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 14px;
+            cursor: pointer;
+            transition: border-color 0.15s, transform 0.1s;
+            display: flex;
+            gap: 0;
+        }
+
+        .tv-episode-card:focus,
+        .tv-episode-card:hover {
+            border-color: var(--accent);
+            transform: scale(1.02);
+            outline: none;
+        }
+
+        .tv-episode-banner {
+            width: 130px;
+            min-width: 130px;
+            height: 80px;
+            object-fit: cover;
+            background: #222;
+        }
+
+        .tv-episode-info {
+            padding: 10px 14px;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .tv-episode-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 4px;
+        }
+
+        .tv-episode-sub {
+            font-size: 0.95rem;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tv-badge {
+            font-size: 0.8rem;
+            padding: 3px 10px;
+            border-radius: 50px;
+            display: inline-block;
+            margin-top: 6px;
+        }
+
+        .tv-badge-success { background: rgba(62,207,142,0.2); color: var(--success); }
+        .tv-badge-info    { background: rgba(79,142,247,0.2); color: var(--accent); }
+        .tv-badge-warn    { background: rgba(255,193,7,0.2);  color: #ffc107; }
+
+        /* ── Activity Feed ───────────────────────────── */
+        .tv-activity-item {
+            display: flex;
+            gap: 14px;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--border);
+            align-items: flex-start;
+        }
+
+        .tv-activity-item:last-child { border-bottom: none; }
+
+        .tv-activity-icon {
+            font-size: 1.3rem;
+            width: 28px;
+            text-align: center;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .tv-activity-body { flex: 1; overflow: hidden; }
+
+        .tv-activity-title {
+            font-size: 1.05rem;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tv-activity-detail {
+            font-size: 0.9rem;
+            color: var(--muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tv-activity-time {
+            font-size: 0.85rem;
+            color: var(--muted);
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        /* ── Loading ─────────────────────────────────── */
+        .tv-loading {
+            text-align: center;
+            padding: 40px;
+            color: var(--muted);
+            font-size: 1.1rem;
+        }
+
+        .tv-empty {
+            text-align: center;
+            padding: 32px 16px;
+            color: var(--muted);
+            font-size: 1.05rem;
+        }
+
+        /* ── Day Label ───────────────────────────────── */
+        .tv-day-label {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            padding: 6px 0 8px;
+        }
+
+        /* ── Global focus ring (TV D-pad) ────────────── */
+        :focus {
+            outline: 4px solid var(--accent) !important;
+            outline-offset: 3px !important;
+        }
+
+        /* ── Scrollable column ───────────────────────── */
+        .tv-col-scroll {
+            max-height: calc(100vh - 230px);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border) transparent;
+            padding-right: 4px;
+        }
+
+        /* ── Date badge ──────────────────────────────── */
+        .tv-date-group { margin-bottom: 8px; }
+    </style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="tv-header">
+    <div class="tv-brand">
+        <i class="fas fa-tv me-2" style="font-size:1.5rem;"></i>EPISEERR
+    </div>
+    <div class="tv-clock" id="tv-clock">--:--</div>
+</div>
+
+<!-- Stats Bar -->
+<div class="tv-stats-bar" id="tv-stats-bar">
+    <div class="tv-stat-pill" tabindex="0">
+        <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" style="width:22px;height:22px;">
+        <span><strong id="tv-series">--</strong> series</span>
+    </div>
+    <div class="tv-stat-pill" tabindex="0">
+        <i class="fas fa-film" style="color:var(--accent);"></i>
+        <span><strong id="tv-episodes">--</strong> episodes</span>
+    </div>
+    <div class="tv-stat-pill" tabindex="0">
+        <i class="fas fa-hdd" style="color:var(--muted);"></i>
+        <span><strong id="tv-size">--</strong> GB</span>
+    </div>
+    <div class="tv-stat-pill" tabindex="0">
+        <i class="fas fa-list" style="color:#17a2b8;"></i>
+        <span>Queue: <strong id="tv-queue">--</strong></span>
+    </div>
+    <!-- Integration pills injected here -->
+</div>
+
+<!-- Main 3-Column Grid -->
+<div class="tv-main">
+
+    <!-- Column 1: Upcoming -->
+    <div>
+        <div class="tv-section-title">
+            <i class="fas fa-clock"></i> Upcoming Releases
+        </div>
+        <div class="tv-col-scroll" id="tv-upcoming">
+            <div class="tv-loading"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>
+        </div>
+    </div>
+
+    <!-- Column 2: Ready to Watch -->
+    <div>
+        <div class="tv-section-title">
+            <i class="fas fa-check-circle" style="color:var(--success);"></i> Ready to Watch
+        </div>
+        <div class="tv-col-scroll" id="tv-downloaded">
+            <div class="tv-loading"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>
+        </div>
+    </div>
+
+    <!-- Column 3: Recent Activity -->
+    <div>
+        <div class="tv-section-title">
+            <i class="fas fa-stream"></i> Recent Activity
+        </div>
+        <div class="tv-col-scroll" id="tv-activity">
+            <div class="tv-loading"><i class="fas fa-spinner fa-spin me-2"></i>Loading...</div>
+        </div>
+    </div>
+
+</div>
+
+<script>
+// ── Clock ─────────────────────────────────────────────────────────────────
+function updateClock() {
+    const now = new Date();
+    document.getElementById('tv-clock').textContent =
+        now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+}
+updateClock();
+setInterval(updateClock, 30000);
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+function timeAgo(date) {
+    const s = Math.floor((new Date() - new Date(date)) / 1000);
+    if (s < 60)    return 'Just now';
+    if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+    if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+    return Math.floor(s / 86400) + 'd ago';
+}
+
+function banner(ep) {
+    return ep.banner || '/static/placeholder-banner.png';
+}
+
+function episodeCard(ep, timeLabel) {
+    return `
+        <div class="tv-episode-card" tabindex="0">
+            <img class="tv-episode-banner" src="${banner(ep)}" onerror="this.src='/static/placeholder-banner.png'">
+            <div class="tv-episode-info">
+                <div class="tv-episode-title">${ep.series_title}</div>
+                <div class="tv-episode-sub">S${ep.season}E${ep.episode}${ep.episode_title && ep.episode_title !== 'TBA' ? ' — ' + ep.episode_title : ''}</div>
+                <div class="tv-episode-sub">${timeLabel}</div>
+            </div>
+        </div>`;
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────
+function loadStats() {
+    fetch('/api/dashboard/stats')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) return;
+            const s = data.stats.sonarr || {};
+            document.getElementById('tv-series').textContent   = s.series_count   ?? '--';
+            document.getElementById('tv-episodes').textContent = s.episode_count  ?? '--';
+            document.getElementById('tv-size').textContent     = s.size_gb        ?? '--';
+            document.getElementById('tv-queue').textContent    = s.queue_count    ?? 0;
+        })
+        .catch(() => {});
+}
+
+// ── Calendar ──────────────────────────────────────────────────────────────
+function loadCalendar() {
+    fetch('/api/dashboard/calendar')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.success) {
+                document.getElementById('tv-upcoming').innerHTML   = '<div class="tv-empty">No upcoming episodes</div>';
+                document.getElementById('tv-downloaded').innerHTML = '<div class="tv-empty">No recent downloads</div>';
+                return;
+            }
+            renderUpcoming(data.upcoming   || []);
+            renderDownloaded(data.downloaded || []);
+        })
+        .catch(() => {
+            document.getElementById('tv-upcoming').innerHTML   = '<div class="tv-empty">Failed to load</div>';
+            document.getElementById('tv-downloaded').innerHTML = '<div class="tv-empty">Failed to load</div>';
+        });
+}
+
+function renderUpcoming(eps) {
+    const el = document.getElementById('tv-upcoming');
+    if (!eps.length) { el.innerHTML = '<div class="tv-empty"><i class="fas fa-calendar-times me-2"></i>Nothing scheduled this week</div>'; return; }
+
+    // Group by date
+    const grouped = {};
+    eps.forEach(ep => {
+        const dk = new Date(ep.air_date).toDateString();
+        (grouped[dk] = grouped[dk] || []).push(ep);
+    });
+
+    const today    = new Date().toDateString();
+    const tomorrow = new Date(Date.now() + 86400000).toDateString();
+
+    let html = '';
+    Object.keys(grouped).sort((a,b) => new Date(a) - new Date(b)).forEach(dk => {
+        let label = new Date(dk).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        if (dk === today)    label = '🔴 Today';
+        if (dk === tomorrow) label = '🟡 Tomorrow';
+
+        html += `<div class="tv-day-label">${label}</div>`;
+        grouped[dk].forEach(ep => {
+            const t = new Date(ep.air_date).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+            html += episodeCard(ep, t);
+        });
+    });
+    el.innerHTML = html;
+}
+
+function renderDownloaded(eps) {
+    const el = document.getElementById('tv-downloaded');
+    if (!eps.length) { el.innerHTML = '<div class="tv-empty"><i class="fas fa-info-circle me-2"></i>Episodes appear here when grabbed</div>'; return; }
+
+    const grouped = {};
+    eps.forEach(ep => {
+        const dk = new Date(ep.grabbed_date).toDateString();
+        (grouped[dk] = grouped[dk] || []).push(ep);
+    });
+
+    const today     = new Date().toDateString();
+    const yesterday = new Date(Date.now() - 86400000).toDateString();
+
+    let html = '';
+    Object.keys(grouped).sort((a,b) => new Date(b) - new Date(a)).forEach(dk => {
+        let label = new Date(dk).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+        if (dk === today)     label = '📥 Today';
+        if (dk === yesterday) label = '📥 Yesterday';
+        else label = '📥 ' + label;
+
+        html += `<div class="tv-day-label">${label}</div>`;
+        grouped[dk].forEach(ep => {
+            html += episodeCard(ep, 'Grabbed ' + timeAgo(ep.grabbed_date));
+        });
+    });
+    el.innerHTML = html;
+}
+
+// ── Activity ──────────────────────────────────────────────────────────────
+function loadActivity() {
+    fetch('/api/dashboard/activity')
+        .then(r => r.json())
+        .then(data => {
+            const el = document.getElementById('tv-activity');
+            if (!data.success || !data.services?.length) {
+                el.innerHTML = '<div class="tv-empty">No recent activity</div>';
+                return;
+            }
+            let html = '';
+            data.services.slice(0, 20).forEach(item => {
+                const icon  = item.action_icon || item.icon || 'fa-info-circle';
+                const color = item.color || 'primary';
+                html += `
+                    <div class="tv-activity-item">
+                        <div class="tv-activity-icon"><i class="fas ${icon} text-${color}"></i></div>
+                        <div class="tv-activity-body">
+                            <div class="tv-activity-title">${item.service} — ${item.action}</div>
+                            <div class="tv-activity-detail">${item.details || ''}</div>
+                        </div>
+                        <div class="tv-activity-time">${timeAgo(item.timestamp)}</div>
+                    </div>`;
+            });
+            el.innerHTML = html;
+        })
+        .catch(() => {
+            document.getElementById('tv-activity').innerHTML = '<div class="tv-empty">Failed to load</div>';
+        });
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+loadStats();
+loadCalendar();
+loadActivity();
+
+setInterval(loadStats,    60000);
+setInterval(loadActivity, 60000);
+setInterval(loadCalendar, 120000);
+
+// ── D-pad Navigation ──────────────────────────────────────────────────────
+document.addEventListener('keydown', function(e) {
+    const focusable = () => Array.from(document.querySelectorAll('[tabindex="0"], button, a'))
+        .filter(el => el.offsetParent !== null);
+
+    const els = focusable();
+    const idx = els.indexOf(document.activeElement);
+
+    if (idx === -1 && (e.keyCode === 40 || e.keyCode === 39)) {
+        if (els.length) { els[0].focus(); e.preventDefault(); }
+        return;
+    }
+
+    switch (e.keyCode) {
+        case 38: // Up
+        case 37: // Left
+            if (idx > 0) { e.preventDefault(); els[idx - 1].focus(); }
+            break;
+        case 40: // Down
+        case 39: // Right
+            if (idx < els.length - 1) { e.preventDefault(); els[idx + 1].focus(); }
+            break;
+        case 13: // Enter
+        case 23: // DPAD_CENTER
+            if (document.activeElement) { e.preventDefault(); document.activeElement.click(); }
+            break;
+    }
+});
+</script>
+</body>
+</html>

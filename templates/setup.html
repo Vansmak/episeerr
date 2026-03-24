@@ -122,10 +122,12 @@
             <h4><i class="fas fa-puzzle-piece text-info me-2"></i>Optional Integrations</h4>
             <p class="text-muted mb-1" style="font-size:13px;">
                 <i class="fas fa-info-circle me-1"></i>
-                <strong>Plex</strong> and <strong>Tautulli</strong> appear here — configure one for viewing automation.
-                <strong>Do not set up both as webhook sources</strong> (Plex native webhooks OR Tautulli watched webhook, not both —
-                this causes double-processing). Tautulli can still be configured alongside Plex to use its richer watch history
-                via the <em>Override Plex</em> toggle without enabling its watched webhook.
+                <strong>Plex</strong> and <strong>Tautulli</strong> appear here. For watch detection, choose <strong>one</strong>:
+                <strong>Plex native webhook</strong> (configure in Plex → Watch Detection) <em>or</em>
+                <strong>Tautulli watched webhook</strong> (Trigger: Watched, any media type) — <strong>not both</strong>, as this causes double-processing.
+                Both options handle TV shows (rule automation) and movies (watchlist status updates).
+                Tautulli can still be configured alongside Plex native webhook for its richer watch history
+                via the <em>Override Plex</em> toggle, as long as its watched webhook is not also enabled.
             </p>
         </div>
     </div>

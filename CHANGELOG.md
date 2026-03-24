@@ -1,8 +1,8 @@
 # Changelog
 
-## [Unreleased / Dev]
+## v3.5.0
 
-### 🔌 New: Dispatcharr Integration
+### 🔌 Dispatcharr Integration
 - Dashboard stat pill shows active streams and queue count
 - Streaming widget on dashboard — live view of active sessions with channel, quality, and user info
 - Auto-generates sidebar quick link when configured
@@ -37,7 +37,18 @@
 - `get_plex_series_watch_history()` added — queries max `lastViewedAt` across all episodes in a series
 - `settings_db.py`: added `get_plex_config()` and `get_tautulli_config()` with env fallback
 
-### 🐛 Jellyfin Fixes (v3.4.1)
+### 🐛 Fixes
+- Plex Watchlist: TV shows stuck on "Requested" — `episodeFileCount` nested under `statistics` in Sonarr API, not top-level
+- Plex Watchlist: TV shows never showed "Watched" — `mark_item_watched` now sets `watched=True`/`status='watched'` for TV
+- Plex Polling: `session_key` now read from `Metadata.sessionKey` (was reading from `Player` which is empty/UUID)
+- Plex Polling: session match now falls back to title/season/episode if key doesn't match
+- Plex Polling: `session_key` always non-empty — content-based fallback prevents polling thread never starting
+- Plex Polling: threshold checked on every play/pause/resume webhook event — triggers immediately without waiting for next poll interval
+- Tautulli movie detection: `{season_num}` sends `"0"` for movies (not empty) — detection now treats `0`/`"0"` as absent
+- Tautulli: movie detection no longer requires `themoviedb_id` to be present; logs a clear warning if missing
+- Tautulli: `{show_name}` is TV-only — added `plex_movie_title` field using `{title}` for movie title
+
+### 🎬 Jellyfin Fixes (v3.4.1)
 - Detection Method field now renders as a dropdown in setup UI (was rendering as a text input)
 - Fixed critical bug in PlaybackProgress mode: episode was marked as processed *before* `process_episode()` ran, and a duplicate dedup check inside `process_episode()` caused it to immediately return `False` — subprocess never executed despite logs claiming success
 - Dedup check now happens before the "In trigger range" log so duplicate ticks are silent at debug level

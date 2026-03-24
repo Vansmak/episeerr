@@ -1149,13 +1149,27 @@
             <h5>Supported Services:</h5>
             <div class="row">
                 <div class="col-md-4">
-                <h6><i class="fas fa-chart-bar text-primary me-2"></i>Tautulli</h6>
-                <p>Tracks viewing activity in Plex</p>
+                <h6><i class="fas fa-chart-bar text-primary me-2"></i>Tautulli <small class="text-muted">(Plex Option A)</small></h6>
+                <p>Tracks viewing activity in Plex — handles TV shows and movies</p>
                 <pre class="bg-dark text-light p-2"><code>Webhook URL:
             http://your-server:5002/webhook
 
-            Trigger:
-            Playback Stop</code></pre>
+            Trigger: Watched
+            (set % threshold in Tautulli
+            Settings → General)</code></pre>
+                <p class="small text-muted mb-0">TV → rule automation &nbsp;|&nbsp; Movies → watchlist status</p>
+            </div>
+            <div class="col-md-4">
+                <h6><i class="fab fa-plex text-warning me-2"></i>Plex Native Webhook <small class="text-muted">(Option B)</small></h6>
+                <p>Direct Plex webhook — no Tautulli needed. Handles TV shows and movies.</p>
+                <pre class="bg-dark text-light p-2"><code>Configure in:
+            Integrations → Plex
+            → Watch Detection
+
+            Modes: Scrobble |
+            Stop+Threshold |
+            Polling</code></pre>
+                <p class="small text-muted mb-0">Choose one: Tautulli <strong>or</strong> Plex native — not both</p>
             </div>
 
             <div class="col-md-4">
@@ -1538,7 +1552,8 @@ Order: 1 (higher priority)</code></pre>
                     <ul>
                         <li><strong>Sonarr webhook:</strong> ✅ REQUIRED - Detects new series and processes tags (episeerr_[rule_name]/episeerr_select)</li>
                         <li><strong>Jellyseerr/Overseerr webhook:</strong> ✅ REQUIRED if you use *seerr - Captures requested seasons for proper automation</li>
-                        <li><strong>Tautulli/Jellyfin webhook:</strong> ⚙️ OPTIONAL - Only needed for viewing-based automation (auto-get next episode after watching)</li>
+                        <li><strong>Tautulli or Plex native webhook:</strong> ⚙️ OPTIONAL - For viewing-based automation (TV: auto-get next episode; Movies: update watchlist status). Choose one, not both.</li>
+                        <li><strong>Jellyfin webhook:</strong> ⚙️ OPTIONAL - Same as above for Jellyfin users</li>
                     </ul>
                     <p class="mb-0"><em>Without viewing webhooks, you can still use manual selection and time-based cleanup rules.</em></p>
                 </dd>
