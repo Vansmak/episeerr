@@ -180,6 +180,14 @@ def process_watch_event(data: dict) -> dict:
         else:
             logger.info(f"[Tautulli] Processed {series_title} S{season_number}E{episode_number}")
 
+        # Update Plex Watchlist watched status for TV
+        if themoviedb_id:
+            try:
+                from integrations.plex import PlexIntegration
+                PlexIntegration().mark_item_watched(str(themoviedb_id), 'tv')
+            except Exception as e:
+                logger.debug(f"[Tautulli] Could not update watchlist watched status: {e}")
+
         return {'status': 'success'}
 
     except Exception as exc:
