@@ -75,7 +75,7 @@ else:
     app.logger.warning("TMDB_API_KEY is missing - you may encounter issues fetching series details and seasons")
 
 # Request storage
-REQUESTS_DIR = os.path.join(os.getcwd(), 'data', 'requests')
+REQUESTS_DIR = os.path.join(os.getcwd(), 'data', 'pending_requests')
 os.makedirs(REQUESTS_DIR, exist_ok=True)
 
 LAST_PROCESSED_FILE = os.path.join(os.getcwd(), 'data', 'last_processed.json')
@@ -302,22 +302,6 @@ def auto_add_quick_link(name, url, icon, open_in_iframe=False, alternate_url=Non
 
     add_quick_link(name, url, icon, open_in_iframe, alternate_url)
     app.logger.info(f"Auto-added {name} to quick links")
-
-@app.before_request
-def check_first_run():
-    # Skip check for setup page itself, static files, and API routes
-    if request.endpoint in ['setup', 'static', 'test_connection', 'save_service_config',
-                            'manage_quick_links', 'delete_quick_link_route',
-                            'iframe_view', 'services_sidebar', 'iframe_service_view']:
-        return
-    
-    # Check if Sonarr is configured (required service)
-    from settings_db import get_sonarr_config
-    sonarr = get_sonarr_config()
-    
-    if not sonarr or not sonarr.get('url'):
-        # Not configured - redirect to setup
-        return redirect(url_for('setup'))
 
 @app.route('/setup')
 def setup():
@@ -757,46 +741,6 @@ def services_sidebar():
             services.append(service_entry)
     
     return jsonify({'status': 'success', 'services': services})
-
-
-def get_episode_watch_history(rating_key: str):
-    """
-    Route watch-history queries to the correct integration.
-
-    Priority:
-      1. Tautulli — if configured with override_plex=True
-      2. Plex     — if configured
-      3. Jellyfin — if configured
-      4. Emby     — if configured
-      5. None
-
-    Returns {'last_watched': <unix timestamp>} or None.
-    """
-    from settings_db import get_tautulli_config, get_plex_config, get_jellyfin_config, get_emby_config
-
-    tautulli_cfg = get_tautulli_config()
-    if tautulli_cfg and tautulli_cfg.get('override_plex'):
-        from integrations.tautulli import get_tautulli_watch_history
-        result = get_tautulli_watch_history(rating_key)
-        if result:
-            return result
-
-    plex_cfg = get_plex_config()
-    if plex_cfg and plex_cfg.get('url') and plex_cfg.get('api_key'):
-        from integrations.plex import get_plex_watch_history
-        return get_plex_watch_history(rating_key)
-
-    jellyfin_cfg = get_jellyfin_config()
-    if jellyfin_cfg and jellyfin_cfg.get('url') and jellyfin_cfg.get('api_key'):
-        # Jellyfin uses internal item IDs, not Plex rating_keys — return None here;
-        # callers that use Jellyfin should query get_jellyfin_config() directly.
-        return None
-
-    emby_cfg = get_emby_config()
-    if emby_cfg and emby_cfg.get('url') and emby_cfg.get('api_key'):
-        return None  # Same note as Jellyfin above
-
-    return None
 
 
 @app.route('/api/media-server')
@@ -1395,47 +1339,6 @@ def api_sidebar_stats():
             'error': str(e)
         }), 500
 
-def api_rules_list():
-    """Return formatted rules data for sidebar display"""
-    try:
-        config_data = load_config()
-        default_rule = config_data.get('default_rule')
-        rules = config_data.get('rules', {})
-        
-        rules_list = []
-        
-        # Process each rule
-        for rule_name, rule_details in sorted(rules.items()):
-            is_default = (rule_name == default_rule)
-            series_count = len(rule_details.get('series', []))
-            
-            # Create display name (title case with spaces)
-            display_name = rule_name.replace('_', ' ').title()
-            
-            rules_list.append({
-                'name': rule_name,
-                'display_name': display_name,
-                'description': rule_details.get('description', ''),
-                'series_count': series_count,
-                'is_default': is_default
-            })
-        
-        # Sort: default first, then alphabetically
-        rules_list.sort(key=lambda x: (not x['is_default'], x['display_name']))
-        
-        return jsonify({
-            'success': True,
-            'rules': rules_list,
-            'total_count': len(rules_list)
-        })
-    
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'error': str(e),
-            'rules': []
-        }), 500
-
 @app.route('/pending-deletions')
 def view_pending_deletions():
     """View all pending deletions"""
@@ -1702,8 +1605,21 @@ def clear_old_logs():
 # SIMPLIFIED CONFIG MANAGEMENT
 # ============================================================================
 
+_config_cache = None
+_config_cache_time = 0
+_CONFIG_CACHE_TTL = 30  # seconds
+
+def _invalidate_config_cache():
+    global _config_cache, _config_cache_time
+    _config_cache = None
+    _config_cache_time = 0
+
 def load_config():
     """Load configuration with simplified migration."""
+    global _config_cache, _config_cache_time
+    now = time.time()
+    if _config_cache is not None and (now - _config_cache_time) < _CONFIG_CACHE_TTL:
+        return _config_cache
     try:
         # REMOVED: Backup on every load (was causing spam)
         with open(config_path, 'r') as file:
@@ -1721,7 +1637,9 @@ def load_config():
         if migrated:
             save_config(config)
             app.logger.info("✓ Migrated rules to include grace_scope field (defaulted to 'series')")
-        
+
+        _config_cache = config
+        _config_cache_time = time.time()
         return config
     except FileNotFoundError:
         default_config = {
@@ -1729,7 +1647,7 @@ def load_config():
                 'default': {
                     'get_type': 'episodes',
                     'get_count': 1,
-                    'keep_type': 'episodes', 
+                    'keep_type': 'episodes',
                     'keep_count': 1,
                     'action_option': 'search',
                     'monitor_watched': False,
@@ -1750,6 +1668,7 @@ def load_config():
 
 def save_config(config):
     """Save configuration to JSON file with automatic backup."""
+    _invalidate_config_cache()
     try:
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         
@@ -2340,23 +2259,6 @@ def assign_rules():
         return redirect(url_for('rules_page'))
     return redirect(url_for('index', message=message))
 
-@app.template_filter('sonarr_url')
-def sonarr_series_url(series):
-    """Generate Sonarr series URL from series object."""
-    # Use titleSlug if available, otherwise fallback to ID
-    if isinstance(series, dict):
-        if 'titleSlug' in series:
-            return f"{SONARR_URL}/series/{series['titleSlug']}"
-        else:
-            return f"{SONARR_URL}/series/{series.get('id', '')}"
-    else:
-        # If it's just an ID passed directly
-        return f"{SONARR_URL}/series/{series}"
-
-@app.route('/delete-rule/<rule_name>', methods=['POST'])
-
-
-
 @app.context_processor
 def inject_service_urls():
     """Inject service URLs into all templates based on .env configuration."""
@@ -2591,125 +2493,42 @@ def cleanup_config_rules():
         
         
         
-        # NEW: Comprehensive tag reconciliation (create, drift, orphaned)
+        # Tag reconciliation (create tags, drift, orphaned)
         app.logger.info("Starting tag reconciliation during cleanup...")
-        
-        # Step 1: Create/verify all rule tags exist in Sonarr
+
         created, failed = migrate_create_rule_tags()
         if created > 0 or failed > 0:
             app.logger.info(f"  Tag creation: {created} verified, {failed} failed")
-        
-        # Step 2: Drift detection - fix mismatched tags
-        drift_fixed = 0
-        drift_synced = 0
-        series_deleted = 0
-        
-        for rule_name, rule_details in config['rules'].items():
-            for series_id_str in list(rule_details.get('series', {}).keys()):
-                try:
-                    series_id = int(series_id_str)
-                    
-                    # First check if series still exists
-                    try:
-                        series_data = episeerr_utils.get_series_from_sonarr(series_id)
-                        if not series_data:
-                            # Series deleted - remove from config
-                            del rule_details['series'][series_id_str]
-                            series_deleted += 1
-                            app.logger.info(f"  Removed deleted series {series_id} from config (no longer in Sonarr)")
-                            changes_made = True
-                            continue
-                    except Exception as fetch_error:
-                        if "404" in str(fetch_error):
-                            # Definite 404 - series deleted
-                            del rule_details['series'][series_id_str]
-                            series_deleted += 1
-                            app.logger.info(f"  Removed series {series_id} from config (404 - deleted from Sonarr)")
-                            changes_made = True
-                            continue
-                        else:
-                            # Other error - log and continue
-                            app.logger.error(f"  Error fetching series {series_id}: {str(fetch_error)}")
-                            continue
-                    
-                    # Now check tag drift
-                    matches, actual_tag_rule = episeerr_utils.validate_series_tag(series_id, rule_name)
-                    
-                    if not matches:
-                        if actual_tag_rule:
-                            # Find actual rule name (case-insensitive)
-                            actual_rule_name = None
-                            for rn in config['rules'].keys():
-                                if rn.lower() == actual_tag_rule.lower():
-                                    actual_rule_name = rn
-                                    break
-                            
-                            if actual_rule_name:
-                                # Move series to new rule
-                                series_data = rule_details['series'][series_id_str]
-                                del rule_details['series'][series_id_str]
-                                
-                                target_rule = config['rules'][actual_rule_name]
-                                target_rule.setdefault('series', {})[series_id_str] = series_data
-                                
-                                drift_fixed += 1
-                                app.logger.info(f"  Drift: Moved series {series_id} to '{actual_rule_name}'")
-                                changes_made = True
-                            else:
-                                app.logger.error(f"Target rule '{actual_tag_rule}' not found")
-                        else:
-                            # No tag found: sync from config
-                            episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
-                            drift_synced += 1
-                
-                except Exception as e:
-                    app.logger.error(f"Error checking drift for series {series_id_str}: {str(e)}")
-        
-        # Step 3: Orphaned tags - find shows tagged in Sonarr but not in config
-        # Build set of series IDs in config
-        config_series_ids = set()
-        for rule_details in config['rules'].values():
-            config_series_ids.update(rule_details.get('series', {}).keys())
-        
-        orphaned = 0
-        for series in existing_series:
-            series_id = str(series['id'])
-            
-            # Skip if already in config
-            if series_id in config_series_ids:
-                continue
-            
-            # Check if has episeerr tag
-            tag_mapping = episeerr_utils.get_tag_mapping()
-            for tag_id in series.get('tags', []):
-                tag_name = tag_mapping.get(tag_id, '').lower()
-                
-                # Found episeerr rule tag (not default/select)
-                if tag_name.startswith('episeerr_'):
-                    rule_name = tag_name.replace('episeerr_', '')
-                    if rule_name not in ['default', 'select']:
-                        # Find actual rule name (case-insensitive)
-                        actual_rule_name = None
-                        for rn in config['rules'].keys():
-                            if rn.lower() == rule_name:
-                                actual_rule_name = rn
-                                break
-                        
-                        if actual_rule_name:
-                            # Add to config
-                            config['rules'][actual_rule_name].setdefault('series', {})[series_id] = {}
-                            orphaned += 1
-                            app.logger.info(f"  Orphaned: Added {series['title']} to '{actual_rule_name}'")
-                            changes_made = True
-                            break
-        
-        # Save if any changes made
-        if changes_made or drift_fixed > 0 or drift_synced > 0 or orphaned > 0 or series_deleted > 0:
+
+        # Collect all series IDs to check: known + orphaned candidates
+        known_ids = [
+            int(sid)
+            for rule_details in config['rules'].values()
+            for sid in list(rule_details.get('series', {}).keys())
+        ]
+        config_series_ids = {
+            sid
+            for rule_details in config['rules'].values()
+            for sid in rule_details.get('series', {}).keys()
+        }
+        orphaned_ids = [
+            s['id'] for s in existing_series
+            if str(s['id']) not in config_series_ids
+        ]
+
+        reconciled = 0
+        for series_id in known_ids + orphaned_ids:
+            try:
+                _, changed = episeerr_utils.reconcile_series_drift(series_id, config)
+                if changed:
+                    reconciled += 1
+                    changes_made = True
+            except Exception as e:
+                app.logger.error(f"  Error reconciling series {series_id}: {e}")
+
+        if changes_made:
             save_config(config)
-            if series_deleted > 0:
-                app.logger.info(f"✓ Tag reconciliation complete: {drift_fixed} moved, {drift_synced} synced, {orphaned} orphaned, {series_deleted} deleted")
-            else:
-                app.logger.info(f"✓ Tag reconciliation complete: {drift_fixed} moved, {drift_synced} synced, {orphaned} orphaned")
+            app.logger.info(f"✓ Tag reconciliation complete: {reconciled} corrections made")
         else:
             app.logger.info("✓ Tag reconciliation complete: No changes needed")
             
@@ -3727,7 +3546,14 @@ def get_pending_requests():
                 try:
                     with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
                         request_data = json.load(f)
-                        pending_requests.append(request_data)
+                    # Only surface real selection requests, not Jellyseerr coordination files
+                    if not request_data.get('needs_season_selection'):
+                        continue
+                    # Always use filename base as id so delete works
+                    request_data['id'] = filename[:-5]
+                    if 'created_at' not in request_data and 'timestamp' in request_data:
+                        request_data['created_at'] = request_data['timestamp']
+                    pending_requests.append(request_data)
                 except Exception as e:
                     app.logger.error(f"Error reading request file {filename}: {str(e)}")
         pending_requests.sort(key=lambda x: x.get('created_at', 0), reverse=True)
@@ -3760,68 +3586,24 @@ def delete_request(request_id):
 
 def process_watch_event(series_id: int, user_name: str = None):
     """
-    Shared logic for any watch event (Tautulli or Jellyfin).
-    - Find current config rule
-    - Validate tag vs config
-    - Auto-correct drift if needed
-    - Apply GET + KEEP for the (possibly updated) rule
-    - Update activity_date
+    Shared drift-correction + activity update for any watch event.
+    Returns (True, final_rule) or (False, reason).
     """
     config = load_config()
-    
-    # 1. Find current assignment in config
-    config_rule = None
     series_id_str = str(series_id)
-    for rule_name, rule_data in config['rules'].items():
-        if series_id_str in rule_data.get('series', {}):
-            config_rule = rule_name
-            break
-    
-    if not config_rule:
+
+    final_rule, modified = episeerr_utils.reconcile_series_drift(series_id, config)
+
+    if not final_rule:
         app.logger.info(f"Series {series_id} not assigned to any rule → skipping watch processing")
         return False, "Not assigned"
-    
-    # 2. Check what Sonarr currently says
-    matches, actual_tag_rule = episeerr_utils.validate_series_tag(series_id, config_rule)
-    
-    if matches:
-        app.logger.debug(f"Tag matches config: {config_rule}")
-        final_rule = config_rule
-    
-    else:
-        if actual_tag_rule:
-            # Drift: tag was changed manually → move config to match tag
-            app.logger.warning(f"DRIFT DETECTED — config: {config_rule}, Sonarr tag: {actual_tag_rule}")
-            episeerr_utils.move_series_in_config(series_id, config_rule, actual_tag_rule)
-            final_rule = actual_tag_rule
-            app.logger.info(f"Series moved to rule '{final_rule}' to match Sonarr tag")
-        
-        else:
-            # No episeerr rule tag at all → restore from config
-            app.logger.warning(f"No episeerr rule tag found → restoring episeerr_{config_rule}")
-            episeerr_utils.sync_rule_tag_to_sonarr(series_id, config_rule)
-            final_rule = config_rule
-    
-    # 3. Apply GET + KEEP logic for final_rule
-    rule_config = config['rules'][final_rule]
-    
-    # ─── Your GET logic here ───
-    # monitor new episodes, search, etc. based on rule['get_type'], ['get_count'], etc.
-    # Example:
-    # apply_get_settings(series_id, rule_config)
-    
-    # ─── Your KEEP logic here ───
-    # delete old episodes based on grace periods, keep_count, etc.
-    # Example:
-    # apply_keep_cleanup(series_id, rule_config)
-    
-    # 4. Update activity tracking
-    series_data = config['rules'][final_rule]['series'][series_id_str]
+
+    # Update activity tracking
+    series_data = config['rules'][final_rule]['series'].get(series_id_str, {})
     series_data['activity_date'] = int(time.time())
-    # Optional: update last_season / last_episode if you track them
-    
+    config['rules'][final_rule]['series'][series_id_str] = series_data
     save_config(config)
-    
+
     app.logger.info(f"Watch processed for series {series_id} under rule '{final_rule}'")
     return True, final_rule
 # ============================================================================
@@ -3874,12 +3656,7 @@ def process_sonarr_webhook():
                     jellyseerr_request_id = request_data.get('request_id')
                     jellyseerr_requested_seasons = request_data.get('requested_seasons')
                     app.logger.info(f"✓ Found Jellyseerr request file: {jellyseerr_request_id}")
-                    
-                    app.logger.info(f"Cancelling Jellyseerr request {jellyseerr_request_id}")
-                    seerr = get_integration('jellyseerr')
-                    if seerr and jellyseerr_request_id:
-                        seerr.delete_request(jellyseerr_request_id)
-                    
+
                     try:
                         from activity_storage import save_request_event
                         save_request_event(request_data)
@@ -4488,103 +4265,18 @@ def handle_server_webhook():
         thetvdb_id = data.get('thetvdb_id')
         themoviedb_id = data.get('themoviedb_id')
 
-        # ─── NEW: Tag sync & drift correction BEFORE processing ───
-        # Late import the needed functions from media_processor.py
-        from media_processor import get_series_id, better_partial_match, validate_series_tag, sync_rule_tag_to_sonarr, move_series_in_config
+        # ─── Tag sync & drift correction BEFORE processing ───
+        from media_processor import get_series_id
 
         series_id = get_series_id(series_title, thetvdb_id, themoviedb_id)
+        final_rule = None
         if not series_id:
             app.logger.warning(f"Could not find Sonarr series ID for '{series_title}'")
-            # Proceed with temp file anyway (original behavior)
         else:
-            # Tag sync/drift logic (what we added today)
             config = load_config()
-            config_rule = None
-            series_id_str = str(series_id)
-            
-            for rule_name, rule_details in config['rules'].items():
-                if series_id_str in rule_details.get('series', {}):
-                    config_rule = rule_name
-                    break
-            
-            if config_rule:
-                matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                
-                if not matches:
-                    if actual_tag_rule:
-                        app.logger.warning(f"DRIFT DETECTED - config: {config_rule} → tag: {actual_tag_rule}")
-                        move_series_in_config(series_id, config_rule, actual_tag_rule)
-                        final_rule = actual_tag_rule
-                    else:
-                        app.logger.warning(f"No episeerr tag on series {series_id} → restoring episeerr_{config_rule}")
-                        sync_rule_tag_to_sonarr(series_id, config_rule)
-                        final_rule = config_rule
-                else:
-                    final_rule = config_rule
-                    app.logger.debug(f"Tag matches config rule: {final_rule}")
-            if config_rule:
-                matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                
-                if not matches:
-                    if actual_tag_rule:
-                        app.logger.warning(f"DRIFT DETECTED - config: {config_rule} → tag: {actual_tag_rule}")
-                        move_series_in_config(series_id, config_rule, actual_tag_rule)
-                        final_rule = actual_tag_rule
-                    else:
-                        app.logger.warning(f"No episeerr tag on series {series_id} → restoring episeerr_{config_rule}")
-                        sync_rule_tag_to_sonarr(series_id, config_rule)
-                        final_rule = config_rule
-                else:
-                    final_rule = config_rule
-                    app.logger.debug(f"Tag matches config rule: {final_rule}")
-            else:
-                # ORPHANED TAG DETECTION: Series not in config but might have episeerr tag in Sonarr
-                series = episeerr_utils.get_series_from_sonarr(series_id)
-                if series:
-                    tag_mapping = episeerr_utils.get_tag_mapping()
-                    found_orphaned_tag = False
-                    
-                    for tag_id in series.get('tags', []):
-                        tag_name = tag_mapping.get(tag_id, '').lower()
-                        
-                        if tag_name.startswith('episeerr_'):
-                            rule_name = tag_name.replace('episeerr_', '')
-                            
-                            # Skip special tags
-                            if rule_name in ['default', 'select']:
-                                continue
-                            
-                            # Find the rule (case-insensitive)
-                            actual_rule_name = None
-                            for rn in config['rules'].keys():
-                                if rn.lower() == rule_name:
-                                    actual_rule_name = rn
-                                    break
-                            
-                            if actual_rule_name:
-                                # Add series to config
-                                import time
-                                config['rules'][actual_rule_name].setdefault('series', {})[series_id_str] = {
-                                    'activity_date': int(time.time())
-                                }
-                                save_config(config)
-                                app.logger.info(f"🏷️ ORPHANED: Added series {series_id} ('{series_title}') to '{actual_rule_name}' based on Sonarr tag")
-                                final_rule = actual_rule_name
-                                found_orphaned_tag = True
-                                break
-                            else:
-                                app.logger.warning(f"Found episeerr tag '{tag_name}' on series {series_id} but rule '{rule_name}' doesn't exist in config")
-                                final_rule = None
-                                found_orphaned_tag = True
-                                break
-                    
-                    if not found_orphaned_tag:
-                        # No episeerr tags found
-                        final_rule = None
-                        app.logger.info(f"Series {series_id} not assigned to any rule → skipping tag sync")
-                else:
-                    final_rule = None
-                    app.logger.warning(f"Could not fetch series {series_id} from Sonarr")
+            final_rule, modified = episeerr_utils.reconcile_series_drift(series_id, config)
+            if modified:
+                save_config(config)
 
         # ─── Original temp file creation ───
         temp_dir = os.path.join(os.getcwd(), 'temp')
@@ -4927,88 +4619,39 @@ def initialize_episeerr():
             save_config(config)
             app.logger.info("  ✓ Tag migration marked as complete")
         
-        # Step 3: Drift detection - fix mismatched tags
-        drift_fixed = 0
-        drift_synced = 0
-        
-        for rule_name, rule_details in config['rules'].items():
-            for series_id_str in list(rule_details.get('series', {}).keys()):
-                try:
-                    series_id = int(series_id_str)
-                    matches, actual_tag_rule = episeerr_utils.validate_series_tag(series_id, rule_name)
-                    
-                    if not matches:
-                        if actual_tag_rule:
-                            # Find actual rule name (case-insensitive)
-                            actual_rule_name = None
-                            for rn in config['rules'].keys():
-                                if rn.lower() == actual_tag_rule.lower():
-                                    actual_rule_name = rn
-                                    break
-                            
-                            if actual_rule_name:
-                                # Move series to new rule
-                                series_data = rule_details['series'][series_id_str]
-                                del rule_details['series'][series_id_str]
-                                
-                                target_rule = config['rules'][actual_rule_name]
-                                target_rule.setdefault('series', {})[series_id_str] = series_data
-                                
-                                drift_fixed += 1
-                                app.logger.info(f"  Drift: Moved series {series_id} to '{actual_rule_name}'")
-                        else:
-                            # Sync missing tag
-                            episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
-                            drift_synced += 1
-                
-                except Exception as e:
-                    app.logger.debug(f"Error checking series {series_id_str}: {str(e)}")
-        
-        # Step 4: Orphaned tags - find shows tagged in Sonarr but not in config
-        all_series = get_sonarr_series()
-        
-        # Build set of series IDs in config
-        config_series_ids = set()
-        for rule_details in config['rules'].values():
-            config_series_ids.update(rule_details.get('series', {}).keys())
-        
-        orphaned = 0
-        for series in all_series:
-            series_id = str(series['id'])
-            
-            # Skip if already in config
-            if series_id in config_series_ids:
-                continue
-            
-            # Check if has episeerr tag
-            tag_mapping = episeerr_utils.get_tag_mapping()
-            for tag_id in series.get('tags', []):
-                tag_name = tag_mapping.get(tag_id, '').lower()
-                
-                # Found episeerr rule tag (not default/select)
-                if tag_name.startswith('episeerr_'):
-                    rule_name = tag_name.replace('episeerr_', '')
-                    if rule_name not in ['default', 'select']:
-                        # Find actual rule name (case-insensitive)
-                        actual_rule_name = None
-                        for rn in config['rules'].keys():
-                            if rn.lower() == rule_name:
-                                actual_rule_name = rn
-                                break
-                        
-                        if actual_rule_name:
-                            # Add to config
-                            config['rules'][actual_rule_name].setdefault('series', {})[series_id] = {}
-                            orphaned += 1
-                            app.logger.info(f"  Orphaned: Added {series['title']} to '{actual_rule_name}'")
-                            break
-        
-        # Save if any changes made
-        if drift_fixed > 0 or drift_synced > 0 or orphaned > 0:
+        # Step 3: Drift detection + orphaned recovery for all series
+        all_series_ids = [
+            int(sid)
+            for rule_details in config['rules'].values()
+            for sid in list(rule_details.get('series', {}).keys())
+        ]
+        # Also check Sonarr series not in config (orphaned tag recovery)
+        all_sonarr_series = get_sonarr_series()
+        config_series_ids = {
+            sid
+            for rule_details in config['rules'].values()
+            for sid in rule_details.get('series', {}).keys()
+        }
+        orphaned_ids = [
+            s['id'] for s in all_sonarr_series
+            if str(s['id']) not in config_series_ids
+        ]
+
+        modified = False
+        reconciled = 0
+        for series_id in all_series_ids + orphaned_ids:
+            try:
+                _, changed = episeerr_utils.reconcile_series_drift(series_id, config)
+                if changed:
+                    modified = True
+                    reconciled += 1
+            except Exception as e:
+                app.logger.debug(f"Error reconciling series {series_id}: {e}")
+
+        if modified:
             save_config(config)
-        
-        # Summary
-        app.logger.info(f"✓ Tag reconciliation complete: {drift_fixed} moved, {drift_synced} synced, {orphaned} orphaned")
+
+        app.logger.info(f"✓ Tag reconciliation complete: {reconciled} corrections made")
             
     except requests.exceptions.ConnectionError:
         app.logger.warning("Sonarr not ready - tags will be created when Sonarr becomes available")

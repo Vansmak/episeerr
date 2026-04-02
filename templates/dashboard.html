@@ -9,8 +9,8 @@
     <div class="col-12">
       <div class="d-flex flex-wrap gap-1 justify-content-start align-items-center" id="stats-pills-container">
         <!-- Sonarr (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.78rem;">
-          <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-1" style="width: 14px; height: 14px;">
+        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
+          <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-1" style="width: 16px; height: 16px;">
           <strong id="sonarr-series">--</strong>
           <small class="text-muted ms-1" id="sonarr-size">(-- GB)</small>
           <small class="text-muted ms-1">•</small>
@@ -18,7 +18,7 @@
         </div>
 
         <!-- Sonarr Queue (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.78rem;">
+        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
           <i class="fas fa-list me-1 text-info"></i>
           <strong id="sonarr-queue">--</strong>
         </div>
@@ -62,17 +62,17 @@
           <!-- Column Headers Row — always visible, acts as section header + toggle trigger -->
           <div class="row g-0 flex-lg-nowrap" id="calendar-column-headers">
             <div class="col-12 col-lg-4 border-end border-dark" onclick="toggleCalendar()" style="cursor: pointer;">
-              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex align-items-center" style="font-size:0.8rem;">
+              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex align-items-center" style="font-size:0.9rem;">
                 <i class="fas fa-clock me-2"></i>Upcoming Releases
               </h6>
             </div>
             <div class="col-12 col-lg-4 border-end border-dark" onclick="toggleCalendar()" style="cursor: pointer;">
-              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex align-items-center" style="font-size:0.8rem;">
+              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex align-items-center" style="font-size:0.9rem;">
                 <i class="fas fa-check-circle text-success me-2"></i>Ready to Watch
               </h6>
             </div>
             <div class="col-12 col-lg-4" onclick="toggleCalendar()" style="cursor: pointer;">
-              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex justify-content-between align-items-center" style="font-size:0.8rem;">
+              <h6 class="bg-dark p-2 mb-0 border-bottom d-flex justify-content-between align-items-center" style="font-size:0.9rem;">
                 <span><i class="fas fa-stream me-2"></i>Recent Activity</span>
                 <div class="d-flex gap-1 align-items-center">
                   <button class="btn btn-sm btn-outline-secondary py-0 px-2" style="font-size:0.75rem;" onclick="event.stopPropagation(); loadCalendar()">
@@ -135,8 +135,8 @@
     overflow-x: hidden;
   }
   .container-fluid {
-    padding-left: 8px !important;
-    padding-right: 8px !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
   }
   .card {
     overflow-x: hidden;
@@ -149,8 +149,8 @@
 .calendar-banner-card {
   background-size: cover !important;
   background-position: center !important;
-  height: 88px !important;
-  min-height: 88px !important;
+  height: 100px !important;
+  min-height: 100px !important;
   display: flex;
   align-items: flex-end;
   position: relative;
@@ -160,11 +160,11 @@
 
 /* Smaller text */
 .series-title-small {
-  font-size: 0.8rem !important;
+  font-size: 0.9rem !important;
 }
 
 .episode-info-small {
-  font-size: 0.7rem !important;
+  font-size: 0.8rem !important;
 }
 
 .calendar-banner-card .calendar-card-content {
@@ -282,11 +282,11 @@ function loadIntegrations() {
                 // Create pill element
                 const pill = document.createElement('div');
                 pill.className = 'stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start';
-                pill.style.cssText = 'display:none; font-size: 0.78rem;';
+                pill.style.cssText = 'display:none; font-size: 0.875rem;';
                 pill.id = `${integration.service_name}-pill`;
 
                 pill.innerHTML = `
-                    <img src="${integration.icon}" class="me-1" style="width: 14px; height: 14px;" onerror="this.style.display='none'">
+                    <img src="${integration.icon}" class="me-1" style="width: 16px; height: 16px;" onerror="this.style.display='none'">
                     <span id="${integration.service_name}-content">--</span>
                 `;
 

@@ -362,6 +362,7 @@ class SonosIntegration(ServiceIntegration):
                 if not url:
                     return jsonify({'success': False, 'message': 'No URL configured'})
 
+                alt_url = config.get('alternate_url', '').strip().rstrip('/')
                 zone_param = request.args.get('zone', None, type=int)
 
                 stats = integration.get_dashboard_stats(url, config.get('api_key', ''))
@@ -396,6 +397,13 @@ class SonosIntegration(ServiceIntegration):
                     track  = display_zone.get('track')  or 'Unknown track'
                     artist = display_zone.get('artist') or ''
                     art    = display_zone.get('album_art_url')
+
+                    # Proxy art through Episeerr to avoid mixed content on HTTPS pages.
+                    # The browser never sees the raw Sonos IP — all art fetches go through
+                    # /api/integration/sonos/art?url=<encoded> which fetches server-side.
+                    if art:
+                        from urllib.parse import quote as _quote
+                        art = f'/api/integration/sonos/art?url={_quote(art, safe="")}'
 
                     if art:
                         art_html = (
@@ -604,6 +612,33 @@ class SonosIntegration(ServiceIntegration):
                 return jsonify(stats)
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
+
+        @bp.route('/api/integration/sonos/art')
+        def art_proxy():
+            """
+            Server-side proxy for Sonos album art.
+            Handles both local Sonos speaker URLs (port 1400) and external CDN URLs
+            returned when playing radio or streaming services.
+            """
+            from flask import request as freq, Response
+            from urllib.parse import unquote
+            raw_url = freq.args.get('url', '').strip()
+            if not raw_url:
+                return Response('Missing url parameter', status=400)
+            decoded = unquote(raw_url)
+            # Block link-local and loopback but allow LAN + CDN art
+            blocked = ['169.254.', '127.0.0.1', 'localhost', '0.0.0.0']
+            if any(b in decoded for b in blocked):
+                return Response('Forbidden', status=403)
+            try:
+                r = requests.get(decoded, timeout=5, stream=True,
+                                 headers={'User-Agent': 'Episeerr/1.0'})
+                r.raise_for_status()
+                content_type = r.headers.get('Content-Type', 'image/jpeg')
+                return Response(r.content, status=200, content_type=content_type)
+            except Exception as e:
+                logger.debug(f"Art proxy failed for {decoded}: {e}")
+                return Response('Not found', status=404)
 
         return bp
 

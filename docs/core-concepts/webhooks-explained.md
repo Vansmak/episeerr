@@ -94,7 +94,6 @@ Result: Next episodes monitored, old ones deleted
 1. Stores the season number
 2. When series added with `episeerr_default` tag
 3. Starts from requested season (not Season 1!)
-4. Deletes request from Jellyseerr
 
 **Without this:** `episeerr_default` always starts from Season 1
 
@@ -117,8 +116,7 @@ Result: Next episodes monitored, old ones deleted
    ├─ Remembers Season 3 from Jellyseerr webhook
    ├─ Applies GET rule starting from Season 3
    ├─ Monitors S3E1, S3E2, S3E3 (based on GET setting)
-   ├─ Removes tag from Sonarr
-   └─ Deletes request from Jellyseerr
+   └─ Removes tag from Sonarr
 
 4. You start watching Season 3
    └─ Tautulli webhook → Episeerr: "Watched S3E1"

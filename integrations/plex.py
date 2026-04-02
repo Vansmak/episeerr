@@ -1439,30 +1439,12 @@ class PlexIntegration(ServiceIntegration):
             final_rule = None
 
             if series_id:
-                from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
-                from media_processor import move_series_in_config
+                from episeerr_utils import reconcile_series_drift
                 config = load_config()
-                series_id_str = str(series_id)
-                config_rule = None
-
-                for rule_name, rule_details in config['rules'].items():
-                    if series_id_str in rule_details.get('series', {}):
-                        config_rule = rule_name
-                        break
-
-                if config_rule:
-                    matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                    if not matches:
-                        if actual_tag_rule:
-                            logger.warning(f"[Plex] DRIFT: config={config_rule} → tag={actual_tag_rule}")
-                            move_series_in_config(series_id, config_rule, actual_tag_rule)
-                            final_rule = actual_tag_rule
-                        else:
-                            logger.warning(f"[Plex] No tag on {series_id} → restoring episeerr_{config_rule}")
-                            sync_rule_tag_to_sonarr(series_id, config_rule)
-                            final_rule = config_rule
-                    else:
-                        final_rule = config_rule
+                final_rule, modified = reconcile_series_drift(series_id, config)
+                if modified:
+                    from episeerr import save_config
+                    save_config(config)
 
             temp_dir  = os.path.join(os.getcwd(), 'temp')
             os.makedirs(temp_dir, exist_ok=True)
@@ -1998,9 +1980,11 @@ class PlexIntegration(ServiceIntegration):
                     now_playing = wh_session  # may be None (stopped)
                     # Resolve the relative thumb path to a full URL
                     if now_playing and now_playing.get('thumb_path'):
+                        from urllib.parse import quote as _quote
+                        raw_thumb = f"{url}{now_playing['thumb_path']}?X-Plex-Token={api_key}"
                         now_playing = {
                             **now_playing,
-                            'thumb': f"{url}{now_playing['thumb_path']}?X-Plex-Token={api_key}",
+                            'thumb': f"/api/integration/plex/art?url={_quote(raw_thumb, safe='')}",
                         }
                 else:
                     # ── 2. Fall back to polling /status/sessions ──────
@@ -2021,13 +2005,15 @@ class PlexIntegration(ServiceIntegration):
                                 view_offset = int(video.get('viewOffset', 0))
                                 duration    = int(video.get('duration', 1))
                                 progress    = int((view_offset / duration) * 100) if duration else 0
+                                from urllib.parse import quote as _quote
                                 thumb = video.get('thumb')
+                                raw_thumb_url = f"{url}{thumb}?X-Plex-Token={api_key}" if thumb else None
                                 now_playing = {
                                     'title':         video.get('grandparentTitle') or video.get('title'),
                                     'episode_title': video.get('title') if video.get('grandparentTitle') else None,
                                     'season':        video.get('parentIndex'),
                                     'episode':       video.get('index'),
-                                    'thumb':         f"{url}{thumb}?X-Plex-Token={api_key}" if thumb else None,
+                                    'thumb':         f"/api/integration/plex/art?url={_quote(raw_thumb_url, safe='')}" if raw_thumb_url else None,
                                     'user':          user_el.get('title') if user_el is not None else 'Unknown',
                                     'state':         player_el.get('state') if player_el is not None else 'playing',
                                     'progress':      progress,
@@ -2406,7 +2392,34 @@ class PlexIntegration(ServiceIntegration):
                 return jsonify({'success': True, **result})
             except Exception as e:
                 return jsonify({'success': False, 'message': str(e)}), 500
-        
+
+        @bp.route('/art')
+        def art_proxy():
+            """
+            Server-side proxy for Plex album/thumbnail art.
+            Fetches image from the Plex server (raw HTTP) and streams it back
+            to the browser over HTTPS, eliminating mixed content errors.
+            Usage: /api/integration/plex/art?url=<encoded_plex_thumb_url>
+            """
+            from flask import request as freq, Response
+            from urllib.parse import unquote, urlparse as _up
+            raw_url = freq.args.get('url', '').strip()
+            if not raw_url:
+                return Response('Missing url parameter', status=400)
+            decoded = unquote(raw_url)
+            # Safety check — only proxy requests to configured Plex server port
+            parsed = _up(decoded)
+            if parsed.port not in (32400, 32469, 443, 80):
+                return Response('Forbidden', status=403)
+            try:
+                r = requests.get(decoded, timeout=8, stream=True)
+                r.raise_for_status()
+                content_type = r.headers.get('Content-Type', 'image/jpeg')
+                return Response(r.content, status=200, content_type=content_type)
+            except Exception as e:
+                logger.error(f"Plex art proxy failed for {decoded}: {e}")
+                return Response('Not found', status=404)
+
         return bp
 
 # Export integration instance

@@ -12,7 +12,7 @@ import threading
 import subprocess
 import pending_deletions
 from episeerr import normalize_url
-from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
+from episeerr_utils import reconcile_series_drift
 from logging_config import main_logger as logger
 # Load environment variables
 load_dotenv()
@@ -2220,99 +2220,41 @@ def run_unified_cleanup():
             cleanup_logger.info("⏰ No storage gate - running all cleanup functions")
             storage_gated = False
         
-        # ==================== NEW: PHASE 0 - TAG RECONCILIATION ====================
+        # ==================== PHASE 0 - TAG RECONCILIATION ====================
         cleanup_logger.info("=" * 80)
         cleanup_logger.info("🏷️  Phase 0: Tag reconciliation (drift + orphaned)")
         try:
+            from episeerr_utils import reconcile_series_drift
             config = load_config()
-            drift_fixed = 0
-            drift_synced = 0
-            
-            # Step 1: Drift detection - fix mismatched tags
-            for rule_name, rule_details in config['rules'].items():
-                for series_id_str in list(rule_details.get('series', {}).keys()):
-                    try:
-                        series_id = int(series_id_str)
-                        matches, actual_tag_rule = validate_series_tag(series_id, rule_name)
-                        
-                        if not matches:
-                            if actual_tag_rule:
-                                # Drift detected: tag changed in Sonarr
-                                cleanup_logger.warning(f"⚠️  DRIFT: Series {series_id} config={rule_name}, tag={actual_tag_rule}")
-                                
-                                # Move series to new rule
-                                series_data = rule_details['series'][series_id_str]
-                                del rule_details['series'][series_id_str]
-                                
-                                # Find actual rule name (case-insensitive)
-                                actual_rule_name = None
-                                for rn in config['rules'].keys():
-                                    if rn.lower() == actual_tag_rule.lower():
-                                        actual_rule_name = rn
-                                        break
 
-                                if actual_rule_name:
-                                    target_rule = config['rules'][actual_rule_name]
-                                    target_rule.setdefault('series', {})[series_id_str] = series_data
-                                    drift_fixed += 1
-                                    cleanup_logger.info(f"   ✓ Moved to '{actual_rule_name}' rule")
-                                else:
-                                    cleanup_logger.error(f"   ✗ Target rule '{actual_tag_rule}' not found")
-                            else:
-                                # No tag found: sync from config
-                                sync_rule_tag_to_sonarr(series_id, rule_name)
-                                drift_synced += 1
-                                cleanup_logger.info(f"   ✓ Synced missing tag for series {series_id}")
-                                
-                    except Exception as e:
-                        cleanup_logger.error(f"   ✗ Error checking series {series_id_str}: {str(e)}")
-            
-            # Step 2: Orphaned tags - find shows tagged in Sonarr but not in config
+            known_ids = [
+                int(sid)
+                for rule_details in config['rules'].values()
+                for sid in list(rule_details.get('series', {}).keys())
+            ]
+            config_series_ids = {
+                sid
+                for rule_details in config['rules'].values()
+                for sid in rule_details.get('series', {}).keys()
+            }
             all_series = get_sonarr_series()
-            
-            # Build set of series IDs in config
-            config_series_ids = set()
-            for rule_details in config['rules'].values():
-                config_series_ids.update(rule_details.get('series', {}).keys())
-            
-            orphaned = 0
-            for series in all_series:
-                series_id = str(series['id'])
-                
-                # Skip if already in config
-                if series_id in config_series_ids:
-                    continue
-                
-                # Check if has episeerr tag
-                tag_mapping = get_tag_mapping()
-                for tag_id in series.get('tags', []):
-                    tag_name = tag_mapping.get(tag_id, '').lower()
-                    
-                    # Found episeerr rule tag (not default/select)
-                    if tag_name.startswith('episeerr_'):
-                        rule_name = tag_name.replace('episeerr_', '')
-                        if rule_name not in ['default', 'select']:
-                            # Find actual rule name (case-insensitive)
-                            actual_rule_name = None
-                            for rn in config['rules'].keys():
-                                if rn.lower() == rule_name:
-                                    actual_rule_name = rn
-                                    break
-                            
-                            if actual_rule_name:
-                                # Add to config
-                                config['rules'][actual_rule_name].setdefault('series', {})[series_id] = {}
-                                orphaned += 1
-                                cleanup_logger.info(f"   ✓ ORPHANED: Added {series.get('title', series_id)} to '{actual_rule_name}'")
-                                break
-            
-            # Save if any changes made
-            if drift_fixed > 0 or orphaned > 0:
+            orphaned_ids = [
+                s['id'] for s in all_series
+                if str(s['id']) not in config_series_ids
+            ]
+
+            reconciled = 0
+            for series_id in known_ids + orphaned_ids:
+                try:
+                    _, changed = reconcile_series_drift(series_id, config)
+                    if changed:
+                        reconciled += 1
+                except Exception as e:
+                    cleanup_logger.error(f"   ✗ Error reconciling series {series_id}: {e}")
+
+            if reconciled > 0:
                 save_config(config)
-            
-            # Summary
-            if drift_fixed > 0 or drift_synced > 0 or orphaned > 0:
-                cleanup_logger.info(f"🏷️  Tag reconciliation: {drift_fixed} moved, {drift_synced} synced, {orphaned} orphaned")
+                cleanup_logger.info(f"🏷️  Tag reconciliation: {reconciled} corrections made")
             else:
                 cleanup_logger.info("🏷️  Tag reconciliation: All tags in sync")
                 
@@ -2411,37 +2353,12 @@ def main():
         # Webhook mode - process the episode that was just watched
         series_id = get_series_id(series_name, thetvdb_id, themoviedb_id)
         if series_id:
-            # NEW: Handle tag validation and drift correction before processing
             config = load_config()
-            
-            # Find current rule in config
-            config_rule = None
-            for rule_name, rule_details in config['rules'].items():
-                if str(series_id) in rule_details.get('series', {}):
-                    config_rule = rule_name
-                    break
-            
+            config_rule, modified = reconcile_series_drift(series_id, config)
+            if modified:
+                save_config(config)
+
             if config_rule:
-                matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                
-                if not matches:
-                    if actual_tag_rule:
-                        # Drift: move config to match tag
-                        logger.warning(f"DRIFT DETECTED: config={config_rule}, tag={actual_tag_rule}")
-                        if move_series_in_config(series_id, config_rule, actual_tag_rule):
-                            # Find actual rule name in config (case-insensitive)
-                            # move_series_in_config already handled the case, but we need to update config_rule
-                            for rn in config['rules'].keys():
-                                if rn.lower() == actual_tag_rule.lower():
-                                    config_rule = rn
-                                    logger.info(f"Updated config_rule to '{config_rule}' (matched case from config)")
-                                    break
-                    else:
-                        # No tag: sync from config
-                        logger.warning(f"No episeerr tag found - syncing to {config_rule}")
-                        sync_rule_tag_to_sonarr(series_id, config_rule)
-                
-                # Now process with (possibly updated) rule
                 rule = config['rules'][config_rule]
                 process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_name)
             else:

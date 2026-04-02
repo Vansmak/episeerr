@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0">
     <title>{% block title %}Episeerr{% endblock %}</title>
     
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -14,6 +14,11 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;800;900&display=swap" rel="stylesheet">
 
 <style>
+    html {
+        -webkit-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+    }
+
     /* Sonarr-Style Layout System */
     body {
         margin: 0;
@@ -292,7 +297,7 @@
         
         .content-container {
             max-width: 100vw;
-            padding: 16px;
+            padding: 4px;
         }
 
         .mobile-navbar {

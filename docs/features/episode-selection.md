@@ -89,9 +89,8 @@ See [Plex Watchlist Sync](plex-watchlist-sync.md) for setup.
 - Result: S03E01 and S03E02 monitored/searched
 
 **Important Notes:**
-- Jellyseerr request will be **automatically deleted** after processing
 - Without Jellyseerr webhook, `episeerr_default` always starts from Season 1
-- If you want to keep requests in Jellyseerr, use "Auto-assign new series" setting instead
+- Request remains visible in Jellyseerr showing partial availability status
 
 ## The Rule Picker
 
@@ -112,7 +111,7 @@ Every entry into the selection flow shows a **rule dropdown** at the top of the 
 - **Selection interface appears** in Episeerr
 - **Choose episodes** across any seasons
 - **Only selected episodes monitored** and searched
-- **Jellyseerr request cancelled** (if applicable)
+- **Jellyseerr request** remains visible showing partial availability (if applicable)
 
 ## Use Cases
 

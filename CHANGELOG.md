@@ -1,5 +1,26 @@
 # Changelog
 
+## v3.5.1
+
+### ⚡ Caching
+- `load_config()` now caches config in memory for 30s — reduces repeated JSON reads on busy webhook paths; cache is invalidated on every `save_config()` call
+- `get_sonarr_tags()` added to `episeerr_utils.py` with a 60s in-memory cache — all tag lookups (`create_episeerr_default_tag`, `create_episeerr_select_tag`, `get_or_create_rule_tag_id`, `get_tag_mapping`) now share one cached fetch instead of hitting the Sonarr API independently; cache invalidated on tag create
+
+### 🗑️ Removed Jellyseerr Auto-Delete
+- Removed automatic Jellyseerr request deletion on Sonarr webhook processing — request cancellation was happening before the activity event was saved, causing race conditions and unintended deletions
+
+### 🔧 Drift Detection Consolidation
+- Added `reconcile_series_drift(series_id, config)` to `episeerr_utils.py` as the single canonical drift correction function
+- Handles all cases: tag matches config (no-op), tag differs (move config to match), no tag (restore from config), series not in config (orphaned tag recovery)
+- Replaced 6+ independent copies across Tautulli, Plex, Jellyfin, Emby, Sonarr webhook, and media_processor
+
+### 🐛 Fixes
+- **Sonarr webhook double-correction** — drift block was running twice back-to-back; second run operated on stale in-memory config and could corrupt the series rule assignment
+- **Jellyfin and Emby** — `rule` was not passed in the temp file payload to media_processor, so drift corrections made before subprocess spawn were thrown away
+- **Orphaned recovery** — series recovered from a Sonarr tag were added to config with empty `{}` metadata in some paths; now always sets `activity_date` to prevent immediate dormant cleanup
+- **`process_watch_event()`** — was calling `episeerr_utils.move_series_in_config` which doesn't exist on that module; now uses canonical function
+- **Startup crash** — dangling `@app.before_request` decorator left above `@app.route('/setup')` after a refactor caused `setup()` to run as a before-request hook on every request, serving the setup page for all routes
+
 ## v3.5.0
 
 ### 🔌 Dispatcharr Integration

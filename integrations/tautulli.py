@@ -76,78 +76,11 @@ def process_watch_event(data: dict) -> dict:
             logger.warning(f"[Tautulli] Cannot find Sonarr ID for '{series_title}'")
         else:
             from episeerr import load_config, save_config
-            import episeerr_utils
-            from media_processor import move_series_in_config
-            from episeerr_utils import validate_series_tag, sync_rule_tag_to_sonarr
-
+            from episeerr_utils import reconcile_series_drift
             config = load_config()
-            series_id_str = str(series_id)
-            config_rule = None
-
-            for rule_name, rule_details in config['rules'].items():
-                if series_id_str in rule_details.get('series', {}):
-                    config_rule = rule_name
-                    break
-
-            if config_rule:
-                matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
-                if not matches:
-                    if actual_tag_rule:
-                        logger.warning(
-                            f"[Tautulli] DRIFT: config={config_rule} → tag={actual_tag_rule}"
-                        )
-                        move_series_in_config(series_id, config_rule, actual_tag_rule)
-                        final_rule = actual_tag_rule
-                    else:
-                        logger.warning(
-                            f"[Tautulli] No tag on series {series_id} "
-                            f"→ restoring episeerr_{config_rule}"
-                        )
-                        sync_rule_tag_to_sonarr(series_id, config_rule)
-                        final_rule = config_rule
-                else:
-                    final_rule = config_rule
-                    logger.debug(f"[Tautulli] Tag matches config rule: {final_rule}")
-            else:
-                # Orphaned-tag detection: series not in config but may have an episeerr tag
-                series = episeerr_utils.get_series_from_sonarr(series_id)
-                if series:
-                    tag_mapping = episeerr_utils.get_tag_mapping()
-                    found = False
-                    for tag_id in series.get('tags', []):
-                        tag_name = tag_mapping.get(tag_id, '').lower()
-                        if not tag_name.startswith('episeerr_'):
-                            continue
-                        rule_name = tag_name.replace('episeerr_', '')
-                        if rule_name in ('default', 'select'):
-                            continue
-                        actual_rule = next(
-                            (rn for rn in config['rules'] if rn.lower() == rule_name), None
-                        )
-                        if actual_rule:
-                            import time
-                            config['rules'][actual_rule].setdefault('series', {})[series_id_str] = {
-                                'activity_date': int(time.time())
-                            }
-                            save_config(config)
-                            logger.info(
-                                f"[Tautulli] ORPHANED: Added series {series_id} "
-                                f"('{series_title}') to '{actual_rule}' via Sonarr tag"
-                            )
-                            final_rule = actual_rule
-                        else:
-                            logger.warning(
-                                f"[Tautulli] Found tag '{tag_name}' on series {series_id} "
-                                f"but rule '{rule_name}' not in config"
-                            )
-                        found = True
-                        break
-                    if not found:
-                        logger.info(
-                            f"[Tautulli] Series {series_id} not in any rule — skipping tag sync"
-                        )
-                else:
-                    logger.warning(f"[Tautulli] Cannot fetch series {series_id} from Sonarr")
+            final_rule, modified = reconcile_series_drift(series_id, config)
+            if modified:
+                save_config(config)
 
         # Write temp file + spawn media_processor
         temp_dir = os.path.join(os.getcwd(), 'temp')

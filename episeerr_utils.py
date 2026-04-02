@@ -97,6 +97,32 @@ def get_sonarr_headers():
         'Content-Type': 'application/json'
     }
 
+_tags_cache = None
+_tags_cache_time = 0
+_TAGS_CACHE_TTL = 60  # seconds
+
+def get_sonarr_tags():
+    """Fetch all Sonarr tags with a 60s in-memory cache."""
+    global _tags_cache, _tags_cache_time
+    now = time.time()
+    if _tags_cache is not None and (now - _tags_cache_time) < _TAGS_CACHE_TTL:
+        return _tags_cache
+    try:
+        headers = get_sonarr_headers()
+        resp = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
+        if resp.ok:
+            _tags_cache = resp.json()
+            _tags_cache_time = now
+            return _tags_cache
+    except Exception as e:
+        logger.warning(f"Could not fetch Sonarr tags: {e}")
+    return _tags_cache or []
+
+def invalidate_tags_cache():
+    global _tags_cache, _tags_cache_time
+    _tags_cache = None
+    _tags_cache_time = 0
+
 def create_episeerr_default_tag():
     """Create a single 'episeerr_default' tag in Sonarr and return its ID."""
     global EPISEERR_DEFAULT_TAG_ID
@@ -105,19 +131,15 @@ def create_episeerr_default_tag():
         logger.debug("Tag auto-creation disabled, checking for existing episeerr_default tag")
         # Still check if tag exists, just don't create it
         try:
-            headers = get_sonarr_headers()
-            tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-            
-            if tags_response.ok:
-                for tag in tags_response.json():
-                    if tag['label'].lower() == 'episeerr_default':
-                        EPISEERR_DEFAULT_TAG_ID = tag['id']
-                        logger.info(f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
-                        return EPISEERR_DEFAULT_TAG_ID
-            
+            for tag in get_sonarr_tags():
+                if tag['label'].lower() == 'episeerr_default':
+                    EPISEERR_DEFAULT_TAG_ID = tag['id']
+                    logger.info(f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
+                    return EPISEERR_DEFAULT_TAG_ID
+
             logger.warning("episeerr_default tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
             return None
-            
+
         except Exception as e:
             logger.warning(f"Could not check for existing tags: {str(e)}")
             return None
@@ -129,15 +151,10 @@ def create_episeerr_default_tag():
     
     try:
         headers = get_sonarr_headers()
-        logger.debug(f"Making GET request to {SONARR_URL}/api/v3/tag to fetch existing tags")
-       
-        tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-       
-        if not tags_response.ok:
-            logger.error(f"Failed to get tags. Status: {tags_response.status_code}, Response: {tags_response.text}")
-            return None
-            
-        for tag in tags_response.json():
+        logger.debug(f"Fetching tags from {SONARR_URL}/api/v3/tag")
+        tags = get_sonarr_tags()
+
+        for tag in tags:
             if tag['label'].lower() == 'episeerr_default':
                 EPISEERR_DEFAULT_TAG_ID = tag['id']
                 logger.info(f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
@@ -153,6 +170,7 @@ def create_episeerr_default_tag():
         if tag_create_response.ok:
             EPISEERR_DEFAULT_TAG_ID = tag_create_response.json().get('id')
             logger.info(f"Created tag: 'episeerr_default' with ID {EPISEERR_DEFAULT_TAG_ID}")
+            invalidate_tags_cache()
             return EPISEERR_DEFAULT_TAG_ID
         else:
             logger.error(f"Failed to create episeerr_default tag. Status: {tag_create_response.status_code}, Response: {tag_create_response.text}")
@@ -173,19 +191,15 @@ def create_episeerr_select_tag():
         logger.debug("Tag auto-creation disabled, checking for existing episeerr_select tag")
         # Still check if tag exists, just don't create it
         try:
-            headers = get_sonarr_headers()
-            tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-            
-            if tags_response.ok:
-                for tag in tags_response.json():
-                    if tag['label'].lower() == 'episeerr_select':
-                        EPISEERR_SELECT_TAG_ID = tag['id']
-                        logger.info(f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
-                        return EPISEERR_SELECT_TAG_ID
-            
+            for tag in get_sonarr_tags():
+                if tag['label'].lower() == 'episeerr_select':
+                    EPISEERR_SELECT_TAG_ID = tag['id']
+                    logger.info(f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
+                    return EPISEERR_SELECT_TAG_ID
+
             logger.warning("episeerr_select tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
             return None
-            
+
         except Exception as e:
             logger.warning(f"Could not check for existing tags: {str(e)}")
             return None
@@ -197,15 +211,10 @@ def create_episeerr_select_tag():
     
     try:
         headers = get_sonarr_headers()
-        logger.debug(f"Making GET request to {SONARR_URL}/api/v3/tag to fetch existing tags")
-       
-        tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-       
-        if not tags_response.ok:
-            logger.error(f"Failed to get tags. Status: {tags_response.status_code}, Response: {tags_response.text}")
-            return None
-            
-        for tag in tags_response.json():
+        logger.debug(f"Fetching tags from {SONARR_URL}/api/v3/tag")
+        tags = get_sonarr_tags()
+
+        for tag in tags:
             if tag['label'].lower() == 'episeerr_select':
                 EPISEERR_SELECT_TAG_ID = tag['id']
                 logger.info(f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
@@ -221,6 +230,7 @@ def create_episeerr_select_tag():
         if tag_create_response.ok:
             EPISEERR_SELECT_TAG_ID = tag_create_response.json().get('id')
             logger.info(f"Created tag: 'episeerr_select' with ID {EPISEERR_SELECT_TAG_ID}")
+            invalidate_tags_cache()
             return EPISEERR_SELECT_TAG_ID
         else:
             logger.error(f"Failed to create episeerr_select tag. Status: {tag_create_response.status_code}, Response: {tag_create_response.text}")
@@ -248,14 +258,10 @@ def get_or_create_rule_tag_id(rule_name):
         headers = get_sonarr_headers()
         
         # Check if tag already exists
-        tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-        
-        if not tags_response.ok:
-            logger.error(f"Failed to get tags. Status: {tags_response.status_code}")
-            return None
-        
+        tags = get_sonarr_tags()
+
         # Look for existing tag
-        for tag in tags_response.json():
+        for tag in tags:
             if tag['label'].lower() == tag_label.lower():
                 logger.debug(f"Found existing tag '{tag_label}' with ID {tag['id']}")
                 return tag['id']
@@ -272,6 +278,7 @@ def get_or_create_rule_tag_id(rule_name):
         if tag_create_response.ok:
             tag_id = tag_create_response.json().get('id')
             logger.info(f"✓ Created tag '{tag_label}' with ID {tag_id}")
+            invalidate_tags_cache()
             return tag_id
         else:
             logger.error(f"Failed to create tag '{tag_label}': {tag_create_response.text}")
@@ -293,13 +300,11 @@ def get_tag_mapping():
         dict: {tag_id: tag_label} or empty dict on failure
     """
     try:
-        headers = get_sonarr_headers()
-        response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
-        
-        if response.ok:
-            return {tag['id']: tag['label'] for tag in response.json()}
+        tags = get_sonarr_tags()
+        if tags:
+            return {tag['id']: tag['label'] for tag in tags}
         else:
-            logger.error(f"Failed to get tag mapping: {response.status_code}")
+            logger.error("Failed to get tag mapping: empty response")
             return {}
             
     except Exception as e:
@@ -667,6 +672,92 @@ def validate_series_tag(series_id, expected_rule):
         return (False, None)
     
 
+
+
+def reconcile_series_drift(series_id, config):
+    """
+    Check and correct rule/tag alignment for a single series.
+
+    Mutates *config* in-place.  Caller is responsible for calling save_config()
+    when modified=True (allows bulk callers to batch one save).
+
+    Cases handled:
+      - Tag matches config           → no-op
+      - Tag differs from config      → move series in config to match tag (tag wins)
+      - No episeerr tag on series    → restore tag from config (config wins)
+      - Series not in config at all  → recover from orphaned Sonarr tag if present
+
+    Returns:
+        (final_rule: str | None, modified: bool)
+    """
+    import time as _time
+    series_id_str = str(series_id)
+
+    # Find which rule config currently says this series belongs to
+    config_rule = None
+    for rule_name, rule_details in config['rules'].items():
+        if series_id_str in rule_details.get('series', {}):
+            config_rule = rule_name
+            break
+
+    if config_rule:
+        matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
+        if matches:
+            return config_rule, False
+
+        if actual_tag_rule:
+            # Drift: user changed tag in Sonarr → move config to match
+            actual_rule = next(
+                (rn for rn in config['rules'] if rn.lower() == actual_tag_rule.lower()), None
+            )
+            if actual_rule:
+                series_data = config['rules'][config_rule]['series'].pop(series_id_str)
+                config['rules'][actual_rule].setdefault('series', {})[series_id_str] = series_data
+                sync_rule_tag_to_sonarr(series_id, actual_rule)
+                logger.warning(f"Drift: series {series_id} moved {config_rule} → {actual_rule}")
+                return actual_rule, True
+            else:
+                logger.error(f"Drift target rule '{actual_tag_rule}' not found in config for series {series_id}")
+                return config_rule, False
+        else:
+            # No episeerr rule tag at all → restore from config
+            sync_rule_tag_to_sonarr(series_id, config_rule)
+            logger.warning(f"No tag on series {series_id} → restored episeerr_{config_rule}")
+            return config_rule, False
+
+    else:
+        # Series not in config — check for an orphaned episeerr tag in Sonarr
+        series = get_series_from_sonarr(series_id)
+        if not series:
+            return None, False
+
+        tag_mapping = get_tag_mapping()
+        for tag_id in series.get('tags', []):
+            tag_name = tag_mapping.get(tag_id, '').lower()
+            if not tag_name.startswith('episeerr_'):
+                continue
+            rule_name = tag_name.replace('episeerr_', '')
+            if rule_name in ('default', 'select'):
+                continue
+            actual_rule = next(
+                (rn for rn in config['rules'] if rn.lower() == rule_name), None
+            )
+            if actual_rule:
+                config['rules'][actual_rule].setdefault('series', {})[series_id_str] = {
+                    'activity_date': int(_time.time())
+                }
+                logger.info(
+                    f"Orphaned: series {series_id} added to '{actual_rule}' via Sonarr tag"
+                )
+                return actual_rule, True
+            else:
+                logger.warning(
+                    f"Orphaned tag '{tag_name}' on series {series_id} "
+                    f"but rule '{rule_name}' not in config"
+                )
+                return None, False
+
+        return None, False
 
 
 def unmonitor_series(series_id, headers):
