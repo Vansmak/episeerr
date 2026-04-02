@@ -2865,17 +2865,14 @@ def dry_run_settings():
     """Manage dry run settings."""
     if request.method == 'POST':
         try:
-            app.logger.info(f"Form data received: {dict(request.form)}")
             config = load_config()
-            
+
             for rule_name in config.get('rules', {}).keys():
                 rule_dry_run_key = f'rule_dry_run_{rule_name}'
-                rule_dry_run = rule_dry_run_key in request.form
-                app.logger.info(f"Setting {rule_name} dry_run to: {rule_dry_run}")
-                config['rules'][rule_name]['dry_run'] = rule_dry_run
-            
+                config['rules'][rule_name]['dry_run'] = rule_dry_run_key in request.form
+
             save_config(config)
-            app.logger.info("save_config() called")
+            app.logger.info("Dry run settings saved")
             
             return redirect(url_for('scheduler_admin', message="Dry run settings saved successfully"))
         except Exception as e:
@@ -3347,14 +3344,11 @@ def select_episodes(tmdb_id):
 def process_episode_selection():
     """Process episode selection with multi-season support."""
     try:
-        app.logger.info(f"Raw form data: {dict(request.form)}")
-        app.logger.info(f"Form lists: episodes={request.form.getlist('episodes')}")
-        
         # Get form data
         request_id = request.form.get('request_id')
         episodes = request.form.getlist('episodes')  # Gets ALL values with name 'episodes'
         action = request.form.get('action')
-        
+
         app.logger.info(f"Processing: request_id={request_id}, action={action}, episodes={episodes}")
         
         if action == 'cancel':
@@ -3375,7 +3369,7 @@ def process_episode_selection():
             if not episodes:
                 return redirect(url_for('rules_page'))
             
-            app.logger.info(f"DEBUG: Processing {len(episodes)} episodes: {episodes}")
+            app.logger.debug(f"Processing {len(episodes)} episodes: {episodes}")
             
             # Parse episodes by season: "season:episode" format
             episodes_by_season = {}

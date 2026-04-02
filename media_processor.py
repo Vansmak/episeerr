@@ -638,6 +638,7 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
     headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
     
     # NEW: If rule type is 'seasons', prefer season packs
+    episode = None
     if get_type == 'seasons':
         # Get the season number from the first episode
         episode = get_episode_details_by_id(episode_ids[0])
@@ -685,8 +686,9 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
         # Log search event
         if series_id and series_title and episode_ids:
             from activity_storage import save_search_event
-            # Get season/episode from first episode ID
-            episode = get_episode_details_by_id(episode_ids[0])
+            # episode already fetched above in seasons path; fetch now for episodes path
+            if episode is None:
+                episode = get_episode_details_by_id(episode_ids[0])
             if episode:
                 save_search_event(
                     series_id=series_id,
@@ -1620,6 +1622,7 @@ def delete_episodes_in_sonarr_with_logging(
         from pending_deletions import queue_deletion
         
         headers = {'X-Api-Key': SONARR_API_KEY}
+        series_title_cache = {}
         
         for episode_file_id in episode_file_ids:
             try:
@@ -1635,9 +1638,11 @@ def delete_episodes_in_sonarr_with_logging(
                 series_id = ep_data.get('seriesId')
                 season_num = ep_data.get('seasonNumber')
                 
-                # Get series title
-                series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
-                series_title_full = series_response.json().get('title', series_title) if series_response.ok else series_title
+                # Get series title (cached to avoid repeated fetches for same series)
+                if series_id not in series_title_cache:
+                    series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
+                    series_title_cache[series_id] = series_response.json().get('title', series_title) if series_response.ok else series_title
+                series_title_full = series_title_cache[series_id]
                 
                 # Get episode details
                 episode_data_list = ep_data.get('episodes', [])
@@ -1729,6 +1734,7 @@ def run_grace_watched_cleanup():
         headers = {'X-Api-Key': SONARR_API_KEY}
         response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
+        series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
         
         for rule_name, rule in config['rules'].items():
@@ -1750,7 +1756,7 @@ def run_grace_watched_cleanup():
             for series_id_str, series_data in series_dict.items():
                 try:
                     series_id = int(series_id_str)
-                    series_info = next((s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
                     if not series_info:
                         continue
                     
@@ -1878,6 +1884,7 @@ def run_grace_unwatched_cleanup():
         headers = {'X-Api-Key': SONARR_API_KEY}
         response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
+        series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
         
         for rule_name, rule in config['rules'].items():
@@ -1899,7 +1906,7 @@ def run_grace_unwatched_cleanup():
             for series_id_str, series_data in series_dict.items():
                 try:
                     series_id = int(series_id_str)
-                    series_info = next((s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
                     if not series_info:
                         continue
                     
@@ -2053,6 +2060,7 @@ def run_dormant_cleanup():
         candidates = []
         headers = {'X-Api-Key': SONARR_API_KEY}
         all_series = http.get(f"{SONARR_URL}/api/v3/series", headers=headers).json()
+        series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
         
         for rule_name, rule in config['rules'].items():
@@ -2076,7 +2084,7 @@ def run_dormant_cleanup():
             for series_id_str, series_data in series_dict.items():
                 try:
                     series_id = int(series_id_str)
-                    series_info = next((s for s in all_series if s['id'] == series_id), None)
+                    series_info = series_lookup.get(series_id)
                     if not series_info:
                         continue
                     

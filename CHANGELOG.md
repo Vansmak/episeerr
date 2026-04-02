@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.5.6
+
+### ⚡ Reduce redundant Sonarr API calls in cleanup and search
+
+**Cleanup loops (grace watched, grace unwatched, dormant):**
+- Each function fetched all series once then used `next((s for s in all_series if s['id'] == series_id), None)` — an O(n) scan per series per rule
+- Now builds `series_lookup = {s['id']: s for s in all_series}` once after the bulk fetch; inner loops use `series_lookup.get(series_id)`
+
+**`delete_episodes_in_sonarr_with_logging` dry-run path:**
+- `GET /api/v3/series/{id}` was called once per episode file in the loop — if multiple files belong to the same series, the same series was fetched repeatedly
+- Now caches results in `series_title_cache = {}`; fetches each series at most once per call
+
+**`trigger_episode_search_in_sonarr`:**
+- `get_episode_details_by_id(episode_ids[0])` was called twice: once to determine season number (seasons path), and again unconditionally in the activity log block
+- Now initialises `episode = None` before the branch; activity log reuses the already-fetched value with `if episode is None: episode = get_episode_details_by_id(...)`
+
 ## v3.5.5
 
 ### 🏗️ Extract webhook handlers to `webhooks.py`

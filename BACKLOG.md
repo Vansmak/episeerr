@@ -18,4 +18,4 @@
 
 - **Standardize API error responses** — currently inconsistent across routes (some use `{"status": "error"}`, others use `{"success": false}`, etc.). Pick one format and apply it everywhere.
 
-- **Bulk Sonarr API operations** — some cleanup loops call individual series endpoints. Use batch endpoints where Sonarr supports them.
+- ~~**Bulk Sonarr API operations**~~ — done in v3.5.6. Replaced O(n) linear series lookups in all three cleanup loops with dict lookups; added series title cache in dry-run delete loop; eliminated duplicate episode fetch in `trigger_episode_search_in_sonarr`.
