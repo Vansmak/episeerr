@@ -16,6 +16,7 @@ from integrations.base import ServiceIntegration
 from typing import Dict, Any, Optional, Tuple
 from flask import Blueprint, jsonify, request
 import requests
+from episeerr_utils import http
 import logging
 import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
@@ -62,7 +63,7 @@ def _soap(base: str, action: str, body_inner: str, timeout: int = 5) -> Optional
         'SOAPACTION': f'"{_AVT_NS}#{action}"',
     }
     try:
-        resp = requests.post(f"{base}{_TRANSPORT_PATH}", data=envelope,
+        resp = http.post(f"{base}{_TRANSPORT_PATH}", data=envelope,
                              headers=headers, timeout=timeout)
         resp.raise_for_status()
         return ET.fromstring(resp.text)
@@ -74,7 +75,7 @@ def _soap(base: str, action: str, body_inner: str, timeout: int = 5) -> Optional
 def _friendly_name(base: str) -> str:
     """Return the UPnP friendly name for a speaker, or 'Unknown'."""
     try:
-        resp = requests.get(f"{base}{_DEVICE_PATH}", timeout=5)
+        resp = http.get(f"{base}{_DEVICE_PATH}", timeout=5)
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
         el = root.find('.//{urn:schemas-upnp-org:device-1-0}friendlyName')
@@ -206,7 +207,7 @@ def _get_zones(base: str) -> list:
             'Content-Type': 'text/xml; charset="utf-8"',
             'SOAPACTION':   f'"{_ZGT_NS}#GetZoneGroupState"',
         }
-        resp = requests.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
+        resp = http.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
                              headers=headers, timeout=6)
         resp.raise_for_status()
         soap_root = ET.fromstring(resp.text)
@@ -225,7 +226,7 @@ def _get_zones(base: str) -> list:
 
     # ── Method 2: HTTP /status/topology (older firmware) ──────────────────────
     try:
-        resp = requests.get(f"{base}{_ZONE_PATH}", timeout=6)
+        resp = http.get(f"{base}{_ZONE_PATH}", timeout=6)
         resp.raise_for_status()
         root  = ET.fromstring(resp.text)
         zones = _parse_zone_groups(root, base)
@@ -283,7 +284,7 @@ class SonosIntegration(ServiceIntegration):
     def test_connection(self, url: str, api_key: str) -> Tuple[bool, str]:
         try:
             base = _base_url(url)
-            resp = requests.get(f"{base}{_DEVICE_PATH}", timeout=8)
+            resp = http.get(f"{base}{_DEVICE_PATH}", timeout=8)
             if resp.status_code == 200:
                 root = ET.fromstring(resp.text)
                 el = root.find('.//{urn:schemas-upnp-org:device-1-0}friendlyName')
@@ -521,7 +522,7 @@ class SonosIntegration(ServiceIntegration):
                 dev_ok   = False
                 dev_name = None
                 try:
-                    r = requests.get(f"{base}{_DEVICE_PATH}", timeout=5)
+                    r = http.get(f"{base}{_DEVICE_PATH}", timeout=5)
                     dev_ok = r.status_code == 200
                     if dev_ok:
                         root = ET.fromstring(r.text)
@@ -544,7 +545,7 @@ class SonosIntegration(ServiceIntegration):
                         '</s:Body>'
                         '</s:Envelope>'
                     )
-                    r = requests.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
+                    r = http.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
                                       headers={'Content-Type': 'text/xml; charset="utf-8"',
                                                'SOAPACTION': f'"{_ZGT_NS}#GetZoneGroupState"'},
                                       timeout=5)
@@ -565,7 +566,7 @@ class SonosIntegration(ServiceIntegration):
                 topo_ok   = False
                 topo_text = None
                 try:
-                    r = requests.get(f"{base}{_ZONE_PATH}", timeout=5)
+                    r = http.get(f"{base}{_ZONE_PATH}", timeout=5)
                     topo_ok   = r.status_code == 200
                     topo_text = r.text[:300] if topo_ok else f"HTTP {r.status_code}"
                 except Exception as e:
@@ -631,7 +632,7 @@ class SonosIntegration(ServiceIntegration):
             if any(b in decoded for b in blocked):
                 return Response('Forbidden', status=403)
             try:
-                r = requests.get(decoded, timeout=5, stream=True,
+                r = http.get(decoded, timeout=5, stream=True,
                                  headers={'User-Agent': 'Episeerr/1.0'})
                 r.raise_for_status()
                 content_type = r.headers.get('Content-Type', 'image/jpeg')

@@ -2,11 +2,11 @@
 
 ## Medium effort, good value
 
-- **Retry/backoff on external API calls** — if Sonarr hiccups, webhooks fail silently. Add simple retry with exponential backoff on all `requests.get/post` calls to Sonarr, Jellyseerr, etc.
+- ~~**Retry/backoff on external API calls**~~ — done in v3.5.2. Shared `http` session with 3-retry exponential backoff in `episeerr_utils.py`, applied across all files.
 
 - ~~**Consolidate drift detection**~~ — done in v3.5.1. `reconcile_series_drift()` in `episeerr_utils.py` is now the single canonical implementation used by all callers.
 
-- **N+1 in cleanup** — `media_processor.py` fetches all series once but then calls individual Sonarr series endpoints in a loop. Batch these or use the data already fetched.
+- **N+1 in Phase 0 drift detection** — bulk reconciliation loops call `reconcile_series_drift` → `validate_series_tag` → `get_series_from_sonarr` (individual API call) per series, even though all series data was already fetched above. Episode fetches in the cleanup loops (`fetch_all_episodes`) are unavoidable — Sonarr has no batch episodes endpoint.
 
 - **Pending requests: SQLite instead of files** — a crash loses pending requests. Move to the existing `settings.db` SQLite database for consistency and durability.
 

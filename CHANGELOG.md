@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.5.2
+
+### ⚡ Retry/backoff on external API calls
+- Added shared `http` session in `episeerr_utils.py` backed by `HTTPAdapter` with `urllib3.Retry`
+- 3 retries with exponential backoff (1s, 2s, 4s) on connection errors and 5xx responses
+- Status-code retries limited to GET/PUT (idempotent); POST/DELETE only retry on connection-level failures to avoid double-writes
+- Covers 429, 500, 502, 503, 504 response codes
+- Applied across `episeerr.py`, `episeerr_utils.py`, `media_processor.py`, and all integrations (Plex, Jellyfin, Emby, Tautulli, Sonos)
+
 ## v3.5.1
 
 ### ⚡ Caching

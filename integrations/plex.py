@@ -7,6 +7,7 @@ Provides: Now Playing widget, Watchlist with sync status, auto-request via Sonar
 import os
 import json
 import requests
+from episeerr_utils import http
 import logging
 import threading
 import time
@@ -105,7 +106,7 @@ def get_plex_watch_history(rating_key: str) -> Optional[Dict]:
         if not url or not api_key:
             return None
 
-        resp = requests.get(
+        resp = http.get(
             f"{url}/library/metadata/{rating_key}",
             headers={'X-Plex-Token': api_key, 'Accept': 'application/json'},
             timeout=10,
@@ -136,7 +137,7 @@ def get_plex_series_watch_history(series_rating_key: str) -> Optional[Dict]:
             return None
 
         # Fetch all episodes for the show via type=4 filter
-        resp = requests.get(
+        resp = http.get(
             f"{url}/library/metadata/{series_rating_key}/allLeaves",
             headers={'X-Plex-Token': api_key, 'Accept': 'application/json'},
             timeout=15,
@@ -478,7 +479,7 @@ class PlexIntegration(ServiceIntegration):
             test_url = f"{url.rstrip('/')}/identity"
             headers = {'X-Plex-Token': api_key}
             
-            response = requests.get(test_url, headers=headers, timeout=10)
+            response = http.get(test_url, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 if 'machineIdentifier' in response.text:
@@ -500,7 +501,7 @@ class PlexIntegration(ServiceIntegration):
         """Fetch Plex watchlist with GUID parsing for TMDB/TVDB IDs"""
         items = []
         try:
-            response = requests.get(
+            response = http.get(
                 'https://discover.provider.plex.tv/library/sections/watchlist/all?includeGuids=1',
                 headers={'X-Plex-Token': api_key},
                 timeout=15
@@ -585,7 +586,7 @@ class PlexIntegration(ServiceIntegration):
             prefs = sonarr_utils.load_preferences()
             headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
             
-            resp = requests.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
+            resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
             if not resp.ok:
                 return None
             
@@ -619,7 +620,7 @@ class PlexIntegration(ServiceIntegration):
                 return None
             
             headers = {'X-Api-Key': radarr_key}
-            resp = requests.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
+            resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
             if not resp.ok:
                 return None
             
@@ -663,9 +664,9 @@ class PlexIntegration(ServiceIntegration):
             # Look up series in Sonarr
             lookup_url = f"{sonarr_url}/api/v3/series/lookup"
             if tvdb_id:
-                resp = requests.get(f"{lookup_url}?term=tvdb:{tvdb_id}", headers=headers, timeout=10)
+                resp = http.get(f"{lookup_url}?term=tvdb:{tvdb_id}", headers=headers, timeout=10)
             else:
-                resp = requests.get(f"{lookup_url}?term=tmdb:{tmdb_id}", headers=headers, timeout=10)
+                resp = http.get(f"{lookup_url}?term=tmdb:{tmdb_id}", headers=headers, timeout=10)
             
             if not resp.ok or not resp.json():
                 return {'success': False, 'status': 'lookup_failed', 'series_id': None,
@@ -679,26 +680,26 @@ class PlexIntegration(ServiceIntegration):
             
             # Get defaults if not specified
             if not quality_profile:
-                profiles_resp = requests.get(f"{sonarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
+                profiles_resp = http.get(f"{sonarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
                 if profiles_resp.ok and profiles_resp.json():
                     quality_profile = profiles_resp.json()[0]['id']
             
             if not root_folder:
-                folders_resp = requests.get(f"{sonarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
+                folders_resp = http.get(f"{sonarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
                 if folders_resp.ok and folders_resp.json():
                     root_folder = folders_resp.json()[0]['path']
             
             # Get episeerr_select tag ID
             tags = []
             try:
-                tag_resp = requests.get(f"{sonarr_url}/api/v3/tag", headers=headers, timeout=10)
+                tag_resp = http.get(f"{sonarr_url}/api/v3/tag", headers=headers, timeout=10)
                 if tag_resp.ok:
                     existing_tags = {t['label'].lower(): t['id'] for t in tag_resp.json()}
                     if 'episeerr_select' in existing_tags:
                         tags.append(existing_tags['episeerr_select'])
                     else:
                         # Create it
-                        create_resp = requests.post(f"{sonarr_url}/api/v3/tag",
+                        create_resp = http.post(f"{sonarr_url}/api/v3/tag",
                                                     headers=headers,
                                                     json={'label': 'episeerr_select'},
                                                     timeout=10)
@@ -721,7 +722,7 @@ class PlexIntegration(ServiceIntegration):
                 }
             }
             
-            add_resp = requests.post(f"{sonarr_url}/api/v3/series", headers=headers,
+            add_resp = http.post(f"{sonarr_url}/api/v3/series", headers=headers,
                                      json=add_payload, timeout=15)
             
             if add_resp.ok:
@@ -764,7 +765,7 @@ class PlexIntegration(ServiceIntegration):
                         'message': f"No TMDB ID for {item.get('title')}"}
             
             # Lookup movie in Radarr
-            lookup_resp = requests.get(f"{radarr_url}/api/v3/movie/lookup/tmdb?tmdbId={tmdb_id}",
+            lookup_resp = http.get(f"{radarr_url}/api/v3/movie/lookup/tmdb?tmdbId={tmdb_id}",
                                        headers=headers, timeout=10)
             
             if not lookup_resp.ok:
@@ -778,12 +779,12 @@ class PlexIntegration(ServiceIntegration):
             
             # Get defaults if not specified
             if not quality_profile:
-                profiles_resp = requests.get(f"{radarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
+                profiles_resp = http.get(f"{radarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
                 if profiles_resp.ok and profiles_resp.json():
                     quality_profile = profiles_resp.json()[0]['id']
             
             if not root_folder:
-                folders_resp = requests.get(f"{radarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
+                folders_resp = http.get(f"{radarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
                 if folders_resp.ok and folders_resp.json():
                     root_folder = folders_resp.json()[0]['path']
             
@@ -798,7 +799,7 @@ class PlexIntegration(ServiceIntegration):
                 }
             }
             
-            add_resp = requests.post(f"{radarr_url}/api/v3/movie", headers=headers,
+            add_resp = http.post(f"{radarr_url}/api/v3/movie", headers=headers,
                                      json=add_payload, timeout=15)
             
             if add_resp.ok:
@@ -1102,7 +1103,7 @@ class PlexIntegration(ServiceIntegration):
                         
                         if radarr_url and radarr_key:
                             headers = {'X-Api-Key': radarr_key}
-                            del_resp = requests.delete(
+                            del_resp = http.delete(
                                 f"{radarr_url}/api/v3/movie/{radarr_movie_id}?deleteFiles=true",
                                 headers=headers, timeout=15)
                             
@@ -1221,7 +1222,7 @@ class PlexIntegration(ServiceIntegration):
             import sonarr_utils
             prefs = sonarr_utils.load_preferences()
             headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
-            resp = requests.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
+            resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
             if resp.ok:
                 for s in resp.json():
                     if s.get('tmdbId'):
@@ -1229,7 +1230,7 @@ class PlexIntegration(ServiceIntegration):
             
             # Also get tag mapping for detecting episeerr_select
             sonarr_tag_map = {}
-            tag_resp = requests.get(f"{prefs['SONARR_URL']}/api/v3/tag", headers=headers, timeout=10)
+            tag_resp = http.get(f"{prefs['SONARR_URL']}/api/v3/tag", headers=headers, timeout=10)
             if tag_resp.ok:
                 sonarr_tag_map = {t['id']: t['label'].lower() for t in tag_resp.json()}
         except Exception as e:
@@ -1243,7 +1244,7 @@ class PlexIntegration(ServiceIntegration):
             radarr_key = radarr_config.get('api_key', '')
             if radarr_url and radarr_key:
                 headers = {'X-Api-Key': radarr_key}
-                resp = requests.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
+                resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
                 if resp.ok:
                     for m in resp.json():
                         if m.get('tmdbId'):
@@ -1337,7 +1338,7 @@ class PlexIntegration(ServiceIntegration):
             # Get now playing / sessions
             now_playing = None
             try:
-                sessions_response = requests.get(
+                sessions_response = http.get(
                     f"{server_url}/status/sessions",
                     headers=headers,
                     timeout=10
@@ -1480,7 +1481,7 @@ class PlexIntegration(ServiceIntegration):
                     import sonarr_utils
                     prefs = sonarr_utils.load_preferences()
                     headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
-                    sr = requests.get(f"{prefs['SONARR_URL']}/api/v3/series/{series_id}", headers=headers, timeout=10)
+                    sr = http.get(f"{prefs['SONARR_URL']}/api/v3/series/{series_id}", headers=headers, timeout=10)
                     if sr.ok:
                         tmdb_id = str(sr.json().get('tmdbId', ''))
                         if tmdb_id:
@@ -1517,7 +1518,7 @@ class PlexIntegration(ServiceIntegration):
                 current_progress = 0.0
 
                 try:
-                    resp = requests.get(
+                    resp = http.get(
                         f"{url}/status/sessions",
                         headers={'X-Plex-Token': api_key},
                         timeout=10,
@@ -1622,7 +1623,7 @@ class PlexIntegration(ServiceIntegration):
                     return f"Missing config - URL: {url}, API Key: {'present' if api_key else 'missing'}", 400
                 
                 full_url = f"{url.rstrip('/')}/status/sessions?X-Plex-Token={api_key}"
-                response = requests.get(full_url, timeout=10)
+                response = http.get(full_url, timeout=10)
                 
                 return f"<h3>Status: {response.status_code}</h3><pre>{response.text}</pre>", 200, {'Content-Type': 'text/html'}
                 
@@ -1990,7 +1991,7 @@ class PlexIntegration(ServiceIntegration):
                     # ── 2. Fall back to polling /status/sessions ──────
                     try:
                         import xml.etree.ElementTree as ET
-                        resp = requests.get(
+                        resp = http.get(
                             f"{url}/status/sessions",
                             headers={'X-Plex-Token': api_key},
                             timeout=5,
@@ -2412,7 +2413,7 @@ class PlexIntegration(ServiceIntegration):
             if parsed.port not in (32400, 32469, 443, 80):
                 return Response('Forbidden', status=403)
             try:
-                r = requests.get(decoded, timeout=8, stream=True)
+                r = http.get(decoded, timeout=8, stream=True)
                 r.raise_for_status()
                 content_type = r.headers.get('Content-Type', 'image/jpeg')
                 return Response(r.content, status=200, content_type=content_type)

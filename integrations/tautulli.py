@@ -15,6 +15,7 @@ Set up in Tautulli:
 import os
 import json
 import requests
+from episeerr_utils import http
 import logging
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
@@ -143,7 +144,7 @@ def get_tautulli_watch_history(rating_key: str) -> Optional[Dict]:
         if not url or not api_key:
             return None
 
-        resp = requests.get(
+        resp = http.get(
             f"{url}/api/v2",
             params={'apikey': api_key, 'cmd': 'get_item_user_stats', 'rating_key': rating_key},
             timeout=10,
@@ -261,7 +262,7 @@ class TautulliIntegration(ServiceIntegration):
 
     def test_connection(self, url: str, api_key: str, **kwargs) -> Tuple[bool, str]:
         try:
-            resp = requests.get(
+            resp = http.get(
                 f"{url.rstrip('/')}/api/v2",
                 params={'apikey': api_key, 'cmd': 'get_server_info'},
                 timeout=10,

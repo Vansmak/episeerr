@@ -4,6 +4,8 @@ import json
 import time
 from datetime import datetime
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import logging
 import threading
 import re
@@ -12,6 +14,22 @@ from dotenv import load_dotenv
 from logging_config import main_logger as logger
 # Load environment variables
 load_dotenv()
+
+# ── Shared HTTP session with retry/backoff ────────────────────────────────────
+# Retries on connection errors and 5xx responses (backoff: 1s, 2s, 4s).
+# POST/DELETE are only retried on connection-level failures (not on bad status
+# codes) to avoid double-writes; GET/PUT retry on status codes too.
+_retry = Retry(
+    total=3,
+    backoff_factor=1,          # sleeps: 1s, 2s, 4s
+    status_forcelist=[429, 500, 502, 503, 504],
+    allowed_methods=["GET", "PUT"],   # status-code retries only for idempotent methods
+    raise_on_status=False,
+)
+http = requests.Session()
+http.mount("http://",  HTTPAdapter(max_retries=_retry))
+http.mount("https://", HTTPAdapter(max_retries=_retry))
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ============================================================
 # DATABASE SUPPORT - Get settings from DB first, fallback to .env
@@ -109,7 +127,7 @@ def get_sonarr_tags():
         return _tags_cache
     try:
         headers = get_sonarr_headers()
-        resp = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
+        resp = http.get(f"{SONARR_URL}/api/v3/tag", headers=headers, timeout=10)
         if resp.ok:
             _tags_cache = resp.json()
             _tags_cache_time = now
@@ -161,7 +179,7 @@ def create_episeerr_default_tag():
                 return EPISEERR_DEFAULT_TAG_ID
        
         logger.debug("No 'episeerr_default' tag found, creating new tag")
-        tag_create_response = requests.post(
+        tag_create_response = http.post(
             f"{SONARR_URL}/api/v3/tag",
             headers=headers,
             json={"label": "episeerr_default"},
@@ -221,7 +239,7 @@ def create_episeerr_select_tag():
                 return EPISEERR_SELECT_TAG_ID
        
         logger.debug("No 'episeerr_select' tag found, creating new tag")
-        tag_create_response = requests.post(
+        tag_create_response = http.post(
             f"{SONARR_URL}/api/v3/tag",
             headers=headers,
             json={"label": "episeerr_select"},
@@ -268,7 +286,7 @@ def get_or_create_rule_tag_id(rule_name):
         
         # Tag doesn't exist - create it
         logger.info(f"Creating new tag '{tag_label}'")
-        tag_create_response = requests.post(
+        tag_create_response = http.post(
             f"{SONARR_URL}/api/v3/tag",
             headers=headers,
             json={"label": tag_label},
@@ -319,7 +337,7 @@ def get_episeerr_delay_profile_id():
     """
     try:
         headers = get_sonarr_headers()
-        resp = requests.get(f"{SONARR_URL}/api/v3/delayprofile", headers=headers, timeout=10)
+        resp = http.get(f"{SONARR_URL}/api/v3/delayprofile", headers=headers, timeout=10)
         
         if not resp.ok:
             logger.error(f"Failed to get delay profiles: {resp.status_code}")
@@ -384,7 +402,7 @@ def update_delay_profile_with_control_tags():
         headers = get_sonarr_headers()
         
         # Get current profile
-        get_resp = requests.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
+        get_resp = http.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
         if not get_resp.ok:
             logger.error(f"Failed to get delay profile: {get_resp.status_code}")
             return False
@@ -420,7 +438,7 @@ def update_delay_profile_with_control_tags():
         
         # Update profile with ONLY these three tags
         profile['tags'] = list(control_tags)
-        put_resp = requests.put(
+        put_resp = http.put(
             f"{SONARR_URL}/api/v3/delayprofile/{profile_id}",
             headers=headers,
             json=profile
@@ -466,7 +484,7 @@ def get_series_from_sonarr(series_id):
     """
     try:
         headers = get_sonarr_headers()
-        response = requests.get(
+        response = http.get(
             f"{SONARR_URL}/api/v3/series/{series_id}",
             headers=headers,
             timeout=10
@@ -502,7 +520,7 @@ def update_series_in_sonarr(series):
     """
     try:
         headers = get_sonarr_headers()
-        response = requests.put(
+        response = http.put(
             f"{SONARR_URL}/api/v3/series/{series['id']}",
             headers=headers,
             json=series,
@@ -764,7 +782,7 @@ def unmonitor_series(series_id, headers):
     """Unmonitor all episodes in a series."""
     try:
         # Get all episodes for the series
-        episodes_response = requests.get(
+        episodes_response = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
             headers=headers
         )
@@ -777,7 +795,7 @@ def unmonitor_series(series_id, headers):
         all_episode_ids = [ep['id'] for ep in episodes]
         
         if all_episode_ids:
-            unmonitor_response = requests.put(
+            unmonitor_response = http.put(
                 f"{SONARR_URL}/api/v3/episode/monitor",
                 headers=headers,
                 json={"episodeIds": all_episode_ids, "monitored": False}
@@ -803,7 +821,7 @@ def unmonitor_season(series_id, season_number, headers):
     """Unmonitor all episodes in a specific season."""
     try:
         # Get episodes for the specific season
-        episodes_response = requests.get(
+        episodes_response = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}&seasonNumber={season_number}",
             headers=headers
         )
@@ -816,7 +834,7 @@ def unmonitor_season(series_id, season_number, headers):
         season_episode_ids = [ep['id'] for ep in episodes]
         
         if season_episode_ids:
-            unmonitor_response = requests.put(
+            unmonitor_response = http.put(
                 f"{SONARR_URL}/api/v3/episode/monitor",
                 headers=headers,
                 json={"episodeIds": season_episode_ids, "monitored": False}
@@ -839,7 +857,7 @@ def unmonitor_season(series_id, season_number, headers):
 def get_episode_info(episode_id, headers):
     """Get episode information from Sonarr API"""
     try:
-        response = requests.get(f"{SONARR_URL}/api/v3/episode/{episode_id}", headers=headers)
+        response = http.get(f"{SONARR_URL}/api/v3/episode/{episode_id}", headers=headers)
         if response.ok:
             return response.json()
         return None
@@ -850,7 +868,7 @@ def get_episode_info(episode_id, headers):
 def get_series_title(series_id, headers):
     """Get series title from Sonarr API"""
     try:
-        response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+        response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
         if response.ok:
             return response.json().get('title', 'Unknown Series')
         return 'Unknown Series'
@@ -870,12 +888,12 @@ def cancel_download(queue_id, headers):
             "removeFromClient": True,
             "removeFromDownloadClient": True
         }
-        response = requests.delete(f"{SONARR_URL}/api/v3/queue/bulk", headers=headers, json=payload)
+        response = http.delete(f"{SONARR_URL}/api/v3/queue/bulk", headers=headers, json=payload)
         
         # If primary method fails, try alternative
         if not response.ok:
             logger.warning(f"Bulk removal failed for queue item {queue_id}. Trying alternative method.")
-            response = requests.delete(
+            response = http.delete(
                 f"{SONARR_URL}/api/v3/queue/{queue_id}", 
                 headers=headers,
                 params={
@@ -899,7 +917,7 @@ def monitor_specific_episodes(series_id, season_number, episode_numbers, headers
     :return: True if successful, False otherwise
     """
     try:
-        episodes_response = requests.get(
+        episodes_response = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
             headers=headers
         )
@@ -920,7 +938,7 @@ def monitor_specific_episodes(series_id, season_number, episode_numbers, headers
             return False
         
         monitor_episode_ids = [ep['id'] for ep in target_episodes]
-        monitor_response = requests.put(
+        monitor_response = http.put(
             f"{SONARR_URL}/api/v3/episode/monitor",
             headers=headers,
             json={"episodeIds": monitor_episode_ids, "monitored": True}
@@ -958,7 +976,7 @@ def search_episodes(series_id, episode_ids, headers):
             "episodeIds": episode_ids
         }
         
-        search_response = requests.post(
+        search_response = http.post(
             f"{SONARR_URL}/api/v3/command",
             headers=headers,
             json=search_payload
@@ -986,7 +1004,7 @@ def get_series_episodes(series_id, season_number, headers):
     :return: List of episodes or empty list on failure
     """
     try:
-        episodes_response = requests.get(
+        episodes_response = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}&seasonNumber={season_number}",
             headers=headers
         )
@@ -1035,7 +1053,7 @@ def delete_overseerr_request(request_id):
         logger.info(f"Attempting to delete Jellyseerr request {request_id}")
         logger.debug(f"Overseerr headers: {headers}")
 
-        delete_response = requests.delete(
+        delete_response = http.delete(
             f"{overseerr_url}/api/v1/request/{request_id}",
             headers=headers
         )
@@ -1069,7 +1087,7 @@ def process_episode_selection(series_id, episode_numbers):
         headers = get_sonarr_headers()
         
         # Get series info
-        series_response = requests.get(
+        series_response = http.get(
             f"{SONARR_URL}/api/v3/series/{series_id}",
             headers=headers
         )
@@ -1101,7 +1119,7 @@ def process_episode_selection(series_id, episode_numbers):
         
         # Final fallback - get the latest season from Sonarr
         if season_number is None:
-            seasons_response = requests.get(
+            seasons_response = http.get(
                 f"{SONARR_URL}/api/v3/series/{series_id}",
                 headers=headers
             )
@@ -1203,7 +1221,7 @@ def process_episode_selection_with_season(series_id, season_number, episode_numb
         logger.info(f"Processing episode selection for series {series_id}, season {season_number}, episodes {episode_numbers}")
         
         # Get series info
-        series_response = requests.get(
+        series_response = http.get(
             f"{SONARR_URL}/api/v3/series/{series_id}",
             headers=headers
         )
@@ -1250,7 +1268,7 @@ def process_episode_selection_with_season(series_id, season_number, episode_numb
         logger.info(f"Monitoring episodes: {valid_episode_numbers} (IDs: {episode_ids_to_monitor})")
         
         # Monitor selected episodes
-        monitor_response = requests.put(
+        monitor_response = http.put(
             f"{SONARR_URL}/api/v3/episode/monitor",
             headers=headers,
             json={"episodeIds": episode_ids_to_monitor, "monitored": True}
@@ -1269,7 +1287,7 @@ def process_episode_selection_with_season(series_id, season_number, episode_numb
             "episodeIds": episode_ids_to_monitor
         }
         
-        search_response = requests.post(
+        search_response = http.post(
             f"{SONARR_URL}/api/v3/command",
             headers=headers,
             json=search_payload
@@ -1299,7 +1317,7 @@ def check_and_cancel_unmonitored_downloads():
     
     try:
         # Retrieve current queue
-        queue_response = requests.get(f"{SONARR_URL}/api/v3/queue", headers=headers)
+        queue_response = http.get(f"{SONARR_URL}/api/v3/queue", headers=headers)
         
         if not queue_response.ok:
             logger.error(f"Failed to retrieve queue. Status: {queue_response.status_code}")
@@ -1323,7 +1341,7 @@ def check_and_cancel_unmonitored_downloads():
             # Check if this is a TV episode
             if item.get('seriesId') and item.get('episodeId'):
                 # Get series details to check for episeerr tags
-                series_response = requests.get(
+                series_response = http.get(
                     f"{SONARR_URL}/api/v3/series/{item['seriesId']}", 
                     headers=headers
                 )

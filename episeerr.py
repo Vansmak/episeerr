@@ -19,7 +19,7 @@ from functools import lru_cache
 from logging.handlers import RotatingFileHandler
 import requests
 import episeerr_utils
-from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url
+from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url, http
 import pending_deletions
 from dashboard import dashboard_bp
 import media_processor
@@ -446,7 +446,7 @@ def test_connection(service):
             if not url or not api_key:
                 return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
             
-            response = requests.get(f"{url}/api/v3/system/status", 
+            response = http.get(f"{url}/api/v3/system/status", 
                                   headers={'X-Api-Key': api_key}, timeout=10)
             response.raise_for_status()
             
@@ -460,7 +460,7 @@ def test_connection(service):
             if not url or not api_key:
                 return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
             
-            response = requests.get(f"{url}/api/v2",
+            response = http.get(f"{url}/api/v2",
                                   params={'apikey': api_key, 'cmd': 'get_server_info'},
                                   timeout=10)
             response.raise_for_status()
@@ -891,7 +891,7 @@ def get_tmdb_endpoint(endpoint, params=None):
             # Otherwise use as API key in params (v3)
             params['api_key'] = auth_token
         
-        response = requests.get(base_url, params=params, headers=headers)
+        response = http.get(base_url, params=params, headers=headers)
         
         if response.status_code == 200:
             return response.json()
@@ -966,7 +966,7 @@ def get_sonarr_stats():
         
         # Get queue statistics
         try:
-            response = requests.get(f"{sonarr_url}/api/v3/queue", headers=headers, timeout=5)
+            response = http.get(f"{sonarr_url}/api/v3/queue", headers=headers, timeout=5)
             if response.ok:
                 queue_data = response.json()
                 records = queue_data.get('records', [])
@@ -984,7 +984,7 @@ def get_sonarr_stats():
         
         # Get missing episodes count
         try:
-            response = requests.get(f"{sonarr_url}/api/v3/wanted/missing", headers=headers, timeout=5)
+            response = http.get(f"{sonarr_url}/api/v3/wanted/missing", headers=headers, timeout=5)
             if response.ok:
                 missing_data = response.json()
                 stats['missing_stats'] = {
@@ -998,7 +998,7 @@ def get_sonarr_stats():
             from datetime import datetime, timezone
             today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
             
-            response = requests.get(
+            response = http.get(
                 f"{sonarr_url}/api/v3/history",
                 headers=headers,
                 params={'page': 1, 'pageSize': 50, 'sortKey': 'date', 'sortDirection': 'descending'},
@@ -1273,7 +1273,7 @@ def api_series_data_enhanced():
         sonarr_api_key = os.environ.get('SONARR_API_KEY')
         
         headers = {'X-Api-Key': sonarr_api_key}
-        response = requests.get(f'{sonarr_url}/api/v3/series', headers=headers)
+        response = http.get(f'{sonarr_url}/api/v3/series', headers=headers)
         
         if response.status_code != 200:
             return jsonify({'success': False, 'error': 'Failed to fetch from Sonarr'}), 500
@@ -1761,7 +1761,7 @@ def check_aired_not_downloaded():
     end = now.strftime('%Y-%m-%dT%H:%M:%SZ')
 
     try:
-        response = requests.get(
+        response = http.get(
             f"{sonarr_url}/api/v3/calendar",
             headers=headers,
             params={'start': start, 'end': end, 'unmonitored': 'false'},
@@ -1814,7 +1814,7 @@ def get_sonarr_series():
         sonarr_url = sonarr_preferences['SONARR_URL']
         
         # Get all series
-        response = requests.get(f"{sonarr_url}/api/v3/series", headers=headers)
+        response = http.get(f"{sonarr_url}/api/v3/series", headers=headers)
         if not response.ok:
             app.logger.error(f"Failed to fetch series from Sonarr: {response.status_code}")
             return []
@@ -1822,7 +1822,7 @@ def get_sonarr_series():
         all_series = response.json()
         
         # Get all tags to find 'watched' tag ID
-        tags_response = requests.get(f"{sonarr_url}/api/v3/tag", headers=headers)
+        tags_response = http.get(f"{sonarr_url}/api/v3/tag", headers=headers)
         if tags_response.ok:
             tags = tags_response.json()
             watched_tag_id = None
@@ -2101,7 +2101,7 @@ def delete_rule(rule_name):
     if tag_id:
         try:
             headers = episeerr_utils.get_sonarr_headers()
-            series_response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+            series_response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
             if series_response.ok:
                 all_series = series_response.json()
                 removed_from_count = 0
@@ -2111,7 +2111,7 @@ def delete_rule(rule_name):
                     if tag_id in tags:
                         tags.remove(tag_id)
                         series['tags'] = tags
-                        update_resp = requests.put(
+                        update_resp = http.put(
                             f"{SONARR_URL}/api/v3/series/{series['id']}",
                             headers=headers,
                             json=series
@@ -2137,14 +2137,14 @@ def delete_rule(rule_name):
             profile_id = episeerr_utils.get_episeerr_delay_profile_id()
             if profile_id:
                 headers = episeerr_utils.get_sonarr_headers()
-                get_resp = requests.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
+                get_resp = http.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
                 if get_resp.ok:
                     profile = get_resp.json()
                     current_tags = profile.get('tags', [])
                     if tag_id in current_tags:
                         current_tags.remove(tag_id)
                         profile['tags'] = current_tags
-                        put_resp = requests.put(
+                        put_resp = http.put(
                             f"{SONARR_URL}/api/v3/delayprofile/{profile_id}",
                             headers=headers,
                             json=profile
@@ -2160,7 +2160,7 @@ def delete_rule(rule_name):
     if tag_id:
         try:
             headers = episeerr_utils.get_sonarr_headers()
-            delete_resp = requests.delete(
+            delete_resp = http.delete(
                 f"{SONARR_URL}/api/v3/tag/{tag_id}",
                 headers=headers
             )
@@ -3012,7 +3012,7 @@ def send_to_selection(series_id):
         sonarr_url = sonarr_preferences['SONARR_URL']
 
         # Get series info from Sonarr
-        resp = requests.get(f"{sonarr_url}/api/v3/series/{series_id}", headers=headers, timeout=10)
+        resp = http.get(f"{sonarr_url}/api/v3/series/{series_id}", headers=headers, timeout=10)
         if not resp.ok:
             return render_template('error.html', message=f"Could not find series in Sonarr (ID: {series_id})")
 
@@ -3215,7 +3215,7 @@ def apply_rule_to_selection():
                 _get_count = _rule_cfg.get('get_count', 1)
                 _action_option = _rule_cfg.get('action_option', 'monitor')
 
-                _eps_resp = requests.get(
+                _eps_resp = http.get(
                     f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
                     headers=_rule_headers
                 )
@@ -3241,7 +3241,7 @@ def apply_rule_to_selection():
                         _to_monitor = [ep['id'] for ep in _season_eps[:_n]]
 
                     if _to_monitor:
-                        _mon_resp = requests.put(
+                        _mon_resp = http.put(
                             f"{SONARR_URL}/api/v3/episode/monitor",
                             headers=_rule_headers,
                             json={"episodeIds": _to_monitor, "monitored": True}
@@ -3252,7 +3252,7 @@ def apply_rule_to_selection():
                                 f"for series {series_id}"
                             )
                             if _action_option == 'search':
-                                _srch_resp = requests.post(
+                                _srch_resp = http.post(
                                     f"{SONARR_URL}/api/v3/command",
                                     headers=_rule_headers,
                                     json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
@@ -3283,20 +3283,20 @@ def apply_rule_to_selection():
         
         # Remove episeerr_select tag (keep rule tag)
         try:
-            tag_resp = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
+            tag_resp = http.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
             if tag_resp.ok:
                 tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
                 select_tag_id = tag_map.get('episeerr_select')
                 
                 if select_tag_id:
-                    series_resp = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+                    series_resp = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
                     if series_resp.ok:
                         series_data = series_resp.json()
                         current_tags = series_data.get('tags', [])
                         if select_tag_id in current_tags:
                             current_tags.remove(select_tag_id)
                             series_data['tags'] = current_tags
-                            requests.put(f"{SONARR_URL}/api/v3/series", headers=headers, json=series_data)
+                            http.put(f"{SONARR_URL}/api/v3/series", headers=headers, json=series_data)
         except Exception as e:
             app.logger.debug(f"Tag cleanup: {e}")
         
@@ -3671,7 +3671,7 @@ def process_sonarr_webhook():
         # ────────────────────────────────────────────────────────────────
         # Enhanced tag detection - supports all rule tags
         # ────────────────────────────────────────────────────────────────
-        tags_response = requests.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
+        tags_response = http.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
         if not tags_response.ok:
             app.logger.error(f"Failed to get Sonarr tags: {tags_response.status_code}")
             return jsonify({"status": "error", "message": "Failed to get tags"}), 500
@@ -3834,7 +3834,7 @@ def process_sonarr_webhook():
         
         if removed:
             # Get fresh series data from Sonarr
-            series_resp = requests.get(
+            series_resp = http.get(
                 f"{SONARR_URL}/api/v3/series/{series_id}",
                 headers=headers
             )
@@ -3843,7 +3843,7 @@ def process_sonarr_webhook():
                 update_payload = series_resp.json()
                 update_payload['tags'] = updated_tags
                 
-                resp = requests.put(
+                resp = http.put(
                     f"{SONARR_URL}/api/v3/series",
                     headers=headers,
                     json=update_payload
@@ -3965,7 +3965,7 @@ def process_sonarr_webhook():
             app.logger.info(f"Executing rule '{assigned_rule}' with get_type '{get_type}', get_count '{get_count}' starting from Season {starting_season}")
             
             # Get all episodes for the series
-            episodes_response = requests.get(
+            episodes_response = http.get(
                 f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
                 headers=headers
             )
@@ -4011,7 +4011,7 @@ def process_sonarr_webhook():
                     
                     if episodes_to_monitor:
                         # Monitor the selected episodes
-                        monitor_response = requests.put(
+                        monitor_response = http.put(
                             f"{SONARR_URL}/api/v3/episode/monitor",
                             headers=headers,
                             json={"episodeIds": episodes_to_monitor, "monitored": True}
@@ -4024,7 +4024,7 @@ def process_sonarr_webhook():
                             if action_option == 'search':
                                 if get_type == 'seasons':
                                     # Use SeasonSearch for season-based rules
-                                    first_ep_response = requests.get(
+                                    first_ep_response = http.get(
                                         f"{SONARR_URL}/api/v3/episode/{episodes_to_monitor[0]}",
                                         headers=headers
                                     )
@@ -4044,7 +4044,7 @@ def process_sonarr_webhook():
                                     # Individual episode search
                                     search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
                                 
-                                search_response = requests.post(
+                                search_response = http.post(
                                     f"{SONARR_URL}/api/v3/command",
                                     headers=headers,
                                     json=search_json
@@ -4070,7 +4070,7 @@ def process_sonarr_webhook():
                         delay_tag_id = episeerr_utils.get_or_create_rule_tag_id('delay')
                         if delay_tag_id:
                             # Get fresh series data
-                            series_refresh_resp = requests.get(
+                            series_refresh_resp = http.get(
                                 f"{SONARR_URL}/api/v3/series/{series_id}",
                                 headers=headers
                             )
@@ -4084,7 +4084,7 @@ def process_sonarr_webhook():
                                     current_tags.remove(delay_tag_id)
                                     fresh_series['tags'] = current_tags
                                     
-                                    update_resp = requests.put(
+                                    update_resp = http.put(
                                         f"{SONARR_URL}/api/v3/series",
                                         headers=headers,
                                         json=fresh_series

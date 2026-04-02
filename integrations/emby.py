@@ -6,6 +6,7 @@ Provides: Webhook-triggered polling for watch detection
 import os
 import json
 import requests
+from episeerr_utils import http
 import logging
 import threading
 import time
@@ -154,7 +155,7 @@ class EmbyIntegration(ServiceIntegration):
             url = f"{config['url']}/Sessions"
             headers = {'X-Emby-Token': config['api_key']}
 
-            response = requests.get(url, headers=headers, timeout=10)
+            response = http.get(url, headers=headers, timeout=10)
             if response.ok:
                 sessions = response.json()
                 for session in sessions:
@@ -395,7 +396,7 @@ class EmbyIntegration(ServiceIntegration):
         """Test connection to Emby server"""
         try:
             headers = {'X-Emby-Token': api_key}
-            response = requests.get(f"{url}/System/Info", headers=headers, timeout=10)
+            response = http.get(f"{url}/System/Info", headers=headers, timeout=10)
 
             if response.ok:
                 info = response.json()

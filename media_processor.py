@@ -12,7 +12,7 @@ import threading
 import subprocess
 import pending_deletions
 from episeerr import normalize_url
-from episeerr_utils import reconcile_series_drift
+from episeerr_utils import reconcile_series_drift, http
 from logging_config import main_logger as logger
 # Load environment variables
 load_dotenv()
@@ -273,7 +273,7 @@ def get_episode_details_by_id(episode_id):
     try:
         url = f"{SONARR_URL}/api/v3/episode/{episode_id}"
         headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(url, headers=headers, timeout=5)
+        response = http.get(url, headers=headers, timeout=5)
         
         if response.ok:
             return response.json()
@@ -363,7 +363,7 @@ def update_activity_date(series_id, season_number=None, episode_number=None, tim
                 
                 # Get series title from Sonarr
                 headers = {'X-Api-Key': SONARR_API_KEY}
-                response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
+                response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
                 
                 if response.ok:
                     series_info = response.json()
@@ -419,7 +419,7 @@ def get_activity_date_with_hierarchy(series_id, series_title=None, return_comple
     if not series_title:
         try:
             headers = {'X-Api-Key': SONARR_API_KEY}
-            response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
+            response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
             if response.ok:
                 series_title = response.json().get('title')
                 logger.info(f"Retrieved Sonarr title: {series_title}")
@@ -523,7 +523,7 @@ def get_series_id(series_name, thetvdb_id=None, themoviedb_id=None):
     url = f"{SONARR_URL}/api/v3/series"
     headers = {'X-Api-Key': SONARR_API_KEY}
     try:
-        response = requests.get(url, headers=headers)
+        response = http.get(url, headers=headers)
         if not response.ok:
             logger.error(f"Failed to fetch series from Sonarr: {response.status_code}")
             return None
@@ -588,7 +588,7 @@ def get_episode_details(series_id, season_number):
     """Fetch details of episodes for a specific series and season from Sonarr."""
     url = f"{SONARR_URL}/api/v3/episode?seriesId={series_id}&seasonNumber={season_number}"
     headers = {'X-Api-Key': SONARR_API_KEY}
-    response = requests.get(url, headers=headers)
+    response = http.get(url, headers=headers)
     if response.ok:
         return response.json()
     logger.error("Failed to fetch episode details.")
@@ -613,7 +613,7 @@ def monitor_episodes(episode_ids, monitor=True):
     url = f"{SONARR_URL}/api/v3/episode/monitor"
     headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
     data = {"episodeIds": episode_ids, "monitored": monitor}
-    response = requests.put(url, json=data, headers=headers)
+    response = http.put(url, json=data, headers=headers)
     if response.ok:
         action = "monitored" if monitor else "unmonitored"
         logger.info(f"Episodes {episode_ids} successfully {action}.")
@@ -676,7 +676,7 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
         # Default: Individual episode search
         data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
     
-    response = requests.post(url, json=data, headers=headers)
+    response = http.post(url, json=data, headers=headers)
     
     if response.ok:
         search_type = "Season pack search" if get_type == 'seasons' else "Episode search"
@@ -811,7 +811,7 @@ def fetch_all_episodes(series_id):
     """Fetch all episodes for a series from Sonarr."""
     url = f"{SONARR_URL}/api/v3/episode?seriesId={series_id}"
     headers = {'X-Api-Key': SONARR_API_KEY}
-    response = requests.get(url, headers=headers)
+    response = http.get(url, headers=headers)
     if response.ok:
         return response.json()
     logger.error("Failed to fetch all episodes.")
@@ -862,7 +862,7 @@ def get_tautulli_last_watched(series_title, return_complete=False):
                 'length': 1
             }
             
-            response = requests.get(f"{tautulli_url}/api/v2", params=params, timeout=10)
+            response = http.get(f"{tautulli_url}/api/v2", params=params, timeout=10)
             
             if not response.ok:
                 logger.warning(f"Tautulli API error: {response.status_code}")
@@ -934,7 +934,7 @@ def get_sonarr_latest_file_date(series_id):
         logger.info(f"Getting episode file dates for series {series_id}")
         
         # Use the correct endpoint for episode files
-        response = requests.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", headers=headers, timeout=10)
+        response = http.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", headers=headers, timeout=10)
         
         if not response.ok:
             logger.error(f"Failed to get episode files for series {series_id}: {response.status_code}")
@@ -1436,7 +1436,7 @@ def process_always_have(series_id, expression):
     headers = {'X-Api-Key': SONARR_API_KEY}
 
     try:
-        resp = requests.get(
+        resp = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
             headers=headers
         )
@@ -1465,7 +1465,7 @@ def process_always_have(series_id, expression):
             return
 
         # Monitor matching episodes
-        monitor_resp = requests.put(
+        monitor_resp = http.put(
             f"{SONARR_URL}/api/v3/episode/monitor",
             headers=headers,
             json={"episodeIds": to_monitor, "monitored": True}
@@ -1483,7 +1483,7 @@ def process_always_have(series_id, expression):
         )
 
         # Trigger search for the newly monitored episodes
-        search_resp = requests.post(
+        search_resp = http.post(
             f"{SONARR_URL}/api/v3/command",
             headers=headers,
             json={"name": "EpisodeSearch", "episodeIds": to_monitor}
@@ -1566,7 +1566,7 @@ def delete_episodes_immediately(episode_file_ids, series_title, reason="Keep Rul
     for episode_file_id in episode_file_ids:
         try:
             url = f"{SONARR_URL}/api/v3/episodeFile/{episode_file_id}"
-            response = requests.delete(url, headers=headers)
+            response = http.delete(url, headers=headers)
             response.raise_for_status()
             successful_deletes += 1
             logger.info(f"✅ Deleted episode file ID: {episode_file_id}")
@@ -1625,7 +1625,7 @@ def delete_episodes_in_sonarr_with_logging(
             try:
                 # Get episode file details
                 ep_url = f"{SONARR_URL}/api/v3/episodefile/{episode_file_id}"
-                ep_response = requests.get(ep_url, headers=headers, timeout=10)
+                ep_response = http.get(ep_url, headers=headers, timeout=10)
                 
                 if not ep_response.ok:
                     cleanup_logger.warning(f"Could not fetch details for episode file {episode_file_id}")
@@ -1636,7 +1636,7 @@ def delete_episodes_in_sonarr_with_logging(
                 season_num = ep_data.get('seasonNumber')
                 
                 # Get series title
-                series_response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
+                series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
                 series_title_full = series_response.json().get('title', series_title) if series_response.ok else series_title
                 
                 # Get episode details
@@ -1684,7 +1684,7 @@ def delete_episodes_in_sonarr_with_logging(
     for episode_file_id in episode_file_ids:
         try:
             url = f"{SONARR_URL}/api/v3/episodeFile/{episode_file_id}"
-            response = requests.delete(url, headers=headers)
+            response = http.delete(url, headers=headers)
             response.raise_for_status()
             successful_deletes += 1
             cleanup_logger.info(f"✅ Deleted episode file ID: {episode_file_id}")
@@ -1727,7 +1727,7 @@ def run_grace_watched_cleanup():
         
         total_deleted = 0
         headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+        response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
         current_time = int(time.time())
         
@@ -1876,7 +1876,7 @@ def run_grace_unwatched_cleanup():
         
         total_deleted = 0
         headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+        response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
         current_time = int(time.time())
         
@@ -2052,7 +2052,7 @@ def run_dormant_cleanup():
         # Get candidates
         candidates = []
         headers = {'X-Api-Key': SONARR_API_KEY}
-        all_series = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers).json()
+        all_series = http.get(f"{SONARR_URL}/api/v3/series", headers=headers).json()
         current_time = int(time.time())
         
         for rule_name, rule in config['rules'].items():
@@ -2162,7 +2162,7 @@ def get_sonarr_disk_space():
     """Get disk space information from Sonarr."""
     try:
         headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/diskspace", headers=headers)
+        response = http.get(f"{SONARR_URL}/api/v3/diskspace", headers=headers)
         if response.ok:
             diskspace_data = response.json()
             
