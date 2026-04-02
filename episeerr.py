@@ -26,7 +26,10 @@ import media_processor
 from settings_db import (
     save_service, get_service, delete_service,
     update_service_test_result, get_all_services,
-    set_setting, get_setting
+    set_setting, get_setting,
+    add_pending_request, get_pending_request, get_all_pending_requests,
+    delete_pending_request, find_pending_request_by_series,
+    find_pending_request_by_tmdb, migrate_pending_requests_from_files,
 )
 from logging_config import main_logger as logger
 # Import plugin system
@@ -2985,24 +2988,14 @@ def send_to_selection(series_id):
     """Create a pending selection request for a Sonarr series and redirect to season selection."""
     try:
         # Check if a pending request already exists for this series — reuse it if so
-        os.makedirs(REQUESTS_DIR, exist_ok=True)
-        for filename in os.listdir(REQUESTS_DIR):
-            if not filename.endswith('.json'):
-                continue
-            try:
-                with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
-                    existing = json.load(f)
-                if str(existing.get('series_id')) == str(series_id) and existing.get('tmdb_id'):
-                    config = load_config()
-                    current_rule = ''
-                    for rule_name_iter, rule_data in config.get('rules', {}).items():
-                        if str(series_id) in rule_data.get('series', {}):
-                            current_rule = rule_name_iter
-                            break
-                    app.logger.info(f"Reusing existing pending request for series {series_id}")
-                    return redirect(url_for('select_seasons', tmdb_id=existing['tmdb_id'], current_rule=current_rule))
-            except Exception:
-                continue
+        existing = find_pending_request_by_series(series_id)
+        if existing and existing.get('tmdb_id'):
+            config = load_config()
+            current_rule = next(
+                (rn for rn, rd in config.get('rules', {}).items() if str(series_id) in rd.get('series', {})), ''
+            )
+            app.logger.info(f"Reusing existing pending request for series {series_id}")
+            return redirect(url_for('select_seasons', tmdb_id=existing['tmdb_id'], current_rule=current_rule))
 
         sonarr_preferences = sonarr_utils.load_preferences()
         headers = {
@@ -3038,7 +3031,7 @@ def send_to_selection(series_id):
         if not tmdb_id:
             return render_template('error.html', message=f"Could not determine TMDB ID for \"{series_title}\"")
 
-        # Create a selection request file (same format as the Sonarr webhook handler)
+        # Create a selection request in the DB
         request_id = f"sonarr-select-{series_id}-{int(time.time())}"
         pending_request = {
             "id": request_id,
@@ -3053,9 +3046,7 @@ def send_to_selection(series_id):
             "jellyseerr_request_id": None,
             "created_at": int(time.time())
         }
-        os.makedirs(REQUESTS_DIR, exist_ok=True)
-        with open(os.path.join(REQUESTS_DIR, f"{request_id}.json"), 'w') as f:
-            json.dump(pending_request, f, indent=2)
+        add_pending_request(pending_request)
 
         app.logger.info(f"✓ Created manual selection request for {series_title} (TMDB: {tmdb_id})")
 
@@ -3119,17 +3110,9 @@ def select_seasons(tmdb_id):
         # Look up the pending request ID for this tmdb_id so the template can delete it on cancel
         request_id = ''
         try:
-            for filename in os.listdir(REQUESTS_DIR):
-                if not filename.endswith('.json'):
-                    continue
-                try:
-                    with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
-                        req_data = json.load(f)
-                    if str(req_data.get('tmdb_id')) == str(tmdb_id):
-                        request_id = req_data.get('id', '')
-                        break
-                except Exception:
-                    continue
+            req_data = find_pending_request_by_tmdb(tmdb_id)
+            if req_data:
+                request_id = req_data.get('id', '')
         except Exception:
             pass
 
@@ -3159,22 +3142,11 @@ def apply_rule_to_selection():
         # Find the pending request to get series_id
         series_id = None
         request_id = None
-        request_file_path = None
-        
-        for filename in os.listdir(REQUESTS_DIR):
-            if filename.endswith('.json'):
-                filepath = os.path.join(REQUESTS_DIR, filename)
-                try:
-                    with open(filepath, 'r') as f:
-                        request_data = json.load(f)
-                        if str(request_data.get('tmdb_id')) == str(tmdb_id):
-                            series_id = request_data.get('series_id')
-                            request_id = request_data.get('id')
-                            request_file_path = filepath
-                            break
-                except Exception:
-                    continue
-        
+        request_data = find_pending_request_by_tmdb(tmdb_id)
+        if request_data:
+            series_id = request_data.get('series_id')
+            request_id = request_data.get('id')
+
         if not series_id:
             return redirect(url_for('rules_page'))
 
@@ -3273,13 +3245,10 @@ def apply_rule_to_selection():
         except Exception as e:
             app.logger.error(f"Tag sync failed: {e}")
         
-        # Clean up the pending request file
-        if request_file_path and os.path.exists(request_file_path):
-            try:
-                os.remove(request_file_path)
-                app.logger.info(f"✓ Removed pending request {request_id}")
-            except Exception:
-                pass
+        # Clean up the pending request
+        if request_id:
+            delete_pending_request(request_id)
+            app.logger.info(f"✓ Removed pending request {request_id}")
         
         # Remove episeerr_select tag (keep rule tag)
         try:
@@ -3325,24 +3294,12 @@ def select_episodes(tmdb_id):
         app.logger.info(f"Episode selection for TMDB ID {tmdb_id}, seasons: {selected_seasons}")
         
         # Find the corresponding series_id from pending requests
-        series_id = None
-        request_id = None
-        
-        for filename in os.listdir(REQUESTS_DIR):
-            if filename.endswith('.json'):
-                try:
-                    with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
-                        request_data = json.load(f)
-                        if str(request_data.get('tmdb_id')) == str(tmdb_id):
-                            series_id = request_data.get('series_id')
-                            request_id = request_data.get('id')
-                            app.logger.info(f"Found matching request: series_id={series_id}, request_id={request_id}")
-                            break
-                except Exception as e:
-                    app.logger.error(f"Error reading request file {filename}: {str(e)}")
-        
-        if not series_id or not request_id:
+        req = find_pending_request_by_tmdb(tmdb_id)
+        if not req:
             return render_template('error.html', message="No pending request found for this series")
+        series_id = req.get('series_id')
+        request_id = req.get('id')
+        app.logger.info(f"Found matching request: series_id={series_id}, request_id={request_id}")
         
         # Get TV show details from TMDB
         show_data = get_tmdb_endpoint(f"tv/{tmdb_id}")
@@ -3397,23 +3354,17 @@ def process_episode_selection():
         app.logger.info(f"Processing: request_id={request_id}, action={action}, episodes={episodes}")
         
         if action == 'cancel':
-            # Delete the request file
             if request_id:
-                request_file = os.path.join(REQUESTS_DIR, f"{request_id}.json")
-                if os.path.exists(request_file):
-                    os.remove(request_file)
-                    app.logger.info(f"Cancelled and removed request {request_id}")
-            
+                delete_pending_request(request_id)
+                app.logger.info(f"Cancelled and removed request {request_id}")
+
             return redirect(url_for('rules_page'))
         
         elif action == 'process':
             # Load request data
-            request_file = os.path.join(REQUESTS_DIR, f"{request_id}.json")
-            if not os.path.exists(request_file):
+            request_data = get_pending_request(request_id)
+            if not request_data:
                 return redirect(url_for('rules_page'))
-            
-            with open(request_file, 'r') as f:
-                request_data = json.load(f)
             
             series_id = request_data['series_id']
             
@@ -3499,12 +3450,9 @@ def process_episode_selection():
                     app.logger.warning(f"Selected rule '{selected_rule}' not found in config")
             # ── END NEW ──────────────────────────────────────────────
             
-            # Clean up request file
-            try:
-                os.remove(request_file)
-                app.logger.info(f"Removed request file: {request_id}.json")
-            except Exception as e:
-                app.logger.error(f"Error removing request file: {str(e)}")
+            # Clean up request
+            delete_pending_request(request_id)
+            app.logger.info(f"Removed pending request: {request_id}")
             
             # Prepare result message
             return redirect(url_for('rules_page'))
@@ -3540,23 +3488,8 @@ def get_pending_requests():
     if not TMDB_API_KEY:
         return jsonify({"success": False, "requests": [], "count": 0})
     try:
-        pending_requests = []
-        for filename in os.listdir(REQUESTS_DIR):
-            if filename.endswith('.json'):
-                try:
-                    with open(os.path.join(REQUESTS_DIR, filename), 'r') as f:
-                        request_data = json.load(f)
-                    # Only surface real selection requests, not Jellyseerr coordination files
-                    if not request_data.get('needs_season_selection'):
-                        continue
-                    # Always use filename base as id so delete works
-                    request_data['id'] = filename[:-5]
-                    if 'created_at' not in request_data and 'timestamp' in request_data:
-                        request_data['created_at'] = request_data['timestamp']
-                    pending_requests.append(request_data)
-                except Exception as e:
-                    app.logger.error(f"Error reading request file {filename}: {str(e)}")
-        pending_requests.sort(key=lambda x: x.get('created_at', 0), reverse=True)
+        rows = get_all_pending_requests()
+        pending_requests = sorted(rows, key=lambda x: x.get('created_at', 0), reverse=True)
         return jsonify({
             "success": True,
             "requests": pending_requests,
@@ -3569,15 +3502,12 @@ def get_pending_requests():
 def delete_request(request_id):
     """Delete a pending request by its unique request_id (filename base)."""
     try:
-        filename = f"{request_id}.json"
-        filepath = os.path.join(REQUESTS_DIR, filename)
-
-        if os.path.exists(filepath):
-            os.remove(filepath)
-            app.logger.info(f"Deleted pending request file {filename}")
+        deleted = delete_pending_request(request_id)
+        if deleted:
+            app.logger.info(f"Deleted pending request {request_id}")
             return jsonify({"status": "success", "message": "Request deleted successfully"}), 200
         else:
-            app.logger.warning(f"Pending request file {filename} not found")
+            app.logger.warning(f"Pending request {request_id} not found")
             return jsonify({"status": "error", "message": "Request not found"}), 404
 
     except Exception as e:
@@ -3897,10 +3827,7 @@ def process_sonarr_webhook():
                 "created_at": int(time.time())
             }
             
-            os.makedirs(REQUESTS_DIR, exist_ok=True)
-            with open(os.path.join(REQUESTS_DIR, f"{request_id}.json"), 'w') as f:
-                json.dump(pending_request, f, indent=2)
-            
+            add_pending_request(pending_request)
             app.logger.info(f"✓ Created episode selection request for {series_title}")
 
             try:
@@ -4590,7 +4517,15 @@ def sync_all_series_tags():
 def initialize_episeerr():
     """Initialize episeerr components."""
     app.logger.debug("Entering initialize_episeerr()")
-    
+
+    # Migrate any pending request JSON files into SQLite (one-time, idempotent)
+    try:
+        migrated = migrate_pending_requests_from_files(REQUESTS_DIR)
+        if migrated:
+            app.logger.info(f"✓ Migrated {migrated} pending request(s) from files to DB")
+    except Exception as e:
+        app.logger.error(f"Error migrating pending requests: {e}")
+
     # Existing code
     try:
         episeerr_utils.check_and_cancel_unmonitored_downloads()

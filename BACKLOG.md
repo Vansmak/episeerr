@@ -8,7 +8,7 @@
 
 - **N+1 in Phase 0 drift detection** — bulk reconciliation loops call `reconcile_series_drift` → `validate_series_tag` → `get_series_from_sonarr` (individual API call) per series, even though all series data was already fetched above. Episode fetches in the cleanup loops (`fetch_all_episodes`) are unavoidable — Sonarr has no batch episodes endpoint.
 
-- **Pending requests: SQLite instead of files** — a crash loses pending requests. Move to the existing `settings.db` SQLite database for consistency and durability.
+- ~~**Pending requests: SQLite instead of files**~~ — done in v3.5.3. All pending selection requests now stored in `settings.db` (`pending_requests` table). File-to-DB migration runs automatically on first startup for existing users. The Jellyseerr coordination file (`jellyseerr-{tvdb_id}.json`) remains file-based — it is cross-process state, not a UI-facing request.
 
 ## Bigger refactors
 

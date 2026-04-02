@@ -94,8 +94,145 @@ def init_settings_db():
         except sqlite3.OperationalError:
             pass  # Another worker already added it
 
+    # Pending requests table - selection requests waiting for user action
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_requests (
+            id TEXT PRIMARY KEY,
+            series_id INTEGER,
+            title TEXT,
+            tmdb_id TEXT,
+            tvdb_id TEXT,
+            data JSON NOT NULL,
+            created_at INTEGER NOT NULL
+        )
+    ''')
+
     conn.commit()
     conn.close()
+
+
+def migrate_pending_requests_from_files(requests_dir: str) -> int:
+    """
+    One-time migration: import any needs_season_selection JSON files from
+    requests_dir into the DB, then delete them.  Safe to call on every
+    startup — files that are already gone are simply skipped.
+    Returns the number of records migrated.
+    """
+    if not os.path.isdir(requests_dir):
+        return 0
+    migrated = 0
+    for filename in os.listdir(requests_dir):
+        if not filename.endswith('.json'):
+            continue
+        filepath = os.path.join(requests_dir, filename)
+        try:
+            with open(filepath, 'r') as f:
+                data = json.load(f)
+            if not data.get('needs_season_selection'):
+                continue  # skip Jellyseerr coordination files
+            request_id = data.get('id') or filename[:-5]
+            add_pending_request(data, request_id=request_id)
+            os.remove(filepath)
+            migrated += 1
+        except Exception:
+            pass  # leave the file alone if anything goes wrong
+    return migrated
+
+
+def add_pending_request(data: Dict[str, Any], request_id: str = None) -> str:
+    """Insert a pending request. Returns the request id."""
+    rid = request_id or data.get('id') or data.get('request_id') or str(data.get('tmdb_id', ''))
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        '''INSERT OR REPLACE INTO pending_requests (id, series_id, title, tmdb_id, tvdb_id, data, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)''',
+        (
+            rid,
+            data.get('series_id'),
+            data.get('title'),
+            str(data.get('tmdb_id', '') or ''),
+            str(data.get('tvdb_id', '') or ''),
+            json.dumps(data),
+            data.get('created_at') or int(__import__('time').time()),
+        )
+    )
+    conn.commit()
+    conn.close()
+    return rid
+
+
+def get_pending_request(request_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single pending request by id."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT data FROM pending_requests WHERE id = ?', (request_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        d = json.loads(row['data'])
+        d['id'] = request_id
+        return d
+    return None
+
+
+def get_all_pending_requests() -> List[Dict[str, Any]]:
+    """Return all pending requests ordered newest first."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, data FROM pending_requests ORDER BY created_at DESC')
+    rows = cursor.fetchall()
+    conn.close()
+    results = []
+    for row in rows:
+        d = json.loads(row['data'])
+        d['id'] = row['id']
+        results.append(d)
+    return results
+
+
+def find_pending_request_by_series(series_id) -> Optional[Dict[str, Any]]:
+    """Find the first pending request for a given Sonarr series_id."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, data FROM pending_requests WHERE series_id = ? LIMIT 1', (int(series_id),))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        d = json.loads(row['data'])
+        d['id'] = row['id']
+        return d
+    return None
+
+
+def find_pending_request_by_tmdb(tmdb_id) -> Optional[Dict[str, Any]]:
+    """Find the first pending request for a given TMDB id."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, data FROM pending_requests WHERE tmdb_id = ? LIMIT 1', (str(tmdb_id),))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        d = json.loads(row['data'])
+        d['id'] = row['id']
+        return d
+    return None
+
+
+def delete_pending_request(request_id: str) -> bool:
+    """Delete a pending request. Returns True if a row was deleted."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM pending_requests WHERE id = ?', (request_id,))
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    return deleted
+
 
 def get_service(service_type: str, name: str = 'default') -> Optional[Dict[str, Any]]:
     """Get a service configuration by type and name"""

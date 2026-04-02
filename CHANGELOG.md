@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.5.3
+
+### 🗄️ Pending Requests: SQLite storage
+- Pending episode-selection requests now stored in `settings.db` (`pending_requests` table) instead of JSON files in `data/pending_requests/`
+- `migrate_pending_requests_from_files()` runs automatically on startup — existing users' pending requests are migrated with no action required
+- All create/read/delete paths in `episeerr.py` updated: `add_pending_request`, `get_pending_request`, `get_all_pending_requests`, `delete_pending_request` (from `settings_db.py`)
+- Jellyseerr coordination file (`jellyseerr-{tvdb_id}.json`) remains file-based — it is cross-process handshake state, not a UI request
+- Fixes: pending requests survive container restarts; no more "Permission denied" on file cleanup; no more stale files with `timestamp` vs `created_at` mismatch
+
 ## v3.5.2
 
 ### ⚡ Retry/backoff on external API calls
