@@ -2243,10 +2243,11 @@ def run_unified_cleanup():
                 if str(s['id']) not in config_series_ids
             ]
 
+            series_lookup = {s['id']: s for s in all_series}
             reconciled = 0
             for series_id in known_ids + orphaned_ids:
                 try:
-                    _, changed = reconcile_series_drift(series_id, config)
+                    _, changed = reconcile_series_drift(series_id, config, series_data=series_lookup.get(series_id))
                     if changed:
                         reconciled += 1
                 except Exception as e:

@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.5.5
+
+### 🏗️ Extract webhook handlers to `webhooks.py`
+- `process_sonarr_webhook`, `handle_episode_grab`, and `handle_server_webhook` (legacy Tautulli) extracted from `episeerr.py` into a new `webhooks.py` module (~700 lines removed from main file)
+- Registered as `sonarr_webhooks_bp` Blueprint; routes unchanged (`/sonarr-webhook`, `/webhook`)
+- Circular imports avoided with deferred `from episeerr import load_config, save_config, ...` inside functions — same pattern used by `integrations/tautulli.py` and others
+- Auth exemption entries updated to blueprint-qualified names (`sonarr_webhooks.process_sonarr_webhook`, `sonarr_webhooks.handle_server_webhook`)
+- Removed dead `process_watch_event` from `episeerr.py` — was defined but never called; integrations each implement their own equivalent directly
+- `episeerr.py` is now ~3910 lines (was ~4630)
+
+## v3.5.4
+
+### ⚡ Fix N+1 in Phase 0 drift detection
+- Both bulk Phase 0 reconciliation loops (in `episeerr.py` and `media_processor.py`) already fetched all Sonarr series data before the loop, but `reconcile_series_drift` → `validate_series_tag` each called `get_series_from_sonarr(series_id)` again — one extra API call per series
+- Added `series_data=None` parameter to `reconcile_series_drift` and `validate_series_tag`; when provided, the pre-fetched dict is used directly and the individual API call is skipped
+- Phase 0 loops now build a `series_lookup = {s['id']: s for s in all_series}` and pass `series_data=series_lookup.get(series_id)` each iteration
+- Non-bulk callers (webhook handlers) pass nothing and continue to fetch individually as before — no behaviour change
+
 ## v3.5.3
 
 ### 🗄️ Pending Requests: SQLite storage

@@ -6,13 +6,13 @@
 
 - ~~**Consolidate drift detection**~~ — done in v3.5.1. `reconcile_series_drift()` in `episeerr_utils.py` is now the single canonical implementation used by all callers.
 
-- **N+1 in Phase 0 drift detection** — bulk reconciliation loops call `reconcile_series_drift` → `validate_series_tag` → `get_series_from_sonarr` (individual API call) per series, even though all series data was already fetched above. Episode fetches in the cleanup loops (`fetch_all_episodes`) are unavoidable — Sonarr has no batch episodes endpoint.
+- ~~**N+1 in Phase 0 drift detection**~~ — done in v3.5.4. Both bulk Phase 0 loops now build a `series_lookup` dict from the already-fetched `all_series` / `existing_series` and pass it as `series_data=` to `reconcile_series_drift` → `validate_series_tag`, eliminating one Sonarr API call per series.
 
 - ~~**Pending requests: SQLite instead of files**~~ — done in v3.5.3. All pending selection requests now stored in `settings.db` (`pending_requests` table). File-to-DB migration runs automatically on first startup for existing users. The Jellyseerr coordination file (`jellyseerr-{tvdb_id}.json`) remains file-based — it is cross-process state, not a UI-facing request.
 
 ## Bigger refactors
 
-- **Extract webhook handlers** — the Sonarr and Tautulli webhook handlers are 800+ lines combined in `episeerr.py`. Move to a dedicated `webhooks.py` module.
+- ~~**Extract webhook handlers**~~ — done in v3.5.5. Moved to `webhooks.py` as `sonarr_webhooks_bp` Blueprint. Registered in `episeerr.py`; auth exemptions updated to blueprint-qualified names.
 
 - **`plex.py` is 2400 lines** — likely has unused/dead code. Audit and split.
 

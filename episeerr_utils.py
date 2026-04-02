@@ -638,20 +638,21 @@ def remove_all_episeerr_tags(series_id):
         return False
 
 
-def validate_series_tag(series_id, expected_rule):
+def validate_series_tag(series_id, expected_rule, series_data=None):
     """
     Check if series tag matches expected rule in config.
     Handles multiple episeerr_* tags (logs error, auto-fixes to config rule).
-    
+
     Args:
         series_id: Sonarr series ID
         expected_rule: Rule name from config
-        
+        series_data: Pre-fetched series dict (avoids redundant API call in bulk loops)
+
     Returns:
         tuple: (matches: bool, actual_tag_rule: str or None)
     """
     try:
-        series = get_series_from_sonarr(series_id)
+        series = series_data if series_data is not None else get_series_from_sonarr(series_id)
         if not series:
             return (False, None)
         
@@ -692,7 +693,7 @@ def validate_series_tag(series_id, expected_rule):
 
 
 
-def reconcile_series_drift(series_id, config):
+def reconcile_series_drift(series_id, config, series_data=None):
     """
     Check and correct rule/tag alignment for a single series.
 
@@ -704,6 +705,11 @@ def reconcile_series_drift(series_id, config):
       - Tag differs from config      → move series in config to match tag (tag wins)
       - No episeerr tag on series    → restore tag from config (config wins)
       - Series not in config at all  → recover from orphaned Sonarr tag if present
+
+    Args:
+        series_id: Sonarr series ID
+        config: Episeerr config dict (mutated in-place)
+        series_data: Pre-fetched series dict (avoids redundant API call in bulk loops)
 
     Returns:
         (final_rule: str | None, modified: bool)
@@ -719,7 +725,7 @@ def reconcile_series_drift(series_id, config):
             break
 
     if config_rule:
-        matches, actual_tag_rule = validate_series_tag(series_id, config_rule)
+        matches, actual_tag_rule = validate_series_tag(series_id, config_rule, series_data=series_data)
         if matches:
             return config_rule, False
 
@@ -745,7 +751,7 @@ def reconcile_series_drift(series_id, config):
 
     else:
         # Series not in config — check for an orphaned episeerr tag in Sonarr
-        series = get_series_from_sonarr(series_id)
+        series = series_data if series_data is not None else get_series_from_sonarr(series_id)
         if not series:
             return None, False
 
