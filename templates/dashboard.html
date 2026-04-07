@@ -682,6 +682,29 @@ function loadPlexWatchlist() {
         .catch(() => {}); // Watchlist unavailable — section stays hidden
 }
 
+function plexRemoveFromWatchlist(badge) {
+    const ratingKey = badge.dataset.ratingKey;
+    const item = badge.closest('.watchlist-item');
+    badge.style.pointerEvents = 'none';
+    fetch('/api/integration/plex/watchlist/remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({rating_key: ratingKey})
+    })
+    .then(r => r.json())
+    .then(data => {
+        console.log('Watchlist remove response:', data);
+        if (data.success) {
+            item.classList.add('removing');
+            setTimeout(() => item.remove(), 300);
+        } else {
+            badge.style.pointerEvents = '';
+            console.error('Watchlist remove failed. ratingKey:', data.rating_key, '| detail:', data.detail);
+        }
+    })
+    .catch(err => { badge.style.pointerEvents = ''; console.error('Watchlist remove fetch error:', err); });
+}
+
 function syncPlexWatchlist() {
     const spinner = document.getElementById('sync-spinner');
     if (spinner) {

@@ -63,7 +63,7 @@ def _soap(base: str, action: str, body_inner: str, timeout: int = 5) -> Optional
         'SOAPACTION': f'"{_AVT_NS}#{action}"',
     }
     try:
-        resp = http.post(f"{base}{_TRANSPORT_PATH}", data=envelope,
+        resp = requests.post(f"{base}{_TRANSPORT_PATH}", data=envelope,
                              headers=headers, timeout=timeout)
         resp.raise_for_status()
         return ET.fromstring(resp.text)
@@ -75,7 +75,7 @@ def _soap(base: str, action: str, body_inner: str, timeout: int = 5) -> Optional
 def _friendly_name(base: str) -> str:
     """Return the UPnP friendly name for a speaker, or 'Unknown'."""
     try:
-        resp = http.get(f"{base}{_DEVICE_PATH}", timeout=5)
+        resp = requests.get(f"{base}{_DEVICE_PATH}", timeout=5)
         resp.raise_for_status()
         root = ET.fromstring(resp.text)
         el = root.find('.//{urn:schemas-upnp-org:device-1-0}friendlyName')
@@ -207,7 +207,7 @@ def _get_zones(base: str) -> list:
             'Content-Type': 'text/xml; charset="utf-8"',
             'SOAPACTION':   f'"{_ZGT_NS}#GetZoneGroupState"',
         }
-        resp = http.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
+        resp = requests.post(f"{base}{_TOPOLOGY_PATH}", data=envelope,
                              headers=headers, timeout=6)
         resp.raise_for_status()
         soap_root = ET.fromstring(resp.text)
@@ -226,7 +226,7 @@ def _get_zones(base: str) -> list:
 
     # ── Method 2: HTTP /status/topology (older firmware) ──────────────────────
     try:
-        resp = http.get(f"{base}{_ZONE_PATH}", timeout=6)
+        resp = requests.get(f"{base}{_ZONE_PATH}", timeout=6)
         resp.raise_for_status()
         root  = ET.fromstring(resp.text)
         zones = _parse_zone_groups(root, base)

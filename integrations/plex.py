@@ -274,9 +274,11 @@ class PlexIntegration(ServiceIntegration):
         sync_interval         = sync_config.get('interval_minutes', 120)
         movie_cleanup_enabled = sync_config.get('movie_cleanup', {}).get('enabled', False)
         grace_days            = sync_config.get('movie_cleanup', {}).get('grace_days', 7)
+        auto_remove_watched   = sync_config.get('auto_remove_watched', False)
 
-        enabled_checked = 'checked' if sync_enabled else ''
-        mc_checked      = 'checked' if movie_cleanup_enabled else ''
+        enabled_checked  = 'checked' if sync_enabled else ''
+        mc_checked       = 'checked' if movie_cleanup_enabled else ''
+        arw_checked      = 'checked' if auto_remove_watched else ''
 
         sync_intervals = [
             (30, '30 minutes'), (60, '1 hour'), (120, '2 hours'),
@@ -385,6 +387,22 @@ class PlexIntegration(ServiceIntegration):
 
             <div style="border-top:1px solid rgba(255,255,255,0.05);margin-top:10px;padding-top:15px;">
                 <h6 class="mb-2" style="font-size:14px;">
+                    <i class="fas fa-eye-slash text-secondary me-2"></i>Watchlist Cleanup
+                </h6>
+                <div class="row">
+                    <div class="col-md-12 mb-3">
+                        <div class="form-check form-switch">
+                            <input type="checkbox" class="form-check-input" id="plex-auto-remove-watched"
+                                   name="plex-auto-remove-watched" {arw_checked}>
+                            <label class="form-check-label" for="plex-auto-remove-watched">Remove from Plex watchlist when watched</label>
+                        </div>
+                        <small class="text-muted">Automatically remove a title from your Plex watchlist once it&rsquo;s been marked as watched</small>
+                    </div>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid rgba(255,255,255,0.05);margin-top:10px;padding-top:15px;">
+                <h6 class="mb-2" style="font-size:14px;">
                     <i class="fas fa-film text-warning me-2"></i>Movie Cleanup
                 </h6>
                 <div class="row">
@@ -437,21 +455,25 @@ class PlexIntegration(ServiceIntegration):
             ]
 
         # ── Watchlist sync fields ─────────────────────────────────
-        sync_enabled  = normalized_data.pop('sync-enabled',  existing_sync.get('enabled', False))
-        sync_interval = int(
+        sync_enabled         = normalized_data.pop('sync-enabled',  existing_sync.get('enabled', False))
+        sync_interval        = int(
             normalized_data.pop('sync-interval', existing_sync.get('interval_minutes', 120)) or 120
         )
-        movie_cleanup = normalized_data.pop(
+        movie_cleanup        = normalized_data.pop(
             'movie-cleanup', existing_sync.get('movie_cleanup', {}).get('enabled', False)
         )
-        grace_days    = int(
+        grace_days           = int(
             normalized_data.pop('grace-days', existing_sync.get('movie_cleanup', {}).get('grace_days', 7)) or 7
+        )
+        auto_remove_watched  = normalized_data.pop(
+            'auto-remove-watched', existing_sync.get('auto_remove_watched', False)
         )
 
         normalized_data['watchlist_sync'] = {
             **existing_sync,
-            'enabled':          sync_enabled,
-            'interval_minutes': sync_interval,
+            'enabled':             sync_enabled,
+            'interval_minutes':    sync_interval,
+            'auto_remove_watched': auto_remove_watched,
             'movie_cleanup': {
                 **existing_sync.get('movie_cleanup', {}),
                 'enabled':    movie_cleanup,
@@ -550,10 +572,29 @@ class PlexIntegration(ServiceIntegration):
         
         return items
     
+    def remove_from_watchlist(self, api_key: str, rating_key: str) -> tuple:
+        """Remove a single item from the Plex watchlist by its ratingKey.
+        Returns (True, detail) on success, (False, detail) on failure.
+        Tries metadata.provider.plex.tv first, then discover.provider.plex.tv.
+        """
+        headers = {'X-Plex-Token': api_key}
+        url = f'https://discover.provider.plex.tv/actions/removeFromWatchlist?ratingKey={rating_key}'
+        try:
+            resp = http.put(url, headers=headers, timeout=15)
+            detail = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            logger.info(f"[Plex] remove_from_watchlist {url} → {detail}")
+            if resp.ok:
+                return True, detail
+            return False, detail
+        except Exception as exc:
+            detail = f"error: {exc}"
+            logger.warning(f"[Plex] remove_from_watchlist {url} → {detail}")
+            return False, detail
+
     # ==========================================
     # Sync Engine
     # ==========================================
-    
+
     def get_sync_config(self) -> dict:
         """Get watchlist sync configuration with defaults"""
         defaults = {
@@ -567,7 +608,7 @@ class PlexIntegration(ServiceIntegration):
                 'enabled': False,
                 'grace_days': 7,
             },
-            'auto_remove_watched': True,
+            'auto_remove_watched': False,
         }
         try:
             from settings_db import get_service
@@ -889,6 +930,7 @@ class PlexIntegration(ServiceIntegration):
                             'tvdb_id': item.get('tvdb_id'),
                             'title': item['title'],
                             'type': 'tv',
+                            'rating_key': item.get('rating_key'),
                             'synced_at': datetime.now().isoformat(),
                             'source': 'watchlist_sync',
                             'status': 'already_exists',
@@ -928,6 +970,7 @@ class PlexIntegration(ServiceIntegration):
                             'tvdb_id': item.get('tvdb_id'),
                             'title': item['title'],
                             'type': 'tv',
+                            'rating_key': item.get('rating_key'),
                             'synced_at': datetime.now().isoformat(),
                             'source': 'watchlist_sync',
                             'status': 'pending_selection',
@@ -947,6 +990,7 @@ class PlexIntegration(ServiceIntegration):
                         'tvdb_id': item.get('tvdb_id'),
                         'title': item['title'],
                         'type': 'tv',
+                        'rating_key': item.get('rating_key'),
                         'synced_at': datetime.now().isoformat(),
                         'source': 'watchlist_sync',
                         'status': 'added_to_sonarr' if result['success'] else result.get('status', 'error'),
@@ -973,6 +1017,7 @@ class PlexIntegration(ServiceIntegration):
                             'tmdb_id': item.get('tmdb_id'),
                             'title': item['title'],
                             'type': 'movie',
+                            'rating_key': item.get('rating_key'),
                             'synced_at': datetime.now().isoformat(),
                             'source': 'watchlist_sync',
                             'status': 'already_exists',
@@ -993,6 +1038,7 @@ class PlexIntegration(ServiceIntegration):
                         'tmdb_id': item.get('tmdb_id'),
                         'title': item['title'],
                         'type': 'movie',
+                        'rating_key': item.get('rating_key'),
                         'synced_at': datetime.now().isoformat(),
                         'source': 'watchlist_sync',
                         'status': 'added_to_radarr' if result['success'] else result.get('status', 'error'),
@@ -1039,14 +1085,15 @@ class PlexIntegration(ServiceIntegration):
     
     def mark_item_watched(self, tmdb_id: str, media_type: str):
         """Called from Tautulli webhook handler when something is watched.
-        
+
         For movies: marks as watched and sets cleanup_eligible_at.
-        For TV: checks if series is fully watched for watchlist removal.
+        For TV/movies: removes from Plex watchlist if auto_remove_watched is enabled.
         """
         sync_data = load_sync_data()
         sync_config = self.get_sync_config()
         grace_days = sync_config.get('movie_cleanup', {}).get('grace_days', 7)
-        
+        auto_remove = sync_config.get('auto_remove_watched', False)
+
         # Find the item in sync data
         for item_key, item in sync_data['synced_items'].items():
             if str(item.get('tmdb_id')) == str(tmdb_id):
@@ -1055,15 +1102,31 @@ class PlexIntegration(ServiceIntegration):
                     item['watched_at'] = datetime.now().isoformat()
                     item['cleanup_eligible_at'] = (datetime.now() + timedelta(days=grace_days)).isoformat()
                     item['status'] = 'watched'
-                    logger.info(f"🎬 Movie watched: {item['title']} - cleanup eligible in {grace_days} days")
+                    logger.info(f"[Plex] Movie watched: {item['title']} - cleanup eligible in {grace_days} days")
                 elif media_type == 'tv' and item['type'] == 'tv':
                     item['watched'] = True
                     item['last_watched'] = datetime.now().isoformat()
                     item['watched_at'] = datetime.now().isoformat()
                     item['status'] = 'watched'
-                    logger.info(f"📺 TV watched: {item['title']}")
+                    logger.info(f"[Plex] TV watched: {item['title']}")
+
+                if auto_remove:
+                    rating_key = item.get('rating_key')
+                    if rating_key:
+                        try:
+                            from settings_db import get_service
+                            plex_cfg = get_service('plex') or {}
+                            api_key = plex_cfg.get('api_key', '')
+                            if api_key:
+                                ok, detail = self.remove_from_watchlist(api_key, rating_key)
+                                if not ok:
+                                    logger.warning(f"[Plex] Auto-remove failed: {detail}")
+                        except Exception as exc:
+                            logger.warning(f"[Plex] Watchlist removal failed for {item.get('title')}: {exc}")
+                    else:
+                        logger.debug(f"[Plex] No rating_key for {item.get('title')} — watchlist removal skipped")
                 break
-        
+
         save_sync_data(sync_data)
     
     def cleanup_watched_movies(self) -> dict:
@@ -2140,12 +2203,13 @@ class PlexIntegration(ServiceIntegration):
                         year = f" ({item.get('year')})" if item.get('year') else ''
                         media_type = item.get('type', 'movie')
                         type_icon = 'fa-tv' if media_type == 'show' else 'fa-film'
-                        
+                        rating_key = item.get('rating_key', '')
+
                         # Status badge
                         status = item.get('sync_status', 'on_watchlist')
                         label = item.get('status_label', '')
                         color = item.get('status_color', '#6c757d')
-                        
+
                         # Status icon mapping
                         status_icons = {
                             'on_watchlist': 'fa-bookmark',
@@ -2157,12 +2221,16 @@ class PlexIntegration(ServiceIntegration):
                             'error': 'fa-exclamation-triangle',
                         }
                         status_icon = status_icons.get(status, 'fa-bookmark')
-                        
+
+                        type_badge_attrs = ''
+                        if rating_key:
+                            type_badge_attrs = f'onclick="plexRemoveFromWatchlist(this)" title="Remove from watchlist" style="cursor:pointer;" data-rating-key="{rating_key}"'
+
                         items_html += f'''
-                        <div class="watchlist-item" data-status="{status}" data-type="{media_type}">
+                        <div class="watchlist-item" data-status="{status}" data-type="{media_type}" data-rating-key="{rating_key}">
                             <div class="watchlist-poster-wrap">
                                 <img src="{thumb}" class="watchlist-poster" alt="{title}">
-                                <span class="watchlist-type-badge">
+                                <span class="watchlist-type-badge" {type_badge_attrs}>
                                     <i class="fas {type_icon}"></i>
                                 </span>
                                 <span class="watchlist-status-badge" style="background: {color};">
@@ -2240,6 +2308,13 @@ class PlexIntegration(ServiceIntegration):
                         text-overflow: ellipsis;
                         white-space: nowrap;
                     }}
+                    .watchlist-type-badge[data-rating-key]:hover {{
+                        background: rgba(220,53,69,0.85);
+                    }}
+                    .watchlist-item.removing {{
+                        opacity: 0;
+                        transition: opacity 0.3s;
+                    }}
                     @media (max-width: 768px) {{
                         .watchlist-container {{
                             max-width: 100vw;
@@ -2261,7 +2336,7 @@ class PlexIntegration(ServiceIntegration):
                     }}
                     </style>
                     '''
-                
+
                 return jsonify({'success': True, 'html': html, 'sync_text': sync_text})
 
             except Exception as e:
@@ -2272,6 +2347,28 @@ class PlexIntegration(ServiceIntegration):
         # Sync API Routes
         # ==========================================
         
+        @bp.route('/watchlist/remove', methods=['POST'])
+        def watchlist_remove():
+            """Remove an item from the Plex watchlist by ratingKey"""
+            try:
+                from settings_db import get_service
+                data = request.json or {}
+                rating_key = str(data.get('rating_key', '')).strip()
+                if not rating_key:
+                    return jsonify({'success': False, 'message': 'rating_key required'}), 400
+
+                plex_config = get_service('plex') or {}
+                api_key = plex_config.get('api_key', '')
+                if not api_key:
+                    return jsonify({'success': False, 'message': 'Plex not configured'}), 400
+
+                logger.info(f"[Plex] Watchlist remove requested for ratingKey: {rating_key!r}")
+                ok, detail = integration.remove_from_watchlist(api_key, rating_key)
+                return jsonify({'success': ok, 'rating_key': rating_key, 'detail': detail})
+            except Exception as e:
+                logger.error(f"Watchlist remove error: {e}")
+                return jsonify({'success': False, 'message': str(e)}), 500
+
         @bp.route('/sync', methods=['POST'])
         def sync_now():
             """Manual sync trigger"""
