@@ -1,93 +1,31 @@
 # Changelog
 
-## v3.5.7
+## v3.6.1
 
-### 🔒 Defer Sonarr add and Plex watchlist until user confirms
+### 🔒 Deferred Sonarr add — nothing written until you confirm
+- Searching within Episeerr no longer adds to Sonarr or Plex watchlist on click — Sonarr add and Plex watchlist update only happen after the user confirms rule/season selections
+- Cancel at any point and nothing is touched
 
-- When adding a series via Episeerr's search, nothing is written to Sonarr or Plex until the user completes rule/season selection and confirms
-- New `/api/sonarr/prepare-series` endpoint replaces the immediate `/api/sonarr/add-series` call — does a Sonarr lookup only, stores a pending request with `source='search'`
-- `apply_rule_to_selection` and `select_episodes` now handle `source='search'` the same as `source='discover'`: Sonarr add fires at confirmation, not before
-- Cancelling the selection screen deletes the pending request; Sonarr and Plex are untouched
-- Removed premature `_plex_watchlist_add_silent` call from the prepare step
+### 🗄️ Pending requests moved to SQLite
+- Pending selection requests stored in `settings.db` instead of JSON files; auto-migrated on startup
 
-### 📄 Documentation cleanup
-- README "Add Series" section restructured around three clear paths (external tools, Plex watchlist, search within Episeerr)
-- `docs/features/episode-selection.md` rewritten; delay profile requirement scoped to external paths only
-- `docs/core-concepts/tags-and-auto-assign.md` and `docs/getting-started/first-series.md` updated with search path
-- `documentation.html`: removed stale version banners, fixed Plex/Tautulli description, collapsed redundant delay profile section, added search path to Getting Started and Workflows
+### ⚡ Performance
+- Config and Sonarr tag lookups cached in memory (30s / 60s); reduces API chatter on busy webhook paths
+- Retry/backoff on all external API calls (3 retries, exponential backoff, covers 429/5xx)
+- Eliminated N+1 Sonarr API calls in cleanup loops and drift detection
 
-## v3.5.6
-
-### ⚡ Reduce redundant Sonarr API calls in cleanup and search
-
-**Cleanup loops (grace watched, grace unwatched, dormant):**
-- Each function fetched all series once then used `next((s for s in all_series if s['id'] == series_id), None)` — an O(n) scan per series per rule
-- Now builds `series_lookup = {s['id']: s for s in all_series}` once after the bulk fetch; inner loops use `series_lookup.get(series_id)`
-
-**`delete_episodes_in_sonarr_with_logging` dry-run path:**
-- `GET /api/v3/series/{id}` was called once per episode file in the loop — if multiple files belong to the same series, the same series was fetched repeatedly
-- Now caches results in `series_title_cache = {}`; fetches each series at most once per call
-
-**`trigger_episode_search_in_sonarr`:**
-- `get_episode_details_by_id(episode_ids[0])` was called twice: once to determine season number (seasons path), and again unconditionally in the activity log block
-- Now initialises `episode = None` before the branch; activity log reuses the already-fetched value with `if episode is None: episode = get_episode_details_by_id(...)`
-
-## v3.5.5
-
-### 🏗️ Extract webhook handlers to `webhooks.py`
-- `process_sonarr_webhook`, `handle_episode_grab`, and `handle_server_webhook` (legacy Tautulli) extracted from `episeerr.py` into a new `webhooks.py` module (~700 lines removed from main file)
-- Registered as `sonarr_webhooks_bp` Blueprint; routes unchanged (`/sonarr-webhook`, `/webhook`)
-- Circular imports avoided with deferred `from episeerr import load_config, save_config, ...` inside functions — same pattern used by `integrations/tautulli.py` and others
-- Auth exemption entries updated to blueprint-qualified names (`sonarr_webhooks.process_sonarr_webhook`, `sonarr_webhooks.handle_server_webhook`)
-- Removed dead `process_watch_event` from `episeerr.py` — was defined but never called; integrations each implement their own equivalent directly
-- `episeerr.py` is now ~3910 lines (was ~4630)
-
-## v3.5.4
-
-### ⚡ Fix N+1 in Phase 0 drift detection
-- Both bulk Phase 0 reconciliation loops (in `episeerr.py` and `media_processor.py`) already fetched all Sonarr series data before the loop, but `reconcile_series_drift` → `validate_series_tag` each called `get_series_from_sonarr(series_id)` again — one extra API call per series
-- Added `series_data=None` parameter to `reconcile_series_drift` and `validate_series_tag`; when provided, the pre-fetched dict is used directly and the individual API call is skipped
-- Phase 0 loops now build a `series_lookup = {s['id']: s for s in all_series}` and pass `series_data=series_lookup.get(series_id)` each iteration
-- Non-bulk callers (webhook handlers) pass nothing and continue to fetch individually as before — no behaviour change
-
-## v3.5.3
-
-### 🗄️ Pending Requests: SQLite storage
-- Pending episode-selection requests now stored in `settings.db` (`pending_requests` table) instead of JSON files in `data/pending_requests/`
-- `migrate_pending_requests_from_files()` runs automatically on startup — existing users' pending requests are migrated with no action required
-- All create/read/delete paths in `episeerr.py` updated: `add_pending_request`, `get_pending_request`, `get_all_pending_requests`, `delete_pending_request` (from `settings_db.py`)
-- Jellyseerr coordination file (`jellyseerr-{tvdb_id}.json`) remains file-based — it is cross-process handshake state, not a UI request
-- Fixes: pending requests survive container restarts; no more "Permission denied" on file cleanup; no more stale files with `timestamp` vs `created_at` mismatch
-
-## v3.5.2
-
-### ⚡ Retry/backoff on external API calls
-- Added shared `http` session in `episeerr_utils.py` backed by `HTTPAdapter` with `urllib3.Retry`
-- 3 retries with exponential backoff (1s, 2s, 4s) on connection errors and 5xx responses
-- Status-code retries limited to GET/PUT (idempotent); POST/DELETE only retry on connection-level failures to avoid double-writes
-- Covers 429, 500, 502, 503, 504 response codes
-- Applied across `episeerr.py`, `episeerr_utils.py`, `media_processor.py`, and all integrations (Plex, Jellyfin, Emby, Tautulli, Sonos)
-
-## v3.5.1
-
-### ⚡ Caching
-- `load_config()` now caches config in memory for 30s — reduces repeated JSON reads on busy webhook paths; cache is invalidated on every `save_config()` call
-- `get_sonarr_tags()` added to `episeerr_utils.py` with a 60s in-memory cache — all tag lookups (`create_episeerr_default_tag`, `create_episeerr_select_tag`, `get_or_create_rule_tag_id`, `get_tag_mapping`) now share one cached fetch instead of hitting the Sonarr API independently; cache invalidated on tag create
-
-### 🗑️ Removed Jellyseerr Auto-Delete
-- Removed automatic Jellyseerr request deletion on Sonarr webhook processing — request cancellation was happening before the activity event was saved, causing race conditions and unintended deletions
-
-### 🔧 Drift Detection Consolidation
-- Added `reconcile_series_drift(series_id, config)` to `episeerr_utils.py` as the single canonical drift correction function
-- Handles all cases: tag matches config (no-op), tag differs (move config to match), no tag (restore from config), series not in config (orphaned tag recovery)
-- Replaced 6+ independent copies across Tautulli, Plex, Jellyfin, Emby, Sonarr webhook, and media_processor
+### 🏗️ Refactor
+- Sonarr webhook handlers extracted to `webhooks.py` (~700 lines out of `episeerr.py`)
+- Drift detection consolidated to a single canonical `reconcile_series_drift()` function
 
 ### 🐛 Fixes
-- **Sonarr webhook double-correction** — drift block was running twice back-to-back; second run operated on stale in-memory config and could corrupt the series rule assignment
-- **Jellyfin and Emby** — `rule` was not passed in the temp file payload to media_processor, so drift corrections made before subprocess spawn were thrown away
-- **Orphaned recovery** — series recovered from a Sonarr tag were added to config with empty `{}` metadata in some paths; now always sets `activity_date` to prevent immediate dormant cleanup
-- **`process_watch_event()`** — was calling `episeerr_utils.move_series_in_config` which doesn't exist on that module; now uses canonical function
-- **Startup crash** — dangling `@app.before_request` decorator left above `@app.route('/setup')` after a refactor caused `setup()` to run as a before-request hook on every request, serving the setup page for all routes
+- Sonarr webhook drift correction was running twice; second pass corrupted rule assignment
+- Jellyfin/Emby: rule not passed to media_processor subprocess — drift corrections were lost
+- Startup crash when `@app.before_request` decorator was left on the setup route
+- Jellyseerr auto-delete removed — was firing before activity was saved, causing race conditions
+
+### 📄 Docs
+- README and in-app documentation updated to reflect the three add paths and correct delay profile scope
 
 ## v3.5.0
 
