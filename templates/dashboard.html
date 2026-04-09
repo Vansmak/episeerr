@@ -131,6 +131,30 @@
   </div>
 </div>
 
+<!-- Watchlist Detail Modal -->
+<div class="modal fade" id="watchlistDetailModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark text-light border-secondary">
+      <div class="modal-header border-secondary pb-2">
+        <h5 class="modal-title" id="wdModalTitle">Details</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="wdModalLoading" class="text-center py-4">
+          <div class="spinner-border spinner-border-sm text-primary" role="status"></div>
+        </div>
+        <div id="wdModalContent" style="display:none;">
+          <img id="wdModalPoster" src="" alt="" class="w-100" style="max-height:300px;object-fit:cover;object-position:top;">
+          <div class="p-3">
+            <p id="wdModalMeta" class="text-muted small mb-2"></p>
+            <p id="wdModalOverview" class="small mb-0"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <style>
 /* Mobile overflow fix */
 @media (max-width: 768px) {
@@ -683,6 +707,42 @@ function loadPlexWatchlist() {
             }
         })
         .catch(() => {}); // Watchlist unavailable — section stays hidden
+}
+
+function openWatchlistDetail(el) {
+    const tmdbId = el?.dataset?.tmdbId;
+    const mediaType = el?.dataset?.type || 'movie';
+    if (!tmdbId) return;
+
+    const modal = new bootstrap.Modal(document.getElementById('watchlistDetailModal'));
+    document.getElementById('wdModalTitle').textContent = el.querySelector('.watchlist-title')?.textContent || '';
+    document.getElementById('wdModalLoading').style.display = '';
+    document.getElementById('wdModalContent').style.display = 'none';
+    modal.show();
+
+    // Normalise type: Plex uses "show" for TV, TMDB uses "tv"
+    const tmdbType = mediaType === 'show' ? 'tv' : 'movie';
+    fetch(`/api/discover/details?id=${encodeURIComponent(tmdbId)}&type=${tmdbType}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+            if (!data) return;
+            document.getElementById('wdModalTitle').textContent = data.title || data.name || '';
+            const poster = data.poster_path
+                ? `https://image.tmdb.org/t/p/w500${data.poster_path}`
+                : '/static/placeholder.png';
+            document.getElementById('wdModalPoster').src = poster;
+            document.getElementById('wdModalPoster').alt = data.title || data.name || '';
+            const year = (data.release_date || data.first_air_date || '').slice(0, 4);
+            const rating = data.vote_average ? `★ ${data.vote_average.toFixed(1)}` : '';
+            const genres = (data.genres || []).map(g => g.name).join(', ');
+            document.getElementById('wdModalMeta').textContent = [year, rating, genres].filter(Boolean).join(' · ');
+            document.getElementById('wdModalOverview').textContent = data.overview || 'No overview available.';
+            document.getElementById('wdModalLoading').style.display = 'none';
+            document.getElementById('wdModalContent').style.display = '';
+        })
+        .catch(() => {
+            document.getElementById('wdModalLoading').innerHTML = '<p class="text-muted small py-2">Could not load details.</p>';
+        });
 }
 
 function plexRemoveFromWatchlist(badge) {

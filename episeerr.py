@@ -700,11 +700,13 @@ def manage_quick_links():
 
 @app.route('/iframe/<int:service_id>')
 def iframe_view(service_id):
-    """Display a service in an iframe"""
+    """Display a service in an iframe.
+    Optional ?url= param allows opening a deep-link within the service instead of its root URL.
+    The provided URL must start with the service's configured base URL for security.
+    """
     from settings_db import get_quick_link_by_id
-    
-    service = get_quick_link_by_id(service_id)
 
+    service = get_quick_link_by_id(service_id)
     if not service:
         return "Service not found", 404
 
@@ -713,7 +715,23 @@ def iframe_view(service_id):
     if not service.get('open_in_iframe'):
         return redirect(smart_url)
 
-    return render_template('iframe_view.html', service={**service, 'url': smart_url})
+    # Allow a specific deep-link via ?path=/series/foo (preferred) or ?url=http://...
+    deep_path = request.args.get('path', '').strip()
+    deep_url  = request.args.get('url', '').strip()
+
+    if deep_path and deep_path.startswith('/') and '..' not in deep_path:
+        display_url = smart_url.rstrip('/') + deep_path
+    elif deep_url:
+        # Accept if it matches any configured base URL for this service
+        base_urls = [u for u in [service.get('url', ''), service.get('alternate_url', ''), smart_url] if u]
+        if any(deep_url.startswith(b.rstrip('/')) for b in base_urls):
+            display_url = deep_url
+        else:
+            display_url = smart_url
+    else:
+        display_url = smart_url
+
+    return render_template('iframe_view.html', service={**service, 'url': display_url})
 
 
 @app.route('/api/services-sidebar')

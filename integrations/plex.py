@@ -2304,10 +2304,11 @@ class PlexIntegration(ServiceIntegration):
                         if rating_key:
                             type_badge_attrs = f'onclick="plexRemoveFromWatchlist(this)" title="Remove from watchlist" style="cursor:pointer;" data-rating-key="{rating_key}"'
 
+                        tmdb_id = item.get('tmdb_id', '')
                         items_html += f'''
-                        <div class="watchlist-item" data-status="{status}" data-type="{media_type}" data-rating-key="{rating_key}">
+                        <div class="watchlist-item" data-status="{status}" data-type="{media_type}" data-rating-key="{rating_key}" data-tmdb-id="{tmdb_id or ''}">
                             <div class="watchlist-poster-wrap">
-                                <img src="{thumb}" class="watchlist-poster" alt="{title}">
+                                <img src="{thumb}" class="watchlist-poster" alt="{title}" style="cursor:pointer;" onclick="openWatchlistDetail(this.closest('.watchlist-item'))">
                                 <span class="watchlist-type-badge" {type_badge_attrs}>
                                     <i class="fas {type_icon}"></i>
                                 </span>

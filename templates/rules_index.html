@@ -219,11 +219,43 @@ let   allMoviesData = [];
 let   moviesLoaded  = false;
 let   currentTab    = localStorage.getItem('episeerr-library-tab') || 'series';
 let   currentSort   = { column: 'title', direction: 'asc' };
+let   qlByName      = {};   // name → quick-link entry (for iframe detection)
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Load quick-links so service links can honour open_in_iframe
+  fetch('/api/quick-links')
+    .then(r => r.ok ? r.json() : {})
+    .then(data => {
+      ((data && data.links) || []).forEach(l => { qlByName[(l.name || '').toLowerCase()] = l; });
+    })
+    .catch(() => {});
   switchTab(currentTab, false);
   setupEventListeners();
 });
+
+// Build an anchor {href, target} for a service link.
+// Uses iframe if the matching quick-link has open_in_iframe set.
+// Passes the path portion only (?path=) so the server can pair it with
+// the correct hostname regardless of which base URL SONARR_URL/RADARR_URL uses.
+function buildServiceLink(serviceName, specificUrl) {
+  const ql = qlByName[(serviceName || '').toLowerCase()];
+  if (ql && ql.open_in_iframe && ql.id) {
+    // Try to extract just the path by stripping any known base URL
+    let path = null;
+    for (const base of [ql.url, ql.alternate_url].filter(Boolean)) {
+      const b = base.replace(/\/$/, '');
+      if (specificUrl.startsWith(b)) {
+        path = specificUrl.slice(b.length) || '/';
+        break;
+      }
+    }
+    const dest = path && path.startsWith('/')
+      ? `/iframe/${ql.id}?path=${encodeURIComponent(path)}`
+      : `/iframe/${ql.id}?url=${encodeURIComponent(specificUrl)}`;
+    return { href: dest, target: '_self' };
+  }
+  return { href: specificUrl, target: '_blank' };
+}
 
 // ── Tab switching ──────────────────────────────────────────────────────
 function switchTab(tab, save = true) {
@@ -437,9 +469,8 @@ function openSeriesDrawer(seriesId) {
       </div>
 
       <div class="d-flex gap-2 mt-3">
-        <a href="${sonarrLink}" target="_blank" class="btn btn-sm btn-outline-primary flex-grow-1">
-          <i class="fas fa-external-link-alt me-1"></i>Open in Sonarr
-        </a>
+        ${(() => { const sl = buildServiceLink('sonarr', sonarrLink); return `<a href="${sl.href}" target="${sl.target}" class="btn btn-sm btn-outline-primary flex-grow-1"><i class="fas fa-external-link-alt me-1"></i>Open in Sonarr</a>`; })()}
+
         <a href="/api/send-to-selection/${s.id}" class="btn btn-sm btn-primary flex-grow-1">
           <i class="fas fa-th-list me-1"></i>Select Episodes
         </a>
@@ -488,9 +519,7 @@ function openMovieDrawer(movieId) {
       </div>
 
       <div class="mt-3">
-        <a href="${radarrLink}" target="_blank" class="btn btn-sm btn-outline-info w-100">
-          <i class="fas fa-external-link-alt me-1"></i>Open in Radarr
-        </a>
+        ${(() => { const rl = buildServiceLink('radarr', radarrLink); return `<a href="${rl.href}" target="${rl.target}" class="btn btn-sm btn-outline-info w-100"><i class="fas fa-external-link-alt me-1"></i>Open in Radarr</a>`; })()}
       </div>
     </div>`;
 
