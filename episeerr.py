@@ -1,4 +1,4 @@
-__version__ = "3.4.0"
+__version__ = "3.5.7"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -62,7 +62,7 @@ load_dotenv()
 BASE_DIR = os.getcwd()
 
 # Initialize settings database
-from settings_db import get_sonarr_config, init_settings_db
+from settings_db import get_sonarr_config, get_radarr_config, init_settings_db
 init_settings_db()
 
 # Sonarr variables (with DB support)
@@ -644,17 +644,17 @@ def save_service_config(service):
         
         elif service == 'tmdb':
             apikey = data.get('tmdb-apikey')
-            
+
             if not apikey:
                 return jsonify({'status': 'error', 'message': 'API key required'}), 400
-            
+
             save_service('tmdb', 'default', '', apikey)
-            
+
             return jsonify({
                 'status': 'success',
                 'message': 'TMDB saved successfully'
             })
-        
+
         else:
             return jsonify({
                 'status': 'error',
@@ -1901,12 +1901,16 @@ def series_management():  # Changed from index to avoid confusion
         series['assigned_rule'] = rules_mapping.get(str(series['id']), 'None')
     all_series.sort(key=lambda x: x.get('title', '').lower())
     
-    return render_template('rules_index.html', 
+    radarr_cfg = get_radarr_config()
+    radarr_url = radarr_cfg['url'] if radarr_cfg else ''
+
+    return render_template('rules_index.html',
                          config=config,
                          all_series=all_series,
                          sonarr_stats=sonarr_stats,
                          SONARR_URL=sonarr_url,
                          SONARR_API_KEY=sonarr_preferences['SONARR_API_KEY'],
+                         RADARR_URL=radarr_url,
                          current_rule=request.args.get('rule', list(config['rules'].keys())[0] if config['rules'] else 'default'))
 
 # Add new API route for real-time stats updates
@@ -1926,6 +1930,574 @@ def get_sonarr_stats_api():
             'message': str(e)
         }), 500
     
+
+# ============================================================================
+# RADARR API PROXY ROUTES
+# ============================================================================
+
+def _radarr_headers():
+    cfg = get_radarr_config()
+    if not cfg or not cfg.get('url') or not cfg.get('api_key'):
+        return None, None
+    return cfg, {'X-Api-Key': cfg['api_key'], 'Content-Type': 'application/json'}
+
+
+@app.route('/api/radarr/movies')
+def radarr_movies():
+    """Fetch all movies from Radarr with quality profile names mapped."""
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+    try:
+        base = cfg['url'].rstrip('/')
+        movies_resp = http.get(f"{base}/api/v3/movie", headers=headers, timeout=15)
+        movies_resp.raise_for_status()
+        movies = movies_resp.json()
+
+        # Fetch quality profiles for mapping
+        qp_resp = http.get(f"{base}/api/v3/qualityprofile", headers=headers, timeout=10)
+        qp_map = {}
+        if qp_resp.ok:
+            qp_map = {p['id']: p['name'] for p in qp_resp.json()}
+
+        result = []
+        for m in movies:
+            poster = next(
+                (img['remoteUrl'] for img in m.get('images', []) if img.get('coverType') == 'poster'),
+                None
+            )
+            result.append({
+                'id': m['id'],
+                'title': m.get('title', ''),
+                'year': m.get('year', ''),
+                'overview': m.get('overview', ''),
+                'genres': m.get('genres', []),
+                'status': m.get('status', ''),
+                'hasFile': m.get('hasFile', False),
+                'monitored': m.get('monitored', False),
+                'sizeOnDisk': m.get('sizeOnDisk', 0),
+                'path': m.get('path', ''),
+                'qualityProfileId': m.get('qualityProfileId'),
+                'qualityProfileName': qp_map.get(m.get('qualityProfileId'), 'Unknown'),
+                'tmdbId': m.get('tmdbId'),
+                'poster': poster,
+                'titleSlug': m.get('titleSlug', ''),
+            })
+        result.sort(key=lambda x: x['title'].lower())
+        return jsonify({'success': True, 'movies': result})
+    except Exception as e:
+        app.logger.error(f"Error fetching Radarr movies: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/radarr/quality-profiles')
+def radarr_quality_profiles():
+    """Fetch quality profiles from Radarr."""
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+    try:
+        resp = http.get(f"{cfg['url'].rstrip('/')}/api/v3/qualityprofile", headers=headers, timeout=10)
+        resp.raise_for_status()
+        profiles = [{'id': p['id'], 'name': p['name']} for p in resp.json()]
+        return jsonify({'success': True, 'profiles': profiles})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/radarr/root-folders')
+def radarr_root_folders():
+    """Fetch root folders from Radarr."""
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+    try:
+        resp = http.get(f"{cfg['url'].rstrip('/')}/api/v3/rootfolder", headers=headers, timeout=10)
+        resp.raise_for_status()
+        folders = [{'path': f['path'], 'freeSpace': f.get('freeSpace', 0)} for f in resp.json()]
+        return jsonify({'success': True, 'folders': folders})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/radarr/add-movie', methods=['POST'])
+def radarr_add_movie():
+    """Look up by TMDB ID and add movie to Radarr."""
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+    data = request.json or {}
+    tmdb_id = data.get('tmdb_id')
+    quality_profile_id = data.get('quality_profile_id')
+    root_folder_path = data.get('root_folder_path')
+    if not all([tmdb_id, quality_profile_id, root_folder_path]):
+        return jsonify({'success': False, 'error': 'tmdb_id, quality_profile_id, and root_folder_path required'}), 400
+    try:
+        base = cfg['url'].rstrip('/')
+        lookup = http.get(f"{base}/api/v3/movie/lookup/tmdb", headers=headers,
+                          params={'tmdbId': tmdb_id}, timeout=10)
+        lookup.raise_for_status()
+        movie_data = lookup.json()
+        if not movie_data:
+            return jsonify({'success': False, 'error': 'Movie not found on TMDB lookup'}), 404
+
+        payload = {
+            'title': movie_data.get('title'),
+            'titleSlug': movie_data.get('titleSlug'),
+            'qualityProfileId': int(quality_profile_id),
+            'rootFolderPath': root_folder_path,
+            'tmdbId': tmdb_id,
+            'images': movie_data.get('images', []),
+            'monitored': True,
+            'addOptions': {'searchForMovie': True},
+        }
+        add_resp = http.post(f"{base}/api/v3/movie", headers=headers, json=payload, timeout=15)
+        if add_resp.status_code in (200, 201):
+            _plex_watchlist_add_silent(tmdb_id, 'movie', (movie_data or {}).get('title', ''))
+            return jsonify({'success': True, 'movie': add_resp.json()})
+        return jsonify({'success': False, 'error': add_resp.text}), add_resp.status_code
+    except Exception as e:
+        app.logger.error(f"Error adding movie to Radarr: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# SONARR LOOKUP/ADD ROUTES (for Discover)
+# ============================================================================
+
+@app.route('/api/sonarr/quality-profiles')
+def sonarr_quality_profiles():
+    """Fetch quality profiles from Sonarr."""
+    prefs = sonarr_utils.load_preferences()
+    sonarr_url = prefs.get('SONARR_URL')
+    api_key = prefs.get('SONARR_API_KEY')
+    if not sonarr_url or not api_key:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+    try:
+        headers = {'X-Api-Key': api_key}
+        resp = http.get(f"{sonarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
+        resp.raise_for_status()
+        profiles = [{'id': p['id'], 'name': p['name']} for p in resp.json()]
+        return jsonify({'success': True, 'profiles': profiles})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sonarr/root-folders')
+def sonarr_root_folders():
+    """Fetch root folders from Sonarr."""
+    prefs = sonarr_utils.load_preferences()
+    sonarr_url = prefs.get('SONARR_URL')
+    api_key = prefs.get('SONARR_API_KEY')
+    if not sonarr_url or not api_key:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+    try:
+        headers = {'X-Api-Key': api_key}
+        resp = http.get(f"{sonarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
+        resp.raise_for_status()
+        folders = [{'path': f['path'], 'freeSpace': f.get('freeSpace', 0)} for f in resp.json()]
+        return jsonify({'success': True, 'folders': folders})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sonarr/add-series', methods=['POST'])
+def sonarr_add_series():
+    """Add a series to Sonarr using default quality profile / root folder, then
+    redirect straight to episode selection. No quality/folder prompt needed."""
+    prefs = sonarr_utils.load_preferences()
+    sonarr_url = prefs.get('SONARR_URL')
+    api_key = prefs.get('SONARR_API_KEY')
+    if not sonarr_url or not api_key:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+    req_data = request.json or {}
+    tmdb_id = req_data.get('tmdb_id')
+    if not tmdb_id:
+        return jsonify({'success': False, 'error': 'tmdb_id required'}), 400
+    try:
+        headers = {'X-Api-Key': api_key, 'Content-Type': 'application/json'}
+
+        # Already in Sonarr via a previous pending entry → go straight to selection
+        existing = find_pending_request_by_tmdb(tmdb_id)
+        if existing and existing.get('series_id'):
+            return jsonify({'success': True,
+                            'redirect_url': f'/api/send-to-selection/{existing["series_id"]}'})
+
+        # Look up series in Sonarr
+        lookup = http.get(f"{sonarr_url}/api/v3/series/lookup",
+                          headers=headers, params={'term': f'tmdb:{tmdb_id}'}, timeout=10)
+        lookup.raise_for_status()
+        results = lookup.json()
+        if not results:
+            return jsonify({'success': False, 'error': 'Series not found in Sonarr lookup'}), 404
+
+        series_meta = results[0]
+        title   = series_meta.get('title', 'Unknown')
+        tvdb_id = series_meta.get('tvdbId')
+
+        # Series is already in the Sonarr library (lookup returns id > 0)
+        existing_id = series_meta.get('id') or 0
+        if existing_id > 0:
+            _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+            return jsonify({'success': True,
+                            'redirect_url': f'/api/send-to-selection/{existing_id}'})
+
+        # Fetch Sonarr defaults (first quality profile + first root folder)
+        qp_resp = http.get(f"{sonarr_url}/api/v3/qualityprofile",
+                           headers={'X-Api-Key': api_key}, timeout=10)
+        rf_resp = http.get(f"{sonarr_url}/api/v3/rootfolder",
+                           headers={'X-Api-Key': api_key}, timeout=10)
+        quality_profiles = qp_resp.json() if qp_resp.ok else []
+        root_folders     = rf_resp.json() if rf_resp.ok else []
+        if not quality_profiles or not root_folders:
+            return jsonify({'success': False,
+                            'error': 'Sonarr has no quality profiles or root folders configured'}), 503
+        quality_profile_id = quality_profiles[0]['id']
+        root_folder_path   = root_folders[0]['path']
+
+        # Add to Sonarr (unmonitored — selection page controls what actually downloads)
+        payload = {
+            'title':            series_meta.get('title'),
+            'titleSlug':        series_meta.get('titleSlug'),
+            'qualityProfileId': quality_profile_id,
+            'rootFolderPath':   root_folder_path,
+            'tvdbId':           tvdb_id,
+            'images':           series_meta.get('images', []),
+            'seasons':          series_meta.get('seasons', []),
+            'monitored':        False,
+            'addOptions': {'searchForMissingEpisodes': False, 'monitor': 'none'},
+        }
+        add_resp = http.post(f"{sonarr_url}/api/v3/series",
+                              headers=headers, json=payload, timeout=15)
+        if add_resp.status_code in (200, 201):
+            series_id = add_resp.json()['id']
+            app.logger.info(f"Added '{title}' to Sonarr (ID {series_id}) → directing to selection")
+            _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+            return jsonify({'success': True,
+                            'redirect_url': f'/api/send-to-selection/{series_id}'})
+
+        app.logger.error(f"Sonarr add returned {add_resp.status_code}: {add_resp.text[:200]}")
+        return jsonify({'success': False,
+                        'error': f'Sonarr returned {add_resp.status_code}'}), 502
+
+    except Exception as e:
+        app.logger.error(f"Error adding series: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sonarr/prepare-series', methods=['POST'])
+def sonarr_prepare_series():
+    """Prepare a series for the selection flow without adding to Sonarr yet.
+    Stores a pending request with Sonarr lookup data; Sonarr add is deferred
+    until the user confirms their rule/season choices."""
+    prefs = sonarr_utils.load_preferences()
+    sonarr_url = prefs.get('SONARR_URL')
+    api_key = prefs.get('SONARR_API_KEY')
+    if not sonarr_url or not api_key:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+    req_data = request.json or {}
+    tmdb_id = req_data.get('tmdb_id')
+    if not tmdb_id:
+        return jsonify({'success': False, 'error': 'tmdb_id required'}), 400
+    try:
+        headers = {'X-Api-Key': api_key, 'Content-Type': 'application/json'}
+
+        # Pending request already exists — go straight to selection
+        existing = find_pending_request_by_tmdb(tmdb_id)
+        if existing:
+            return jsonify({'success': True, 'tmdb_id': tmdb_id})
+
+        # Look up series in Sonarr
+        lookup = http.get(f"{sonarr_url}/api/v3/series/lookup",
+                          headers=headers, params={'term': f'tmdb:{tmdb_id}'}, timeout=10)
+        lookup.raise_for_status()
+        results = lookup.json()
+        if not results:
+            return jsonify({'success': False, 'error': 'Series not found in Sonarr lookup'}), 404
+
+        series_meta = results[0]
+        title = series_meta.get('title', 'Unknown')
+        tvdb_id = series_meta.get('tvdbId')
+
+        # Series already in Sonarr library — redirect straight to selection
+        # (Plex watchlist add deferred to confirmation, same as new series)
+        existing_id = series_meta.get('id') or 0
+        if existing_id > 0:
+            return jsonify({'success': True,
+                            'redirect_url': f'/api/send-to-selection/{existing_id}'})
+
+        # Fetch Sonarr defaults (first quality profile + first root folder)
+        qp_resp = http.get(f"{sonarr_url}/api/v3/qualityprofile",
+                           headers={'X-Api-Key': api_key}, timeout=10)
+        rf_resp = http.get(f"{sonarr_url}/api/v3/rootfolder",
+                           headers={'X-Api-Key': api_key}, timeout=10)
+        quality_profiles = qp_resp.json() if qp_resp.ok else []
+        root_folders = rf_resp.json() if rf_resp.ok else []
+        if not quality_profiles or not root_folders:
+            return jsonify({'success': False,
+                            'error': 'Sonarr has no quality profiles or root folders configured'}), 503
+
+        quality_profile_id = quality_profiles[0]['id']
+        root_folder_path = root_folders[0]['path']
+
+        # Store pending request — series_id left None, Sonarr add deferred to confirmation
+        request_id = f"search-{tmdb_id}-{int(time.time())}"
+        pending = {
+            'id': request_id,
+            'series_id': None,
+            'title': title,
+            'tmdb_id': tmdb_id,
+            'tvdb_id': tvdb_id,
+            'source': 'search',
+            'source_name': 'Search',
+            'needs_season_selection': True,
+            'needs_attention': True,
+            'quality_profile_id': quality_profile_id,
+            'root_folder_path': root_folder_path,
+            'sonarr_lookup': series_meta,
+        }
+        add_pending_request(pending)
+        app.logger.info(f"Prepared '{title}' (tmdb:{tmdb_id}) for selection — Sonarr add deferred")
+        return jsonify({'success': True, 'tmdb_id': tmdb_id})
+
+    except Exception as e:
+        app.logger.error(f"Error preparing series: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# DISCOVER API (search + details — browse routes removed)
+# ============================================================================
+
+@app.route('/api/discover/details')
+def discover_details():
+    """Fetch full TMDB details + trailer for a single item."""
+    media_type = request.args.get('type')   # movie | tv
+    tmdb_id    = request.args.get('id')
+    if not media_type or not tmdb_id or media_type not in ('movie', 'tv'):
+        return jsonify({'success': False, 'error': 'type and id required'}), 400
+    if not TMDB_API_KEY:
+        return jsonify({'success': False, 'error': 'TMDB not configured'}), 503
+    try:
+        details = get_tmdb_endpoint(f'{media_type}/{tmdb_id}',
+                                    {'append_to_response': 'videos,credits'})
+        if not details:
+            return jsonify({'success': False, 'error': 'Not found'}), 404
+
+        # Pick best trailer: official YouTube trailer first
+        trailer_url = None
+        for v in details.get('videos', {}).get('results', []):
+            if v.get('site') == 'YouTube' and v.get('type') == 'Trailer' and v.get('official'):
+                trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                break
+        if not trailer_url:
+            for v in details.get('videos', {}).get('results', []):
+                if v.get('site') == 'YouTube' and v.get('type') == 'Trailer':
+                    trailer_url = f"https://www.youtube.com/watch?v={v['key']}"
+                    break
+
+        # Top cast (max 6)
+        cast = [
+            {'name': m['name'], 'character': m.get('character', '')}
+            for m in details.get('credits', {}).get('cast', [])[:6]
+        ]
+
+        genres = [g['name'] for g in details.get('genres', [])]
+        runtime = details.get('runtime') or (
+            details.get('episode_run_time') or [None])[0]
+
+        return jsonify({
+            'success': True,
+            'title':       details.get('title') or details.get('name', ''),
+            'year':        (details.get('release_date') or details.get('first_air_date') or '')[:4],
+            'overview':    details.get('overview', ''),
+            'poster':      f"https://image.tmdb.org/t/p/w342{details['poster_path']}" if details.get('poster_path') else None,
+            'backdrop':    f"https://image.tmdb.org/t/p/w780{details['backdrop_path']}" if details.get('backdrop_path') else None,
+            'vote_average': round(details.get('vote_average', 0), 1),
+            'genres':      genres,
+            'runtime':     runtime,
+            'trailer_url': trailer_url,
+            'cast':        cast,
+        })
+    except Exception as e:
+        app.logger.error(f"Discover details error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+
+@app.route('/api/discover/search')
+def discover_search():
+    """TMDB multi search, cross-referenced against Sonarr and Radarr."""
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify({'success': False, 'error': 'Query required'}), 400
+    if not TMDB_API_KEY:
+        return jsonify({'success': False, 'error': 'TMDB API key not configured'}), 503
+    try:
+        data = get_tmdb_endpoint('search/multi', params={'query': q})
+        if not data:
+            return jsonify({'success': False, 'error': 'TMDB request failed'}), 500
+        results = _enrich_tmdb_results(data.get('results', []))
+        return jsonify({'success': True, 'results': results})
+    except Exception as e:
+        app.logger.error(f"Discover search error: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/plex/debug-search')
+def plex_debug_search():
+    """Temporary: dump raw Plex discover search response for a query."""
+    from settings_db import get_service as _get_svc
+    import requests as _req
+    svc = _get_svc('plex', 'default') or {}
+    api_key = svc.get('api_key', '')
+    query = request.args.get('q', 'Severance')
+    resp = _req.get(
+        'https://discover.provider.plex.tv/library/search',
+        headers={'X-Plex-Token': api_key},
+        params={'query': query, 'limit': 5, 'includeGuids': 1, 'searchTypes': 'movies,tv'},
+        timeout=10,
+    )
+    return f"<pre>Status: {resp.status_code}\n\nHeaders:\n{dict(resp.headers)}\n\nBody:\n{resp.text[:3000]}</pre>"
+
+
+@app.route('/api/plex/watchlist-enabled')
+def plex_watchlist_enabled():
+    """Return whether Plex is configured so the Discover page can show the watchlist button."""
+    try:
+        from settings_db import get_service as _get_svc
+        svc = _get_svc('plex', 'default') or {}
+        return jsonify({'enabled': bool(svc.get('api_key', ''))})
+    except Exception:
+        return jsonify({'enabled': False})
+
+
+def _plex_watchlist_add_silent(tmdb_id: str, media_type: str, title: str = ''):
+    """Add to Plex watchlist as a background side-effect of a Discover add."""
+    try:
+        from settings_db import get_service as _get_svc
+        from integrations.plex import PlexIntegration
+        svc = _get_svc('plex', 'default') or {}
+        api_key = svc.get('api_key', '')
+        if not api_key:
+            return
+        ok, detail = PlexIntegration().add_to_watchlist(api_key, str(tmdb_id), media_type, title)
+        if ok:
+            app.logger.info(f"Added TMDB {tmdb_id} ({media_type}) to Plex watchlist")
+        else:
+            app.logger.debug(f"Plex watchlist add skipped/failed for TMDB {tmdb_id}: {detail}")
+    except Exception as e:
+        app.logger.debug(f"Plex watchlist add error for TMDB {tmdb_id}: {e}")
+
+
+@app.route('/api/plex/add-to-watchlist', methods=['POST'])
+def plex_add_to_watchlist():
+    """Add an item to the user's Plex watchlist by TMDB ID."""
+    try:
+        from settings_db import get_service as _get_svc
+        from integrations.plex import PlexIntegration
+        svc = _get_svc('plex', 'default') or {}
+        api_key = svc.get('api_key', '')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'Plex not configured'}), 503
+
+        data = request.json or {}
+        tmdb_id    = str(data.get('tmdb_id', ''))
+        media_type = data.get('media_type', 'movie')
+        title      = data.get('title', '')
+        if not tmdb_id:
+            return jsonify({'success': False, 'error': 'tmdb_id required'}), 400
+
+        ok, detail = PlexIntegration().add_to_watchlist(api_key, tmdb_id, media_type, title)
+        if ok:
+            return jsonify({'success': True})
+        return jsonify({'success': False, 'error': detail}), 502
+    except Exception as e:
+        app.logger.error(f"Error adding to Plex watchlist: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _enrich_tmdb_results(items):
+    """Cross-reference TMDB results against Sonarr, Radarr, and pending discover queue."""
+    # Build lookup sets from Sonarr and Radarr
+    sonarr_by_tmdb = {}  # tmdb_id -> sonarr_series_id
+    radarr_by_tmdb = {}  # tmdb_id -> radarr_movie_id
+    pending_tmdb   = set()  # tmdb_ids queued from Discover but not yet in Sonarr
+
+    try:
+        prefs = sonarr_utils.load_preferences()
+        sonarr_url = prefs.get('SONARR_URL')
+        api_key = prefs.get('SONARR_API_KEY')
+        if sonarr_url and api_key:
+            headers = {'X-Api-Key': api_key}
+            resp = http.get(f"{sonarr_url}/api/v3/series", headers=headers, timeout=10)
+            if resp.ok:
+                for s in resp.json():
+                    if s.get('tmdbId'):
+                        sonarr_by_tmdb[int(s['tmdbId'])] = s['id']
+    except Exception:
+        pass
+
+    try:
+        cfg, headers = _radarr_headers()
+        if cfg:
+            resp = http.get(f"{cfg['url'].rstrip('/')}/api/v3/movie", headers=headers, timeout=10)
+            if resp.ok:
+                for m in resp.json():
+                    if m.get('tmdbId'):
+                        radarr_by_tmdb[int(m['tmdbId'])] = m['id']
+    except Exception:
+        pass
+
+    try:
+        for pr in get_all_pending_requests():
+            if pr.get('source') == 'discover' and pr.get('series_id') is None:
+                tid = pr.get('tmdb_id')
+                if tid:
+                    pending_tmdb.add(int(tid))
+    except Exception:
+        pass
+
+    enriched = []
+    for item in items:
+        media_type = item.get('media_type')
+        if media_type not in ('movie', 'tv'):
+            continue  # skip 'person' etc.
+
+        tmdb_id = item.get('id')
+        title = item.get('title') or item.get('name', '')
+        year_raw = item.get('release_date') or item.get('first_air_date') or ''
+        year = year_raw[:4] if year_raw else ''
+        poster_path = item.get('poster_path')
+        poster = f"https://image.tmdb.org/t/p/w342{poster_path}" if poster_path else None
+
+        in_library = False
+        library_id = None
+        is_pending = False
+        if media_type == 'tv' and tmdb_id in sonarr_by_tmdb:
+            in_library = True
+            library_id = sonarr_by_tmdb[tmdb_id]
+        elif media_type == 'movie' and tmdb_id in radarr_by_tmdb:
+            in_library = True
+            library_id = radarr_by_tmdb[tmdb_id]
+        elif media_type == 'tv' and tmdb_id in pending_tmdb:
+            is_pending = True
+
+        enriched.append({
+            'tmdb_id': tmdb_id,
+            'title': title,
+            'year': year,
+            'media_type': media_type,
+            'poster': poster,
+            'overview': item.get('overview', ''),
+            'genres': [],  # genre_ids only in search; skip for now
+            'vote_average': item.get('vote_average', 0),
+            'in_library': in_library,
+            'library_id': library_id,
+            'pending': is_pending,
+        })
+    return enriched
+
 
 @app.route('/create-rule', methods=['GET', 'POST'])
 def create_rule():
@@ -3149,7 +3721,46 @@ def apply_rule_to_selection():
             request_id = request_data.get('id')
 
         if not series_id:
-            return redirect(url_for('rules_page'))
+            # Deferred add: series was queued from Discover or Search without adding to Sonarr yet
+            if request_data and request_data.get('source') in ('discover', 'search'):
+                try:
+                    prefs = sonarr_utils.load_preferences()
+                    s_url = prefs.get('SONARR_URL')
+                    s_key = prefs.get('SONARR_API_KEY')
+                    if not s_url or not s_key:
+                        app.logger.error("Sonarr not configured — cannot add deferred series")
+                        return redirect(url_for('rules_page'))
+
+                    s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
+                    lookup_data = request_data.get('sonarr_lookup') or {}
+                    payload = {
+                        'title':            lookup_data.get('title'),
+                        'titleSlug':        lookup_data.get('titleSlug'),
+                        'qualityProfileId': int(request_data['quality_profile_id']),
+                        'rootFolderPath':   request_data['root_folder_path'],
+                        'tvdbId':           lookup_data.get('tvdbId'),
+                        'images':           lookup_data.get('images', []),
+                        'seasons':          lookup_data.get('seasons', []),
+                        'monitored':        False,
+                        'addOptions': {'searchForMissingEpisodes': False, 'monitor': 'none'},
+                    }
+                    add_resp = http.post(f"{s_url}/api/v3/series",
+                                         headers=s_headers, json=payload, timeout=15)
+                    if add_resp.status_code not in (200, 201):
+                        app.logger.error(f"Failed to add deferred series to Sonarr: {add_resp.text}")
+                        return redirect(url_for('rules_page'))
+
+                    new_series = add_resp.json()
+                    series_id = new_series['id']
+                    # Update pending request with new series_id so later steps work
+                    request_data['series_id'] = series_id
+                    add_pending_request(request_data)
+                    app.logger.info(f"Added '{request_data.get('title')}' to Sonarr (ID {series_id}) from {request_data.get('source')} queue")
+                except Exception as e:
+                    app.logger.error(f"Error adding deferred series to Sonarr: {e}")
+                    return redirect(url_for('rules_page'))
+            else:
+                return redirect(url_for('rules_page'))
 
         config = load_config()
 
@@ -3271,6 +3882,7 @@ def apply_rule_to_selection():
             app.logger.debug(f"Tag cleanup: {e}")
         
         app.logger.info(f"Applied rule '{rule_name}' to {request_data.get('title', 'series')}")
+        _plex_watchlist_add_silent(tmdb_id, 'tv', request_data.get('title', ''))
         return redirect(url_for('rules_page'))
 
     except Exception as e:
@@ -3300,6 +3912,38 @@ def select_episodes(tmdb_id):
             return render_template('error.html', message="No pending request found for this series")
         series_id = req.get('series_id')
         request_id = req.get('id')
+
+        # Deferred add: add to Sonarr now before episode selection
+        if not series_id and req.get('source') in ('discover', 'search'):
+            try:
+                prefs = sonarr_utils.load_preferences()
+                s_url = prefs.get('SONARR_URL')
+                s_key = prefs.get('SONARR_API_KEY')
+                if s_url and s_key:
+                    s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
+                    lookup_data = req.get('sonarr_lookup') or {}
+                    payload = {
+                        'title':            lookup_data.get('title'),
+                        'titleSlug':        lookup_data.get('titleSlug'),
+                        'qualityProfileId': int(req['quality_profile_id']),
+                        'rootFolderPath':   req['root_folder_path'],
+                        'tvdbId':           lookup_data.get('tvdbId'),
+                        'images':           lookup_data.get('images', []),
+                        'seasons':          lookup_data.get('seasons', []),
+                        'monitored':        False,
+                        'addOptions': {'searchForMissingEpisodes': False, 'monitor': 'none'},
+                    }
+                    add_resp = http.post(f"{s_url}/api/v3/series",
+                                         headers=s_headers, json=payload, timeout=15)
+                    if add_resp.status_code in (200, 201):
+                        new_series = add_resp.json()
+                        series_id = new_series['id']
+                        req['series_id'] = series_id
+                        add_pending_request(req)
+                        app.logger.info(f"Added '{req.get('title')}' to Sonarr (ID {series_id}) for episode selection")
+            except Exception as e:
+                app.logger.error(f"Error adding discover series to Sonarr: {e}")
+
         app.logger.info(f"Found matching request: series_id={series_id}, request_id={request_id}")
         
         # Get TV show details from TMDB
@@ -3451,8 +4095,9 @@ def process_episode_selection():
             # Clean up request
             delete_pending_request(request_id)
             app.logger.info(f"Removed pending request: {request_id}")
-            
-            # Prepare result message
+
+            _plex_watchlist_add_silent(
+                request_data.get('tmdb_id', ''), 'tv', request_data.get('title', ''))
             return redirect(url_for('rules_page'))
 
         else:

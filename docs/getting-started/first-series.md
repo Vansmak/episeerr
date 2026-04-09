@@ -3,6 +3,29 @@
 
 Step-by-step walkthrough of adding a series and seeing Episeerr in action.
 
+## Method 0: Search within Episeerr (Simplest)
+
+The easiest path — nothing touches Sonarr until you confirm.
+
+### Step 1: Search
+
+1. Open Episeerr: `http://your-server:5002`
+2. Use the **search bar** at the top to find a TV show by name
+3. Click **Add** on the result
+
+### Step 2: Make your selections
+
+The season/rule selection screen opens immediately.
+
+- Pick a **rule** from the dropdown (or select specific seasons/episodes)
+- Click **Apply Rule** or **Submit**
+
+### Step 3: Done
+
+Episeerr adds the series to Sonarr, applies the rule, and updates your Plex watchlist. If you cancel, nothing is written anywhere.
+
+---
+
 ## Method 1: Auto-Assign (Recommended)
 
 ### Step 1: Enable Auto-Assign

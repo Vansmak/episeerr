@@ -779,124 +779,103 @@ docker logs episeerr | grep "Stored.*request"
 
 ---
 
-### Add Series (Four Ways)
+### Adding Series
 
-#### **Method 1: Auto-Assign (Passive)**
-
-Best for: Letting Sonarr/Jellyseerr control initial downloads
-
-1. **Enable in Episeerr:**
-   - Settings → Global Settings
-   - Enable "Auto-assign new series to default rule"
-
-2. **Add series normally in Sonarr** (no tags)
-
-3. **Series automatically joins default rule**
-
-4. **Waits for first watch** before processing
-
-**Use case:** You request Season 3 from Jellyseerr → Let it download → Episeerr manages after first watch
+There are three paths into Episeerr, each with different behavior.
 
 ---
 
-#### **Method 2: Direct Rule Tags (Immediate)**
+#### **Path 1: From outside Episeerr (Sonarr, Seerr, nzb360, etc.)**
 
-Best for: Immediate processing with specific rules
+Episeerr intercepts series added to Sonarr via tags on the Sonarr webhook.
 
-1. **In Sonarr**, add series with tag `episeerr_[rule_name]`
-   - Example: `episeerr_binge_watcher`
-   - Example: `episeerr_one_at_a_time`
+| Tag | What happens |
+|-----|-------------|
+| `episeerr_<rulename>` | Processed immediately with that rule — GET/monitor applied, tag removed |
+| `episeerr_select` | Pending request created, delay profile holds all downloads until you confirm selections |
+| *(no tag, auto-assign on)* | Silently added to default rule, waits for first watch before doing anything |
 
-2. **Episeerr processes immediately:**
-   - Applies GET rule
-   - Monitors/searches episodes
-   - Removes tag
+> **`episeerr_select` requires a Sonarr delay profile** to hold downloads until you make your selection — see [Episode Selection setup](#episode-selection) below.
 
-**Use case:** You want a specific rule applied right away
-
----
-
-#### **Method 3: Manual Assignment**
-
-Best for: Existing series or manual control
-
-1. **Episeerr** → Series Management
-
-2. **Select series** → Choose rule → Assign
-
-**Use case:** Adding existing series to Episeerr
+**Use cases:** Add from Sonarr UI, request from Jellyseerr/Overseerr, add from nzb360
 
 ---
 
-#### **Method 4: Plex Watchlist Sync (Automatic)**
+#### **Path 2: Plex Watchlist Sync**
 
-Best for: Hands-off adding from Plex
-
-1. **Enable Plex Watchlist Sync** on the Setup page
-2. **Add a show** to your Plex watchlist
-3. On the next sync cycle, Episeerr creates a pending request for TV shows, or sends movies straight to Radarr
+1. **Enable** Plex Watchlist Sync on the Setup page
+2. **Add** a show or movie to your Plex watchlist
+3. On the next sync cycle:
+   - **TV shows** → added to Sonarr with `episeerr_select` tag → pending request created
+   - **Movies** → sent directly to Radarr
 
 **Use case:** Browse Plex Discover, add to watchlist, Episeerr handles the rest
 
 ---
 
+#### **Path 3: Search within Episeerr**
+
+1. Use the **search bar** in Episeerr to find a TV show by name
+2. Click **Add** on the result
+3. The **season/rule selection screen** opens immediately — nothing has been written to Sonarr yet
+4. Choose a rule and/or select specific seasons/episodes
+5. Click **Apply Rule** or **Submit** — only then does Episeerr add the series to Sonarr and update your Plex watchlist
+6. **Cancel** at any point → nothing is added anywhere
+
+No `episeerr_select` tag or delay profile needed — Episeerr drives the whole flow directly.
+
+**Movies** added via search go straight to Radarr with your default quality profile and root folder, and are added to your Plex watchlist immediately.
+
+---
+
+#### **Existing series: manual assignment**
+
+For series already in Sonarr — go to **Episeerr → Series Management**, select a series, choose a rule, and assign.
+
+---
+
 ### Episode Selection
 
-**Choose specific episodes manually across seasons.**
+**Choose specific episodes manually across seasons — or just pick a rule.**
 
-#### **Setup (One-time):**
+#### **One-time Sonarr setup (required for Path 1 and Path 2 only):**
+
+Without this, external adds with `episeerr_select` will start downloading immediately before you make your selection.
 
 1. **Sonarr** → Settings → Profiles → Release Profiles → Add
-
 2. **Configure:**
    - **Name:** Episeerr Episode Selection Delay
    - **Delay:** `10519200` (20 years)
    - **Tags:** `episeerr_select`
-
 3. **Save**
 
 <img width="720" height="608" alt="image" src="https://github.com/user-attachments/assets/c33f6443-d00c-4446-8d00-fddb1b42fff7" />
 
-```
-[Sonarr release profile configuration]
-[Shows delay field set to 10519200]
-```
+> **Not needed for Path 3 (search within Episeerr)** — Sonarr isn't touched until after you confirm.
 
-#### **Usage:**
+#### **Entering the selection flow:**
 
-**Method A: Sonarr tag (new series)**
-
-1. **Add series to Sonarr** with `episeerr_select` tag
-2. **Episeerr** → Pending Items → Select Seasons
-3. **Choose specific episodes**
-4. **Submit** → Only those episodes monitored
-
-**Method B: Series page icon (existing series)**
-
-1. **Episeerr** → Series (grid or manage view)
-2. Click the **list icon** on any poster (grid) or in the Actions column (table)
-3. You're taken straight to the selection page for that show
-
-**Method C: Plex Watchlist Sync**
-
-1. Add a TV show to your Plex watchlist
-2. On the next sync, a pending request is created automatically
-3. Go to **Pending Items** → Select Seasons and episodes
+| How | Entry point |
+|-----|------------|
+| Search within Episeerr → Add | Goes directly to selection screen |
+| Plex watchlist sync (TV) | Appears in **Pending Items** → click Select |
+| Add to Sonarr with `episeerr_select` tag | Appears in **Pending Items** → click Select |
+| Any series already in Sonarr | Click the **list icon** on the poster or in Series Management |
 
 ---
 
 ### Selection Flow and Rule Picker
 
-When a show enters the selection flow (from any method above), the season selection page shows a **rule dropdown** at the top.
-
-**Two options:**
+The season selection page shows a **rule dropdown** at the top regardless of how you arrived.
 
 | Option | What It Does |
 |--------|--------------|
-| **Apply Rule** | Assigns the rule for ongoing management — no immediate downloads; the rule governs future watch events |
-| **Select seasons/episodes below** | Manually choose what to download; the selected rule is still assigned for ongoing management |
+| **Apply Rule** | Assigns the rule — rule's GET logic runs immediately, ongoing management from there |
+| **Select seasons/episodes manually** | Pick exactly what to download; selected rule still handles ongoing management |
 
-**The rule dropdown pre-selects the show's current rule** if it already has one — so re-routing a series to a different rule is just a one-click change.
+**Cancel** → deletes the pending request, nothing is added to Sonarr or Plex watchlist.
+
+**The rule dropdown pre-selects the show's current rule** if it already has one — so re-routing a series is a one-click change.
 
 ---
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.5.7
+
+### 🔒 Defer Sonarr add and Plex watchlist until user confirms
+
+- When adding a series via Episeerr's search, nothing is written to Sonarr or Plex until the user completes rule/season selection and confirms
+- New `/api/sonarr/prepare-series` endpoint replaces the immediate `/api/sonarr/add-series` call — does a Sonarr lookup only, stores a pending request with `source='search'`
+- `apply_rule_to_selection` and `select_episodes` now handle `source='search'` the same as `source='discover'`: Sonarr add fires at confirmation, not before
+- Cancelling the selection screen deletes the pending request; Sonarr and Plex are untouched
+- Removed premature `_plex_watchlist_add_silent` call from the prepare step
+
+### 📄 Documentation cleanup
+- README "Add Series" section restructured around three clear paths (external tools, Plex watchlist, search within Episeerr)
+- `docs/features/episode-selection.md` rewritten; delay profile requirement scoped to external paths only
+- `docs/core-concepts/tags-and-auto-assign.md` and `docs/getting-started/first-series.md` updated with search path
+- `documentation.html`: removed stale version banners, fixed Plex/Tautulli description, collapsed redundant delay profile section, added search path to Getting Started and Workflows
+
 ## v3.5.6
 
 ### ⚡ Reduce redundant Sonarr API calls in cleanup and search

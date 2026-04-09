@@ -455,13 +455,11 @@
                 <i class="fas fa-chart-line"></i>
                 <span>Dashboard</span>
             </a>
-            <!-- Series (Main Page) -->
+            <!-- Library (Main Page) -->
             <a href="{{ url_for('series_management') }}" class="sidebar-nav-item {% if request.endpoint == 'series_management' %}active{% endif %}">
-                <i class="fas fa-tv"></i>
-                <span>Series</span>
+                <i class="fas fa-photo-video"></i>
+                <span>Library</span>
             </a>
-            
-            
 
             <!-- Rules -->
             <a href="{{ url_for('rules_page') }}" class="sidebar-nav-item {% if request.endpoint == 'rules_page' %}active{% endif %}">
@@ -763,51 +761,71 @@ function populateSystemLinks() {
         fetch('/api/quick-links').then(r => r.json()).catch(() => ({status: 'error', links: []}))
     ])
     .then(([mediaServer, optionalIntegrations, linksData]) => {
-        let html = '';
-        // Track rendered URLs to prevent duplicates across all sections
-        const shownUrls = new Set();
+        const allLinks = linksData.links || [];
+        // Build lookup of quick link entries by lowercased name
+        const qlByName = {};
+        allLinks.forEach(l => { qlByName[l.name.toLowerCase()] = l; });
 
-        // ── Required Services ──────────────────────────────────────────
-        const sonarrLink = (linksData.links || []).find(l => l.name === 'Sonarr');
+        const shownUrls = new Set();
+        let topHtml = '';   // Plex + Jellyseerr
+        let restHtml = '';  // Everything else
+
+        // Helper: merge a media-server/integration item with its quick link entry
+        // so open_in_iframe + id + alternate_url are respected.
+        function withIframeSupport(item, nameKey) {
+            const ql = qlByName[(item[nameKey] || '').toLowerCase()];
+            return (ql && (ql.open_in_iframe || ql.alternate_url)) ? ql : item;
+        }
+
+        // ── Plex (top slot) ────────────────────────────────────────────
+        const plexServer = (mediaServer || []).find(s => s.type === 'plex');
+        if (plexServer) {
+            topHtml += renderSidebarLink(withIframeSupport(plexServer, 'name'));
+            shownUrls.add(plexServer.url);
+        }
+
+        // ── Jellyseerr (top slot) ──────────────────────────────────────
+        const jellyseerr = (optionalIntegrations || []).find(i => i.service_name === 'jellyseerr');
+        if (jellyseerr) {
+            topHtml += renderSidebarLink(jellyseerr);
+            shownUrls.add(jellyseerr.url);
+        }
+
+        // ── Sonarr ─────────────────────────────────────────────────────
+        const sonarrLink = allLinks.find(l => l.name === 'Sonarr');
         if (sonarrLink) {
-            html += renderSidebarLink(sonarrLink);
+            restHtml += renderSidebarLink(sonarrLink);
             shownUrls.add(sonarrLink.url);
         } else {
-            html += `<div class="sidebar-rule-item text-muted small">Sonarr not configured</div>`;
+            restHtml += `<div class="sidebar-rule-item text-muted small">Sonarr not configured</div>`;
         }
 
-        // ── Media Servers ──────────────────────────────────────────────
-        if (mediaServer && mediaServer.length > 0) {
-            mediaServer.forEach(server => {
-                if (!shownUrls.has(server.url)) {
-                    const iconHtml = `<img src="${server.icon}" alt="${server.name}" class="sidebar-icon-img" />`;
-                    html += `<a href="${server.url}" target="_blank" class="sidebar-rule-item" title="${server.name}">
-                                ${iconHtml}
-                                <span class="sidebar-rule-name">${server.name}</span>
-                                <i class="fas fa-external-link-alt ms-1" style="font-size:0.7rem;opacity:0.6;"></i>
-                             </a>`;
-                    shownUrls.add(server.url);
-                }
-            });
-        }
+        // ── Other media servers (Tautulli, Jellyfin, Emby, …) ─────────
+        (mediaServer || []).forEach(server => {
+            if (server.type === 'plex') return;
+            if (shownUrls.has(server.url)) return;
+            restHtml += renderSidebarLink(withIframeSupport(server, 'name'));
+            shownUrls.add(server.url);
+        });
 
-        // ── Optional Integrations ──────────────────────────────────────
-        if (optionalIntegrations && optionalIntegrations.length > 0) {
-            optionalIntegrations.forEach(integration => {
-                if (!shownUrls.has(integration.url)) {
-                    html += renderSidebarLink(integration);
-                    shownUrls.add(integration.url);
-                }
-            });
-        }
+        // ── Other optional integrations ────────────────────────────────
+        (optionalIntegrations || []).forEach(integration => {
+            if (integration.service_name === 'jellyseerr') return;
+            if (shownUrls.has(integration.url)) return;
+            restHtml += renderSidebarLink(integration);
+            shownUrls.add(integration.url);
+        });
 
-        // ── Custom Bookmarks ───────────────────────────────────────────
-        // Exclude system-managed names and any URL already rendered above
+        // ── Custom bookmarks ───────────────────────────────────────────
         const systemNames = new Set(['Sonarr', 'Tautulli']);
-        const customLinks = (linksData.links || []).filter(l =>
-            !systemNames.has(l.name) && !shownUrls.has(l.url)
-        );
-        customLinks.forEach(link => { html += renderSidebarLink(link); });
+        allLinks.filter(l => !systemNames.has(l.name) && !shownUrls.has(l.url))
+                .forEach(link => { restHtml += renderSidebarLink(link); });
+
+        // Assemble: top items + separator (if any top items) + rest
+        const sep = topHtml
+            ? `<div style="height:1px;background:var(--border-color,#2d3142);margin:4px 12px;"></div>`
+            : '';
+        const html = topHtml + sep + restHtml;
 
         container.innerHTML = html || `
             <div class="sidebar-rule-item text-muted small py-2">
@@ -975,5 +993,328 @@ setInterval(checkForNewRequests, 30000);
 document.addEventListener('DOMContentLoaded', checkForNewRequests);
 </script>
 
-{% block extra_js %}{% endblock %}</body>
+{% block extra_js %}{% endblock %}
+
+<!-- ─── Global TMDB Search Modal ──────────────────────────────────────── -->
+<div class="modal fade" id="tmdbSearchModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered modal-lg">
+    <div class="modal-content" style="background:var(--bg-secondary,#1a1f24);">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="fas fa-search me-2"></i>Find &amp; Add</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="input-group mb-3">
+          <input type="text" id="tmdbSearchInput"
+                 class="form-control bg-dark text-light border-secondary"
+                 placeholder="Search movies and TV shows…" autocomplete="off">
+          <button class="btn btn-primary" onclick="doTmdbSearch()">
+            <i class="fas fa-search"></i>
+          </button>
+        </div>
+        <div id="tmdbSearchLoading" class="text-center py-3 text-muted" style="display:none;">
+          <i class="fas fa-spinner fa-spin me-2"></i>Searching…
+        </div>
+        <div id="tmdbSearchEmpty" class="text-center py-3 text-muted" style="display:none;">
+          <i class="fas fa-search opacity-50 me-2"></i>No results found.
+        </div>
+        <div id="tmdbSearchResults" style="max-height:420px;overflow-y:auto;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Add Movie Modal ──────────────────────────────────────────────── -->
+<div class="modal fade" id="addMovieModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="background:var(--bg-secondary,#1a1f24);">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">Add Movie to Radarr</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="d-flex gap-3 mb-3">
+          <img id="addMoviePoster" src="/static/placeholder.png" alt=""
+               style="width:80px;height:120px;object-fit:cover;border-radius:4px;flex-shrink:0;">
+          <div>
+            <div id="addMovieTitle" class="fw-bold fs-6"></div>
+            <div id="addMovieYear" class="text-muted small"></div>
+            <div id="addMovieOverview" class="text-muted mt-2"
+                 style="font-size:.8rem;line-height:1.4;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;"></div>
+          </div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Quality Profile</label>
+          <select id="addMovieQuality" class="form-select form-select-sm bg-dark text-light border-secondary">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small fw-semibold">Root Folder</label>
+          <select id="addMovieFolder" class="form-select form-select-sm bg-dark text-light border-secondary">
+            <option value="">Loading…</option>
+          </select>
+        </div>
+        <div id="addMovieError" class="alert alert-danger small py-2" style="display:none;"></div>
+      </div>
+      <div class="modal-footer border-secondary">
+        <button class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="addMovieBtn" onclick="submitAddMovie()">
+          <i class="fas fa-plus me-1"></i>Add to Radarr
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+// ── Global TMDB Search + Add flow ──────────────────────────────────────
+(function() {
+  let _tmdbPendingId   = null;
+  let _tmdbPendingType = null;
+  let _tmdbResults     = [];
+  let _radarrProfiles  = null, _radarrFolders  = null;
+  let _profilesFetched = false;
+
+  function _prefetchProfiles() {
+    if (_profilesFetched) return;
+    _profilesFetched = true;
+    fetch('/api/radarr/quality-profiles').then(r=>r.json()).then(d=>{ if(d.success) _radarrProfiles=d.profiles; }).catch(()=>{});
+    fetch('/api/radarr/root-folders').then(r=>r.json()).then(d=>{ if(d.success) _radarrFolders=d.folders; }).catch(()=>{});
+  }
+
+  window.openTmdbSearchModal = function() {
+    _prefetchProfiles();
+    const modal = bootstrap.Modal.getOrCreateInstance(document.getElementById('tmdbSearchModal'));
+    // Clear state from previous open
+    document.getElementById('tmdbSearchInput').value = '';
+    document.getElementById('tmdbSearchResults').innerHTML = '';
+    document.getElementById('tmdbSearchLoading').style.display = 'none';
+    document.getElementById('tmdbSearchEmpty').style.display = 'none';
+    _tmdbResults = [];
+    modal.show();
+    setTimeout(() => document.getElementById('tmdbSearchInput').focus(), 300);
+  };
+
+  // Allow Enter key in the search field (script is at end of body, DOM is ready)
+  const _tmdbInp = document.getElementById('tmdbSearchInput');
+  if (_tmdbInp) {
+    _tmdbInp.addEventListener('keydown', e => { if (e.key === 'Enter') window.doTmdbSearch(); });
+  }
+
+  window.doTmdbSearch = function() {
+    const q = (document.getElementById('tmdbSearchInput')?.value || '').trim();
+    if (!q) return;
+    const loading = document.getElementById('tmdbSearchLoading');
+    const empty   = document.getElementById('tmdbSearchEmpty');
+    const results = document.getElementById('tmdbSearchResults');
+    loading.style.display = '';
+    empty.style.display   = 'none';
+    results.innerHTML     = '';
+
+    fetch(`/api/discover/search?q=${encodeURIComponent(q)}`)
+      .then(r => r.json())
+      .then(data => {
+        loading.style.display = 'none';
+        if (!data.success) { _tmdbShowError(data.error || 'Search failed.'); return; }
+        _tmdbResults = data.results || [];
+        _renderTmdbResults(_tmdbResults);
+      })
+      .catch(() => { loading.style.display = 'none'; _tmdbShowError('Network error.'); });
+  };
+
+  function _tmdbShowError(msg) {
+    const empty = document.getElementById('tmdbSearchEmpty');
+    empty.innerHTML = `<i class="fas fa-exclamation-circle text-warning me-2"></i>${_esc(msg)}`;
+    empty.style.display = '';
+  }
+
+  function _renderTmdbResults(items) {
+    const container = document.getElementById('tmdbSearchResults');
+    const empty     = document.getElementById('tmdbSearchEmpty');
+    if (!items.length) {
+      container.innerHTML = '';
+      document.getElementById('tmdbSearchEmpty').innerHTML =
+        '<i class="fas fa-search opacity-50 me-2"></i>No results found.';
+      empty.style.display = '';
+      return;
+    }
+    empty.style.display = 'none';
+    container.innerHTML = items.map((item, idx) => {
+      const poster    = item.poster || '/static/placeholder.png';
+      const typeLabel = item.media_type === 'movie' ? 'Movie' : 'Series';
+      const typeBg    = item.media_type === 'movie' ? 'bg-info text-dark' : 'bg-primary text-white';
+      const yearStr   = item.year ? ` (${item.year})` : '';
+
+      let actionHtml;
+      if (item.in_library) {
+        if (item.media_type === 'tv' && item.library_id) {
+          actionHtml = `<a href="/api/send-to-selection/${item.library_id}" class="btn btn-sm btn-success">
+            <i class="fas fa-check me-1"></i>In Library</a>`;
+        } else {
+          actionHtml = `<button class="btn btn-sm btn-success" disabled>
+            <i class="fas fa-check me-1"></i>In Library</button>`;
+        }
+      } else if (item.pending) {
+        actionHtml = `<a href="/episeerr" class="btn btn-sm btn-warning">
+          <i class="fas fa-clock me-1"></i>Pending</a>`;
+      } else {
+        actionHtml = `<button class="btn btn-sm btn-outline-primary"
+            onclick="openAddFromSearch(${idx},event)"
+            data-tmdb="${item.tmdb_id}"
+            data-type="${item.media_type}"
+            data-title="${_escAttr(item.title)}"
+            data-year="${_escAttr(item.year || '')}"
+            data-poster="${_escAttr(item.poster || '')}"
+            data-overview="${_escAttr(item.overview || '')}">
+          <i class="fas fa-plus me-1"></i>Add
+        </button>`;
+      }
+
+      return `<div class="d-flex align-items-center gap-3 py-2 border-bottom border-secondary">
+        <img src="${poster}" alt="" style="width:36px;height:54px;object-fit:cover;border-radius:4px;flex-shrink:0;"
+             onerror="this.src='/static/placeholder.png'">
+        <div class="flex-grow-1 min-width-0">
+          <span class="fw-semibold">${_esc(item.title)}</span>
+          <span class="text-muted small">${_esc(yearStr)}</span>
+          <span class="badge ${typeBg} ms-1" style="font-size:.65rem;">${typeLabel}</span>
+        </div>
+        <div class="flex-shrink-0">${actionHtml}</div>
+      </div>`;
+    }).join('');
+  }
+
+  window.openAddFromSearch = function(idx, event) {
+    if (event) event.stopPropagation();
+    const btn  = event ? event.currentTarget : null;
+    const item = _tmdbResults[idx];
+    if (!item) return;
+
+    _tmdbPendingId   = item.tmdb_id;
+    _tmdbPendingType = item.media_type;
+
+    if (item.media_type === 'movie') {
+      // Movies: close search modal and show quality/folder modal
+      bootstrap.Modal.getInstance(document.getElementById('tmdbSearchModal'))?.hide();
+      setTimeout(() => {
+        document.getElementById('addMovieTitle').textContent    = item.title;
+        document.getElementById('addMovieYear').textContent     = item.year || '';
+        document.getElementById('addMoviePoster').src           = item.poster || '/static/placeholder.png';
+        document.getElementById('addMovieOverview').textContent = item.overview || '';
+        document.getElementById('addMovieError').style.display  = 'none';
+        document.getElementById('addMovieBtn').disabled         = false;
+        document.getElementById('addMovieBtn').innerHTML        = '<i class="fas fa-plus me-1"></i>Add to Radarr';
+        _populateSelect('addMovieQuality', _radarrProfiles, 'id',   'name', '/api/radarr/quality-profiles', 'profiles');
+        _populateSelect('addMovieFolder',  _radarrFolders,  'path', 'path', '/api/radarr/root-folders',     'folders');
+        bootstrap.Modal.getOrCreateInstance(document.getElementById('addMovieModal')).show();
+      }, 200);
+    } else {
+      // Series: prepare (Sonarr lookup only, no add yet) then show season/rule selection
+      if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>'; }
+      fetch('/api/sonarr/prepare-series', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ tmdb_id: item.tmdb_id })
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            // Already in library → redirect to existing selection flow
+            if (data.redirect_url) {
+              window.location.href = data.redirect_url;
+            } else {
+              // Not yet in Sonarr → go to season/rule selection; Sonarr add deferred to confirmation
+              window.location.href = `/select-seasons/${data.tmdb_id}`;
+            }
+          } else {
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus me-1"></i>Add'; }
+            const container = document.getElementById('tmdbSearchResults');
+            const errDiv = document.createElement('div');
+            errDiv.className = 'alert alert-danger small py-2 mt-2';
+            errDiv.textContent = data.error || 'Failed to prepare series.';
+            container.prepend(errDiv);
+          }
+        })
+        .catch(() => {
+          if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus me-1"></i>Add'; }
+        });
+    }
+  };
+
+  window.submitAddMovie = function() {
+    const qualityId = document.getElementById('addMovieQuality').value;
+    const folder    = document.getElementById('addMovieFolder').value;
+    if (!qualityId || !folder) { _modalError('addMovieError', 'Select a quality profile and root folder.'); return; }
+    const btn = document.getElementById('addMovieBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Adding…';
+    fetch('/api/radarr/add-movie', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ tmdb_id: _tmdbPendingId, quality_profile_id: qualityId, root_folder_path: folder })
+    })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          bootstrap.Modal.getInstance(document.getElementById('addMovieModal'))?.hide();
+          _markTmdbResult(_tmdbPendingId, 'library');
+        } else {
+          _modalError('addMovieError', data.error || 'Failed to add movie.');
+          btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus me-1"></i>Add to Radarr';
+        }
+      })
+      .catch(() => {
+        _modalError('addMovieError', 'Network error.');
+        btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus me-1"></i>Add to Radarr';
+      });
+  };
+
+  function _markTmdbResult(tmdbId, state) {
+    const item = _tmdbResults.find(r => r.tmdb_id === tmdbId);
+    if (item) {
+      if (state === 'library') item.in_library = true;
+      if (state === 'pending') { item.pending = true; item.in_library = false; }
+    }
+  }
+
+  function _populateSelect(selectId, cached, valueKey, labelKey, endpoint, dataKey) {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    if (cached && cached.length) {
+      sel.innerHTML = cached.map(i =>
+        `<option value="${_esc(String(i[valueKey]))}">${_esc(i[labelKey])}</option>`
+      ).join('');
+      return;
+    }
+    sel.innerHTML = '<option value="">Loading…</option>';
+    fetch(endpoint)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success && data[dataKey]) {
+          sel.innerHTML = data[dataKey].map(i =>
+            `<option value="${_esc(String(i[valueKey]))}">${_esc(i[labelKey])}</option>`
+          ).join('');
+        } else { sel.innerHTML = '<option value="">Not available</option>'; }
+      })
+      .catch(() => { sel.innerHTML = '<option value="">Error</option>'; });
+  }
+
+  function _modalError(id, msg) {
+    const el = document.getElementById(id);
+    if (el) { el.textContent = msg; el.style.display = ''; }
+  }
+
+  function _esc(str) {
+    if (str == null) return '';
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+  function _escAttr(str) {
+    if (str == null) return '';
+    return String(str).replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+  // Expose helpers globally so pages can use them
+  window.escHtml  = window.escHtml  || _esc;
+  window.escAttr  = window.escAttr  || _escAttr;
+})();
+</script>
+</body>
 </html>

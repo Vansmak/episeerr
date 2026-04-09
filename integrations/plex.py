@@ -591,6 +591,83 @@ class PlexIntegration(ServiceIntegration):
             logger.warning(f"[Plex] remove_from_watchlist {url} → {detail}")
             return False, detail
 
+    def lookup_plex_rating_key(self, api_key: str, tmdb_id: str, media_type: str,
+                               title: str = '') -> Optional[str]:
+        """Find the Plex ratingKey for an item given its TMDB ID.
+
+        Searches discover.provider.plex.tv by title and matches the TMDB GUID
+        in the results.  Returns None if the item isn't in Plex's catalog.
+        """
+        if not title:
+            logger.warning(f"[Plex] lookup_plex_rating_key: no title for TMDB {tmdb_id}, cannot search")
+            return None
+
+        headers = {'X-Plex-Token': api_key}
+        target_guid = f'tmdb://{tmdb_id}'
+
+        json_headers = {**headers, 'Accept': 'application/json'}
+        params = {
+            'query': title, 'limit': 30, 'includeGuids': 1,
+            'searchProviders': 'discover', 'searchTypes': 'movies,tv',
+        }
+        try:
+            resp = http.get(
+                'https://discover.provider.plex.tv/library/search',
+                headers=json_headers, params=params, timeout=10,
+            )
+            logger.info(f"[Plex] search '{title}' → HTTP {resp.status_code}, {len(resp.text)} bytes")
+            if not resp.ok:
+                logger.warning(f"[Plex] search HTTP {resp.status_code}: {resp.text[:200]}")
+                return None
+
+            data = resp.json()
+            mc = data.get('MediaContainer', {})
+            title_lower = title.lower()
+            for section in mc.get('SearchResults', []):
+                for result in section.get('SearchResult', []):
+                    meta = result.get('Metadata', {})
+                    if not isinstance(meta, dict):
+                        continue
+                    # Prefer TMDB Guid match if present
+                    for g in meta.get('Guid', []):
+                        if g.get('id', '') == target_guid:
+                            logger.info(f"[Plex] matched by TMDB guid: {meta.get('ratingKey')}")
+                            return meta.get('ratingKey')
+                    # Fallback: match by title (case-insensitive)
+                    if meta.get('title', '').lower() == title_lower:
+                        rk = meta.get('ratingKey')
+                        logger.info(f"[Plex] matched by title '{title}': {rk}")
+                        return rk
+        except Exception as exc:
+            logger.warning(f"[Plex] search error for '{title}': {exc}")
+
+        logger.warning(f"[Plex] Could not find ratingKey for TMDB {tmdb_id} ('{title}')")
+        return None
+
+    def add_to_watchlist(self, api_key: str, tmdb_id: str, media_type: str,
+                         title: str = '') -> tuple:
+        """Add an item to the Plex watchlist by TMDB ID.
+
+        Returns (True, detail) on success, (False, detail) on failure.
+        """
+        rating_key = self.lookup_plex_rating_key(api_key, tmdb_id, media_type, title)
+        if not rating_key:
+            return False, f"Could not find Plex ratingKey for TMDB {tmdb_id} ('{title}')"
+
+        headers = {'X-Plex-Token': api_key}
+        url = f'https://discover.provider.plex.tv/actions/addToWatchlist?ratingKey={rating_key}'
+        try:
+            resp = http.put(url, headers=headers, timeout=15)
+            detail = f"HTTP {resp.status_code}: {resp.text[:200]}"
+            logger.info(f"[Plex] add_to_watchlist tmdb={tmdb_id} ratingKey={rating_key} → {detail}")
+            if resp.ok:
+                return True, detail
+            return False, detail
+        except Exception as exc:
+            detail = f"error: {exc}"
+            logger.warning(f"[Plex] add_to_watchlist tmdb={tmdb_id} → {detail}")
+            return False, detail
+
     # ==========================================
     # Sync Engine
     # ==========================================
@@ -948,19 +1025,8 @@ class PlexIntegration(ServiceIntegration):
                     # Check if there's already a pending selection request for this show
                     has_pending = False
                     try:
-                        import os as _os
-                        requests_dir = _os.path.join(_os.getcwd(), 'data', 'requests')
-                        if _os.path.exists(requests_dir):
-                            for fname in _os.listdir(requests_dir):
-                                if fname.endswith('.json'):
-                                    try:
-                                        with open(_os.path.join(requests_dir, fname), 'r') as f:
-                                            req = json.load(f)
-                                            if str(req.get('tmdb_id')) == str(item.get('tmdb_id')):
-                                                has_pending = True
-                                                break
-                                    except Exception:
-                                        continue
+                        from settings_db import find_pending_request_by_tmdb
+                        has_pending = bool(find_pending_request_by_tmdb(item.get('tmdb_id')))
                     except Exception:
                         pass
                     
@@ -1343,6 +1409,18 @@ class PlexIntegration(ServiceIntegration):
                     item['status_color'] = '#198754'  # green
                     continue
             
+            # Check SQLite pending queue (Discover-added shows not yet in Sonarr)
+            if item.get('type') == 'show' and tmdb_id and tmdb_id not in sonarr_by_tmdb:
+                try:
+                    from settings_db import find_pending_request_by_tmdb
+                    if find_pending_request_by_tmdb(tmdb_id):
+                        item['sync_status'] = 'pending'
+                        item['status_label'] = 'Needs Setup'
+                        item['status_color'] = '#fd7e14'  # orange
+                        continue
+                except Exception:
+                    pass
+
             # Check if available in *arrs
             if item.get('type') == 'show' and tmdb_id and tmdb_id in sonarr_by_tmdb:
                 series = sonarr_by_tmdb[tmdb_id]

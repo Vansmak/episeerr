@@ -382,6 +382,26 @@ def get_sonarr_config() -> Dict[str, str]:
         'api_key': os.getenv('SONARR_API_KEY')
     }
 
+def get_radarr_config() -> Optional[Dict[str, Any]]:
+    """Get Radarr config from DB or env"""
+    service = get_service('radarr', 'default')
+    if service:
+        cfg = service.get('config') or {}
+        return {
+            'url': service['url'],
+            'api_key': service['api_key'],
+            'default_root_folder': cfg.get('default_root_folder'),
+            'default_quality_profile_id': cfg.get('default_quality_profile_id'),
+        }
+    if os.getenv('RADARR_URL'):
+        return {
+            'url': os.getenv('RADARR_URL'),
+            'api_key': os.getenv('RADARR_API_KEY'),
+            'default_root_folder': os.getenv('RADARR_ROOT_FOLDER'),
+            'default_quality_profile_id': os.getenv('RADARR_QUALITY_PROFILE_ID'),
+        }
+    return None
+
 def get_jellyfin_config() -> Optional[Dict[str, Any]]:
     """Get Jellyfin config from DB or env"""
     service = get_service('jellyfin', 'default')

@@ -28,6 +28,8 @@ Tags and auto-assignment control **when and how** Episeerr takes control of seri
 
 **Auto-assign** lets Sonarr/Jellyseerr control initial downloads, then Episeerr manages going forward.
 
+**Searching within Episeerr bypasses tags entirely.** When you add a series using Episeerr's built-in search, Episeerr drives the whole flow directly — no tag, no webhook, no delay profile needed. Sonarr isn't touched until after you confirm your rule and season selections. Tags and auto-assign only apply to series added externally (Sonarr UI, Seerr, nzb360, Plex watchlist sync).
+
 ---
 
 ## Tag Behavior (Temporary Signals)
@@ -165,10 +167,11 @@ This allows you to manage series assignment entirely through Sonarr tags if you 
 
 | Scenario | Method | Why |
 |----------|--------|-----|
-| **New show, start from S1E1** | `episeerr_default` tag | GET rule applies immediately |
+| **Adding from Episeerr search** | Built-in search → Add | No tag needed; Sonarr add deferred until you confirm |
+| **New show, start from S1E1** | `episeerr_default` tag (external add) | GET rule applies immediately |
 | **New show, start from specific season** | `episeerr_default` tag + Jellyseerr webhook | Starts from requested season, not S1E1 |
 | **Let Sonarr/Jellyseerr decide initially** | Auto-assign (no tag) | Full control initially, Episeerr manages after first watch |
-| **Only want specific episodes** | `episeerr_select` tag | Manual episode selection interface |
+| **Only want specific episodes (external add)** | `episeerr_select` tag | Manual episode selection interface; requires delay profile |
 | **Don't want Episeerr at all** | No tag + auto-assign OFF | Normal Sonarr behavior |
 | **Existing shows** | Manual assignment in Series Management | Add to rule whenever you want |
 

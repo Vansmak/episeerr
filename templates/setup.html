@@ -139,14 +139,14 @@
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <div>
                         <h6 class="mb-0">
-                            <i class="fas fa-image me-2"></i>TMDB
+                            <i class="fas fa-film me-2"></i>TMDB
                             {% if tmdb_connected %}
                                 <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
                             {% else %}
                                 <span class="badge bg-secondary ms-2">Optional</span>
                             {% endif %}
                         </h6>
-                        <small class="text-muted">Artwork and metadata for dashboard</small>
+                        <small class="text-muted">Artwork, metadata, and search</small>
                     </div>
                     <button class="btn btn-sm btn-primary" data-bs-toggle="collapse" data-bs-target="#tmdb-config">
                         <i class="fas fa-cog"></i>
@@ -161,7 +161,6 @@
                                        placeholder="eyJhbGciOiJIUzI1NiJ9..." value="{{ tmdb_apikey or '' }}">
                                 <small class="text-muted">Get from <a href="https://www.themoviedb.org/settings/api" target="_blank">TMDB Settings</a></small>
                             </div>
-                            
                             <div class="d-flex justify-content-between">
                                 <button type="button" class="btn btn-secondary" onclick="testConnection('tmdb')">
                                     <i class="fas fa-plug me-1"></i>Test
@@ -177,6 +176,7 @@
             </div>
         </div>
     </div>
+
     <!-- Integrations (AUTO-GENERATED) -->
     <div class="row mb-3">
         <div class="col-12">

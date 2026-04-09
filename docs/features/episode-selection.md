@@ -2,24 +2,20 @@
 
 Choose specific episodes manually across multiple seasons — or just pick a rule and let it decide.
 
-- [Episode Selection](#episode-selection)
-  - [Critical Sonarr Setup (Do This First)](#critical-sonarr-setup-do-this-first)
-  - [Sonarr Webhook (Optional but Recommended)](#sonarr-webhook-optional-but-recommended)
-  - [How to Use](#how-to-use)
-    - [Method 1: Sonarr Tags](#method-1-sonarr-tags)
-    - [Method 2: Series Page Icon](#method-2-series-page-icon)
-    - [Method 3: Plex Watchlist Sync](#method-3-plex-watchlist-sync)
-    - [Method 4: Jellyseerr/Overseerr Integration](#method-4-jellyseerroverseerr-integration)
-    - [Method 5: Jellyseerr with episeerr\_default Tag](#method-5-jellyseerr-with-episeerr_default-tag)
-  - [The Rule Picker](#the-rule-picker)
-  - [What Happens](#what-happens)
-  - [Use Cases](#use-cases)
-  - [Special Behavior](#special-behavior)
-  - [Troubleshooting](#troubleshooting)
+- [Critical Sonarr Setup](#critical-sonarr-setup-external-paths-only)
+- [How to Enter the Selection Flow](#how-to-enter-the-selection-flow)
+- [The Rule Picker](#the-rule-picker)
+- [What Happens on Confirm](#what-happens-on-confirm)
+- [Use Cases](#use-cases)
+- [Troubleshooting](#troubleshooting)
 
-## Critical Sonarr Setup (Do This First)
+---
 
-**Without this step, episodes download immediately instead of waiting for selection.**
+## Critical Sonarr Setup (external paths only)
+
+**Only needed if you add series via Sonarr tags, Plex watchlist sync, or Seerr.** Skip this if you only add series by searching within Episeerr — Sonarr isn't touched until after you confirm.
+
+Without this, episodes added with the `episeerr_select` tag will start downloading immediately before you make your selection.
 
 1. **Sonarr** → Settings → Profiles → Release Profiles → **Add New**
 2. **Settings:**
@@ -28,35 +24,35 @@ Choose specific episodes manually across multiple seasons — or just pick a rul
    - Tags: `episeerr_select`
 3. **Save**
 
-## Sonarr Webhook 
+---
 
-1. **Sonarr** → Settings → Connect → Webhook → **Add New**
-2. **URL**: `http://your-episeerr:5002/sonarr-webhook`
-3. **Triggers**: On Series Add only
-4. **Save**
+## How to Enter the Selection Flow
 
-## How to Use
+### Search within Episeerr (nothing touches Sonarr until you confirm)
 
-### Method 1: Sonarr Tags
+1. Use the search bar in Episeerr to find a TV show
+2. Click **Add** on the result
+3. Season/rule selection opens immediately
+4. Pick a rule and/or select specific seasons
+5. Confirm → Episeerr adds the series to Sonarr and updates Plex watchlist
+6. Cancel → nothing is written anywhere
+
+No tag or delay profile needed.
+
+---
+
+### Sonarr tag (external add)
 
 1. Add series to Sonarr with `episeerr_select` tag
-2. Go to Episeerr → Pending Requests
-3. Click "Select Seasons" → Choose seasons
-4. Click "Select Episodes" → Choose specific episodes
-5. Submit
+2. Episeerr webhook intercepts it → creates pending request, all episodes unmonitored
+3. Go to **Episeerr → Pending Items** → click Select
+4. Follow selection flow
 
-### Method 2: Series Page Icon
+Requires the delay profile above to hold downloads.
 
-For series already in Sonarr — no tag needed.
+---
 
-1. Go to **Episeerr → Series** (grid or manage view)
-2. Click the **list icon** on any poster (top-right corner in grid view) or in the **Actions** column (table/manage view)
-3. You're taken directly to the season selection page for that show
-4. Pick a rule or choose episodes manually
-
-**The rule dropdown pre-selects the show's current rule** if it already has one, making it easy to move a series to a different rule.
-
-### Method 3: Plex Watchlist Sync
+### Plex watchlist sync
 
 1. Add a TV show to your Plex watchlist
 2. On the next sync cycle, Episeerr creates a pending request automatically
@@ -64,71 +60,66 @@ For series already in Sonarr — no tag needed.
 
 See [Plex Watchlist Sync](plex-watchlist-sync.md) for setup.
 
-### Method 4: Jellyseerr/Overseerr Integration
+---
 
-1. Set up Jellyseerr webhook:
-   - **URL**: `http://your-episeerr:5002/seerr-webhook`
-   - **Triggers**: Request Approved
-2. Request series in Jellyseerr/Overseerr
-3. Add `episeerr_select` tag
-4. Follow selection process above
+### Series already in Sonarr
 
-### Method 5: Jellyseerr with episeerr_default Tag
+1. Go to **Episeerr → Series** (grid or manage view)
+2. Click the **list icon** on any poster or in the Actions column
+3. You're taken directly to the season selection page
 
-**Best for:** Starting automated management from a specific season
+The rule dropdown pre-selects the show's current rule, making it easy to move a series to a different rule.
 
-1. Set up Jellyseerr webhook (see [Webhook Setup](webhooks.md))
-2. Request specific season(s) in Jellyseerr (e.g., Season 3)
-3. Series added to Sonarr with `episeerr_default` tag
-4. Episeerr starts from your requested season automatically
+---
 
-**Example:**
-- Request Season 3 from Jellyseerr
-- Add series with `episeerr_default` tag  
-- Default rule: "Get 2 episodes"
-- Result: S03E01 and S03E02 monitored/searched
+### Jellyseerr/Overseerr
 
-**Important Notes:**
-- Without Jellyseerr webhook, `episeerr_default` always starts from Season 1
-- Request remains visible in Jellyseerr showing partial availability status
+1. Set up the Seerr webhook pointing to Episeerr
+2. Request a series — it's added to Sonarr with `episeerr_select` tag
+3. Pending request appears in Episeerr → follow selection flow
+
+---
 
 ## The Rule Picker
 
 Every entry into the selection flow shows a **rule dropdown** at the top of the season selection page.
 
-**Apply Rule** — pick a rule and click Apply. The rule is assigned to the series for ongoing management. No episode processing happens immediately — the rule governs future watch events (e.g., next episode queued after you watch one).
+**Apply Rule** — pick a rule and click Apply. The rule is assigned and its GET logic runs immediately (e.g., monitors first N episodes). Ongoing management from there.
 
-**Select seasons/episodes below** — ignore the Apply Rule button and check the seasons/episodes you want manually. The rule selected in the dropdown is still assigned for ongoing management (future watch events use it).
+**Select seasons/episodes manually** — check the seasons or episodes you want. The rule selected in the dropdown is still assigned for ongoing management, but you control what downloads now.
 
-**Rule pre-selection:** If the series already has a rule assigned, the dropdown defaults to that rule. Useful for quickly moving a show to a different rule without going through Sonarr tags.
+**Cancel** — deletes the pending request. For the in-Episeerr search path, nothing is added to Sonarr or Plex watchlist at all.
 
-**Cancelling:** Hitting Cancel on the selection page deletes the pending request and goes back to the previous page — nothing is downloaded.
+---
 
-## What Happens
+## What Happens on Confirm
 
-- **Series added** with `episeerr_select` tag
-- **All episodes unmonitored** (prevents downloads)  
-- **Selection interface appears** in Episeerr
-- **Choose episodes** across any seasons
-- **Only selected episodes monitored** and searched
-- **Jellyseerr request** remains visible showing partial availability (if applicable)
+| Path | Sonarr add | Plex watchlist |
+|------|-----------|----------------|
+| Search within Episeerr | Happens at confirm | Updated at confirm |
+| Sonarr tag / Plex sync / Seerr | Already in Sonarr | Updated at confirm |
+| Series page icon (already in Sonarr) | Already in Sonarr | Updated at confirm |
+
+After confirm: only the selected/rule-specified episodes are monitored and searched. Everything else stays unmonitored.
+
+---
 
 ## Use Cases
 
-- **Try pilots**: Just episode 1 to test new shows
-- **Specific episodes**: Get episodes you missed  
-- **Limited storage**: Surgical control over downloads
-- **Multi-season selection**: Episodes from seasons 1, 3, and 5
-- **Season-specific automation**: Start automated management from a specific season
+- **Try pilots** — select only S1E1 before committing
+- **Skip seasons** — jump straight to S3
+- **Specific arcs** — select exactly the episodes you want
+- **Re-route a series** — one-click rule change from the selection page
+- **Limited storage** — surgical control, nothing extra downloads
 
-## Special Behavior
-
-**If you select only S1E1**: Tag removed, series assigned to default rule (becomes normal automation)  
-**If you select multiple episodes**: Tag kept, manual management only
+---
 
 ## Troubleshooting
 
-**Episodes downloading immediately**: Missing delayed release profile  
-**Selection interface not appearing**: Check TMDB API key, check logs  
-**Wrong episodes monitored**: Verify selection summary before submitting  
-**episeerr_default starting from Season 1**: Jellyseerr webhook not configured (see [Webhook Setup](webhooks.md))
+**Episodes downloading immediately (external path):** Missing delayed release profile — create it in Sonarr as described above.
+
+**Selection interface not appearing:** Check TMDB API key, check logs for errors.
+
+**Wrong episodes monitored:** Check the selection summary before submitting.
+
+**episeerr_default starting from Season 1:** Jellyseerr webhook not configured. See [Webhook Setup](../configuration/webhook-setup.md).

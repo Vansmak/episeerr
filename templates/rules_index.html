@@ -3,32 +3,36 @@
 {% block content %}
 <div class="container-fluid">
 
-  <!-- Filters + View Toggle + Selected Count -->
+  <!-- Library Tabs -->
+  <div class="d-flex align-items-center gap-3 mb-3">
+    <div class="btn-group" role="group" id="libraryTabs">
+      <button type="button" class="btn btn-outline-primary active" id="tabSeriesBtn" onclick="switchTab('series')">
+        <i class="fas fa-tv me-1"></i> Series
+      </button>
+      <button type="button" class="btn btn-outline-primary" id="tabMoviesBtn" onclick="switchTab('movies')">
+        <i class="fas fa-film me-1"></i> Movies
+      </button>
+    </div>
+    <span class="text-muted small" id="libraryCount"></span>
+    <button class="btn btn-sm btn-outline-success ms-auto" onclick="openTmdbSearchModal()">
+      <i class="fas fa-plus me-1"></i>Add
+    </button>
+  </div>
+
+  <!-- Filter Bar -->
   <div class="series-header mb-3 p-3 bg-dark border border-secondary rounded">
     <div class="row g-3 align-items-end">
 
-      <!-- View Toggle -->
-      <div class="col-auto">
-        <div class="btn-group" role="group">
-          <button type="button" class="btn btn-outline-primary active" id="gridViewBtn" onclick="setView('grid')">
-            <i class="fas fa-th"></i> Grid
-          </button>
-          <button type="button" class="btn btn-outline-primary" id="tableViewBtn" onclick="setView('table')">
-            <i class="fas fa-tasks"></i> Manage
-          </button>
-        </div>
-      </div>
-
       <!-- Search -->
-      <div class="col-md-3">
+      <div class="col-md-4">
         <div class="input-group input-group-sm">
           <span class="input-group-text bg-dark border-secondary"><i class="fas fa-search text-muted"></i></span>
-          <input type="text" id="seriesSearchInput" class="form-control bg-dark text-light border-secondary" placeholder="Search series...">
+          <input type="text" id="librarySearchInput" class="form-control bg-dark text-light border-secondary" placeholder="Search…">
         </div>
       </div>
 
-      <!-- Rule Filter -->
-      <div class="col-md-3">
+      <!-- Series-only filters -->
+      <div id="seriesFilters" class="col-md-6 d-flex gap-2">
         <select id="ruleFilterSelect" class="form-select form-select-sm bg-dark text-light border-secondary">
           <option value="">All Rules</option>
           <option value="Unassigned">Unassigned</option>
@@ -36,10 +40,6 @@
           <option value="{{ rule_name }}">{{ rule_name.replace('_', ' ').title() }}</option>
           {% endfor %}
         </select>
-      </div>
-
-      <!-- Status Filter -->
-      <div class="col-md-3">
         <select id="statusFilterSelect" class="form-select form-select-sm bg-dark text-light border-secondary">
           <option value="">All Status</option>
           <option value="continuing">Continuing</option>
@@ -48,98 +48,70 @@
         </select>
       </div>
 
-      <!-- Selected Count -->
-      <div class="col-auto ms-auto">
-        <span class="text-muted small fw-bold" id="selectedCount">0 selected</span>
-      </div>
-
-    </div>
-  </div>
-
-  <!-- Bulk Actions Bar (appears in table/manage view) -->
-  <div class="bulk-actions-bar mb-4 p-3 bg-dark border border-primary rounded" id="bulkActionsBar" style="display: none;">
-    <div class="row g-3 align-items-center">
-      <div class="col-auto">
-        <strong><span id="bulkSelectedCount">0</span> selected</strong>
-      </div>
-      <div class="col-md-3">
-        <select id="bulkRuleSelect" class="form-select form-select-sm bg-dark text-light border-secondary">
-          <option value="">Assign to Rule...</option>
-          {% for rule_name in config.rules.keys() | sort %}
-          <option value="{{ rule_name }}">{{ rule_name.replace('_', ' ').title() }}</option>
-          {% endfor %}
+      <!-- Movies-only filters -->
+      <div id="movieFilters" class="col-md-6 d-flex gap-2" style="display: none !important;">
+        <select id="movieStatusFilter" class="form-select form-select-sm bg-dark text-light border-secondary">
+          <option value="">All Movies</option>
+          <option value="downloaded">Downloaded</option>
+          <option value="missing">Missing</option>
+          <option value="monitored">Monitored</option>
         </select>
       </div>
-      <div class="col-auto">
-        <button class="btn btn-sm btn-primary" onclick="assignSelected()">
-          <i class="fas fa-check me-1"></i> Assign
-        </button>
-      </div>
-      <div class="col-auto">
-        <button class="btn btn-sm btn-outline-danger" onclick="unassignSelected()">
-          <i class="fas fa-unlink me-1"></i> Unassign
-        </button>
-      </div>
-      <div class="col-auto">
-        <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">
-          <i class="fas fa-ban me-1"></i> Clear
-        </button>
-      </div>
+
     </div>
   </div>
 
-  <!-- Grid View -->
-  <div id="seriesGridView">
+  <!-- Series Grid Tab -->
+  <div id="seriesTabContent">
     <div class="row g-3" id="seriesGrid"></div>
   </div>
 
-  <!-- Table View -->
-  <div id="seriesTableView" class="table-responsive" style="display: none;">
-    <table class="table table-dark table-hover table-sm">
-      <thead class="sticky-top bg-dark">
-        <tr>
-          <th width="50" class="text-center">
-            <input type="checkbox" id="select-all-checkbox" onchange="toggleAll()">
-          </th>
-          <th class="sortable" data-sort="title" style="cursor: pointer;">
-            Series <i class="fas fa-sort ms-1"></i>
-          </th>
-          <th class="sortable" data-sort="rule" style="cursor: pointer;">
-            Current Rule <i class="fas fa-sort ms-1"></i>
-          </th>
-          <th class="sortable" data-sort="status" style="cursor: pointer;">
-            Status <i class="fas fa-sort ms-1"></i>
-          </th>
-          <th width="60" class="text-center">Actions</th>
-        </tr>
-      </thead>
-      <tbody id="series-table-body"></tbody>
-    </table>
+  <!-- Movies Grid Tab -->
+  <div id="moviesTabContent" style="display: none;">
+    <div id="moviesLoadingState" class="text-center py-5 text-muted">
+      <i class="fas fa-spinner fa-spin fa-2x mb-3 d-block"></i>Loading movies from Radarr…
+    </div>
+    <div class="row g-3" id="moviesGrid"></div>
+    <div id="moviesErrorState" class="text-center py-5 text-muted" style="display: none;">
+      <i class="fas fa-exclamation-circle fa-2x mb-2 d-block text-warning"></i>
+      <span id="moviesErrorMsg">Could not load movies</span>
+    </div>
   </div>
-
-  <!-- Hidden form for submissions -->
-  <form method="POST" action="{{ url_for('assign_rules') }}" id="assignment-form" style="display: none;">
-    <input type="hidden" name="rule_name" id="hidden-rule-name">
-  </form>
 
 </div>
 
+<!-- ─── Detail Drawer (Offcanvas) ────────────────────────────────────── -->
+<div class="offcanvas offcanvas-end" tabindex="-1" id="detailDrawer" style="width: 420px; background: var(--bg-secondary, #1a1f24);">
+  <div class="offcanvas-header border-bottom" style="border-color: var(--border-color) !important;">
+    <h5 class="offcanvas-title" id="drawerTitle">Details</h5>
+    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="offcanvas"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="drawerBody">
+    <!-- populated by JS -->
+  </div>
+</div>
+
+<!-- ─── Hidden form for rule assignment ──────────────────────────────── -->
+<form method="POST" action="{{ url_for('assign_rules') }}" id="assignment-form" style="display: none;">
+  <input type="hidden" name="rule_name" id="hidden-rule-name">
+</form>
+
 <style>
-/* Series Grid Styles */
+/* ── Grid column breakpoints ─────────────────────────────────────────── */
 .series-grid-col {
   flex: 0 0 auto;
   display: flex;
-  justify-content: center; /* Center cards on all screen sizes */
+  justify-content: center;
 }
-
 @media (min-width: 1600px) { .series-grid-col { width: 12.5%; } }
 @media (min-width: 1400px) and (max-width: 1599px) { .series-grid-col { width: 14.285%; } }
 @media (min-width: 1200px) and (max-width: 1399px) { .series-grid-col { width: 16.666667%; } }
-@media (min-width: 992px) and (max-width: 1199px) { .series-grid-col { width: 20%; } }
-@media (min-width: 768px) and (max-width: 991px) { .series-grid-col { width: 25%; } }
-@media (min-width: 576px) and (max-width: 767px) { .series-grid-col { width: 33.333333%; } }
-@media (max-width: 575px) { .series-grid-col { width: 50%; } }
+@media (min-width: 992px)  and (max-width: 1199px)  { .series-grid-col { width: 20%; } }
+@media (min-width: 768px)  and (max-width: 991px)   { .series-grid-col { width: 25%; } }
+@media (min-width: 576px)  and (max-width: 767px)   { .series-grid-col { width: 33.333333%; } }
+@media (max-width: 575px)                            { .series-grid-col { width: 50%; } }
 
+/* ── Card ────────────────────────────────────────────────────────────── */
 .series-grid-card {
   background: var(--card-bg, #1a1d29);
   border: 1px solid var(--border-color, #2d3142);
@@ -147,15 +119,14 @@
   overflow: hidden;
   transition: all 0.2s ease;
   height: 100%;
-  width: 100%; /* Fill the flex container */
+  width: 100%;
+  cursor: pointer;
 }
-
 .series-grid-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   border-color: var(--brand-color, #6366f1);
 }
-
 .series-poster-container {
   position: relative;
   width: 100%;
@@ -163,33 +134,32 @@
   background: var(--poster-bg, #0f1419);
   overflow: hidden;
 }
-
 .series-poster {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
   object-fit: cover;
 }
-
-.series-checkbox-overlay {
+.series-select-btn {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: 8px; right: 8px;
   z-index: 10;
+  background: rgba(0,0,0,0.55);
+  color: #a5b4fc;
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  font-size: 0.8rem;
+  transition: background 0.15s, color 0.15s;
 }
-
-.series-checkbox-overlay input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
+.series-select-btn:hover {
+  background: rgba(99,102,241,0.85);
+  color: #fff;
 }
-
-.series-info {
-  padding: 12px;
-}
-
+.series-info { padding: 12px; }
 .series-title {
   font-size: 0.95rem;
   font-weight: 600;
@@ -201,368 +171,343 @@
   text-overflow: ellipsis;
   min-height: 2.8em;
 }
+.series-badges    { display: flex; flex-wrap: wrap; gap: 4px; }
+.series-badge     { font-size: 0.75rem; padding: 2px 8px; border-radius: 12px; }
+.badge-rule       { background: var(--primary-color, #6366f1); color: #fff; }
+.badge-unassigned { background: var(--secondary-bg, #6b7280); color: #fff; }
+.badge-continuing { background: var(--success-bg, #10b981); color: #fff; }
+.badge-ended      { background: var(--danger-bg, #ef4444); color: #fff; }
+.badge-upcoming   { background: var(--info-bg, #3b82f6); color: #fff; }
+.badge-downloaded { background: #10b981; color: #fff; }
+.badge-missing    { background: #ef4444; color: #fff; }
+.badge-monitored  { background: #3b82f6; color: #fff; }
 
-.series-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+/* ── Detail Drawer ───────────────────────────────────────────────────── */
+.drawer-poster {
+  width: 100%;
+  max-height: 280px;
+  object-fit: cover;
+  object-position: center top;
 }
-
-.series-badge {
-  font-size: 0.75rem;
-  padding: 2px 8px;
-  border-radius: 12px;
+.drawer-body-content { padding: 16px; }
+.drawer-title  { font-size: 1.25rem; font-weight: 700; margin-bottom: 4px; }
+.drawer-meta   { color: var(--text-secondary, #a0a5ad); font-size: 0.875rem; margin-bottom: 12px; }
+.drawer-overview {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #a0a5ad);
+  margin-bottom: 16px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
-
-.badge-rule {
-  background: var(--primary-color, #6366f1);
-  color: white;
-}
-
-.badge-unassigned {
-  background: var(--secondary-bg, #6b7280);
-  color: white;
-}
-
-.badge-continuing {
-  background: var(--success-bg, #10b981);
-  color: white;
-}
-
-.badge-ended {
-  background: var(--danger-bg, #ef4444);
-  color: white;
-}
-
-.badge-upcoming {
-  background: var(--info-bg, #3b82f6);
-  color: white;
-}
-
-.status-continuing { color: #10b981; }
-.status-ended { color: #ef4444; }
-.status-upcoming { color: #3b82f6; }
-
-.series-select-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 10;
-  background: rgba(0, 0, 0, 0.55);
-  color: #a5b4fc;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  text-decoration: none;
-  font-size: 0.8rem;
-  transition: background 0.15s, color 0.15s;
-}
-.series-select-btn:hover {
-  background: rgba(99, 102, 241, 0.85);
-  color: #fff;
-}
+.drawer-section { margin-bottom: 14px; }
+.drawer-label  { font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+                 letter-spacing: 0.08em; color: var(--text-secondary, #a0a5ad); margin-bottom: 4px; }
+.drawer-value  { font-size: 0.875rem; }
 </style>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-
-
-// ────────────────────────────────────────────────
-// Globals
-// ────────────────────────────────────────────────
+// ── Globals ────────────────────────────────────────────────────────────
 const allSeriesData = {{ all_series|tojson|safe }} || [];
-let currentView = localStorage.getItem('episeerr-series-view') || 'grid';
-let currentSort = { column: 'title', direction: 'asc' };
-const SONARR_URL = '{{ SONARR_URL }}';
+const SONARR_URL    = '{{ SONARR_URL }}';
+const RADARR_URL    = '{{ RADARR_URL }}';
+let   allMoviesData = [];
+let   moviesLoaded  = false;
+let   currentTab    = localStorage.getItem('episeerr-library-tab') || 'series';
+let   currentSort   = { column: 'title', direction: 'asc' };
 
-console.log('Episeerr loaded:', allSeriesData.length, 'series');
-
-// ────────────────────────────────────────────────
-// Initialize on page load
-// ────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  setView(currentView, false);
-  renderView();
+  switchTab(currentTab, false);
   setupEventListeners();
-  updateSelectedCount();
 });
 
-// ────────────────────────────────────────────────
-// View Toggle (Grid / Table)
-// ────────────────────────────────────────────────
-function setView(view, save = true) {
-  currentView = view;
+// ── Tab switching ──────────────────────────────────────────────────────
+function switchTab(tab, save = true) {
+  currentTab = tab;
+  if (save) localStorage.setItem('episeerr-library-tab', tab);
 
-  document.getElementById('seriesGridView').style.display = view === 'grid' ? 'block' : 'none';
-  document.getElementById('seriesTableView').style.display = view === 'table' ? 'block' : 'none';
-  document.getElementById('bulkActionsBar').style.display = view === 'table' ? 'block' : 'none';
-
-  document.getElementById('gridViewBtn').classList.toggle('active', view === 'grid');
-  document.getElementById('tableViewBtn').classList.toggle('active', view === 'table');
-
-  if (save) localStorage.setItem('episeerr-series-view', view);
-
-  renderView();
-}
-
-// ────────────────────────────────────────────────
-// Render current view (grid or table)
-// ────────────────────────────────────────────────
-function renderView() {
-  const filtered = getFilteredAndSortedSeries();
-
-  if (currentView === 'grid') {
-    renderGridView(filtered);
+  document.getElementById('tabSeriesBtn').classList.toggle('active', tab === 'series');
+  document.getElementById('tabMoviesBtn').classList.toggle('active', tab === 'movies');
+  document.getElementById('seriesTabContent').style.display = tab === 'series' ? '' : 'none';
+  document.getElementById('moviesTabContent').style.display = tab === 'movies' ? '' : 'none';
+  document.getElementById('seriesFilters').style.display    = tab === 'series' ? '' : 'none';
+  // movieFilters has !important override — toggle class instead
+  const mf = document.getElementById('movieFilters');
+  if (tab === 'movies') {
+    mf.style.cssText = 'display: flex !important;';
   } else {
-    renderTableView(filtered);
+    mf.style.cssText = 'display: none !important;';
   }
 
-  updateSelectedCount();
+  if (tab === 'series') {
+    renderSeriesGrid(getFilteredSeries());
+  } else {
+    if (!moviesLoaded) loadMovies();
+    else renderMoviesGrid(getFilteredMovies());
+  }
 }
 
-// ────────────────────────────────────────────────
-// Filter + Sort Logic
-// ────────────────────────────────────────────────
-function getFilteredAndSortedSeries() {
-  let data = [...allSeriesData];
-
-  // Search
-  const search = (document.getElementById('seriesSearchInput')?.value || '').toLowerCase().trim();
-  if (search) {
-    data = data.filter(s => s.title.toLowerCase().includes(search));
-  }
-
-  // Rule filter
-  const ruleVal = document.getElementById('ruleFilterSelect')?.value;
-  if (ruleVal) {
-    if (ruleVal === 'Unassigned') {
-      data = data.filter(s => !s.assigned_rule || s.assigned_rule === 'None');
-    } else {
-      data = data.filter(s => s.assigned_rule === ruleVal);
-    }
-  }
-
-  // Status filter
-  const statusVal = document.getElementById('statusFilterSelect')?.value;
-  if (statusVal) {
-    data = data.filter(s => s.status === statusVal);
-  }
-
-  // Sort
-  data.sort((a, b) => {
-    let va, vb;
-    switch (currentSort.column) {
-      case 'title':
-        va = a.title.toLowerCase();
-        vb = b.title.toLowerCase();
-        break;
-      case 'rule':
-        va = (a.assigned_rule || 'zzz').toLowerCase();
-        vb = (b.assigned_rule || 'zzz').toLowerCase();
-        break;
-      case 'status':
-        const prio = { continuing: 1, upcoming: 2, ended: 3 };
-        va = prio[a.status] || 4;
-        vb = prio[b.status] || 4;
-        break;
-      default: return 0;
-    }
-    if (typeof va === 'string') {
-      return currentSort.direction === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
-    }
-    return currentSort.direction === 'asc' ? va - vb : vb - va;
+// ── Event listeners ────────────────────────────────────────────────────
+function setupEventListeners() {
+  ['librarySearchInput','ruleFilterSelect','statusFilterSelect','movieStatusFilter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', () => {
+      if (currentTab === 'series') renderSeriesGrid(getFilteredSeries());
+      else renderMoviesGrid(getFilteredMovies());
+    });
   });
+}
 
+// ── Series helpers ─────────────────────────────────────────────────────
+function getFilteredSeries() {
+  let data = [...allSeriesData];
+  const search = (document.getElementById('librarySearchInput')?.value || '').toLowerCase().trim();
+  if (search) data = data.filter(s => s.title.toLowerCase().includes(search));
+  const rule = document.getElementById('ruleFilterSelect')?.value;
+  if (rule) {
+    data = rule === 'Unassigned'
+      ? data.filter(s => !s.assigned_rule || s.assigned_rule === 'None')
+      : data.filter(s => s.assigned_rule === rule);
+  }
+  const status = document.getElementById('statusFilterSelect')?.value;
+  if (status) data = data.filter(s => s.status === status);
+  data.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
   return data;
 }
 
-// ────────────────────────────────────────────────
-// Grid Rendering
-// ────────────────────────────────────────────────
-function renderGridView(series) {
+function renderSeriesGrid(series) {
   const container = document.getElementById('seriesGrid');
-  if (!container) return;
-
+  document.getElementById('libraryCount').textContent = `${series.length} series`;
   if (!series.length) {
     container.innerHTML = '<div class="col-12 text-center py-5 text-muted">No series match your filters</div>';
     return;
   }
-
   container.innerHTML = series.map(s => {
-    const poster = s.images?.find(i => i.coverType === 'poster')?.remoteUrl || '/static/placeholder.png';
-    const rule = s.assigned_rule && s.assigned_rule !== 'None'
-      ? s.assigned_rule.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+    const poster  = s.images?.find(i => i.coverType === 'poster')?.remoteUrl || '/static/placeholder.png';
+    const rule    = s.assigned_rule && s.assigned_rule !== 'None'
+      ? s.assigned_rule.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase())
       : 'Unassigned';
     const ruleCls = rule === 'Unassigned' ? 'badge-unassigned' : 'badge-rule';
-
     return `
       <div class="col series-grid-col">
-        <div class="card series-grid-card">
+        <div class="card series-grid-card" onclick="openSeriesDrawer(${s.id})">
           <div class="series-poster-container">
-            <img src="${poster}" class="series-poster" alt="${s.title}" loading="lazy" onerror="this.src='/static/placeholder.png'">
-            <a href="/api/send-to-selection/${s.id}" class="series-select-btn" title="Select">
+            <img src="${poster}" class="series-poster" alt="${escHtml(s.title)}" loading="lazy"
+                 onerror="this.src='/static/placeholder.png'">
+            <a href="/api/send-to-selection/${s.id}" class="series-select-btn" title="Select episodes"
+               onclick="event.stopPropagation()">
               <i class="fas fa-th-list"></i>
             </a>
           </div>
           <div class="series-info">
-            <div class="series-title">${s.title}</div>
+            <div class="series-title">${escHtml(s.title)}</div>
             <div class="series-badges">
-              <span class="badge series-badge ${ruleCls}">${rule}</span>
-              <span class="badge series-badge badge-${s.status || 'unknown'}">${getStatusText(s)}</span>
+              <span class="badge series-badge ${ruleCls}">${escHtml(rule)}</span>
+              <span class="badge series-badge badge-${s.status || 'unknown'}">${statusText(s.status)}</span>
             </div>
           </div>
         </div>
-      </div>
-    `;
+      </div>`;
   }).join('');
 }
 
-// ────────────────────────────────────────────────
-// Table Rendering
-// ────────────────────────────────────────────────
-function renderTableView(series) {
-  const tbody = document.getElementById('series-table-body');
-  if (!tbody) return;
+// ── Movies helpers ─────────────────────────────────────────────────────
+function loadMovies() {
+  document.getElementById('moviesLoadingState').style.display = '';
+  document.getElementById('moviesGrid').innerHTML = '';
+  document.getElementById('moviesErrorState').style.display = 'none';
+  fetch('/api/radarr/movies')
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('moviesLoadingState').style.display = 'none';
+      if (!data.success) {
+        document.getElementById('moviesErrorState').style.display = '';
+        document.getElementById('moviesErrorMsg').textContent = data.error || 'Could not load movies';
+        return;
+      }
+      allMoviesData = data.movies;
+      moviesLoaded  = true;
+      renderMoviesGrid(getFilteredMovies());
+    })
+    .catch(err => {
+      document.getElementById('moviesLoadingState').style.display = 'none';
+      document.getElementById('moviesErrorState').style.display = '';
+      document.getElementById('moviesErrorMsg').textContent = 'Network error loading movies';
+    });
+}
 
-  tbody.innerHTML = '';
+function getFilteredMovies() {
+  let data = [...allMoviesData];
+  const search = (document.getElementById('librarySearchInput')?.value || '').toLowerCase().trim();
+  if (search) data = data.filter(m => m.title.toLowerCase().includes(search));
+  const status = document.getElementById('movieStatusFilter')?.value;
+  if (status === 'downloaded') data = data.filter(m => m.hasFile);
+  else if (status === 'missing') data = data.filter(m => !m.hasFile);
+  else if (status === 'monitored') data = data.filter(m => m.monitored);
+  return data;
+}
 
-  if (!series.length) {
-    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-4 text-muted">No series match your filters</td></tr>';
+function renderMoviesGrid(movies) {
+  const container = document.getElementById('moviesGrid');
+  document.getElementById('libraryCount').textContent = `${movies.length} movies`;
+  if (!movies.length) {
+    container.innerHTML = '<div class="col-12 text-center py-5 text-muted">No movies match your filters</div>';
     return;
   }
-
-  tbody.innerHTML = series.map(s => {
-    const rule = s.assigned_rule && s.assigned_rule !== 'None'
-      ? s.assigned_rule.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
-      : 'Unassigned';
-    const ruleCls = rule === 'Unassigned' ? 'bg-secondary' : 'bg-primary';
-
+  container.innerHTML = movies.map(m => {
+    const poster  = m.poster || '/static/placeholder.png';
+    const statusBadge = m.hasFile ? 'badge-downloaded' : m.monitored ? 'badge-monitored' : 'badge-missing';
+    const statusLabel = m.hasFile ? 'Downloaded' : m.monitored ? 'Monitored' : 'Missing';
     return `
-      <tr>
-        <td class="text-center">
-          <input type="checkbox" class="series-checkbox" value="${s.id}" onchange="updateSelectedCount()">
-        </td>
-        <td>
-          <a href="${SONARR_URL}/series/${s.titleSlug || encodeURIComponent(s.title)}" target="_blank" class="text-light text-decoration-none">
-            ${s.title}
-          </a>
-        </td>
-        <td><span class="badge ${ruleCls}">${rule}</span></td>
-        <td><span class="status-${s.status || 'unknown'}">${getStatusText(s)}</span></td>
-        <td class="text-center">
-          <a href="/api/send-to-selection/${s.id}" class="btn btn-outline-secondary btn-sm py-0 px-2" title="Select">
-            <i class="fas fa-th-list"></i>
-          </a>
-        </td>
-      </tr>
-    `;
+      <div class="col series-grid-col">
+        <div class="card series-grid-card" onclick="openMovieDrawer(${m.id})">
+          <div class="series-poster-container">
+            <img src="${poster}" class="series-poster" alt="${escHtml(m.title)}" loading="lazy"
+                 onerror="this.src='/static/placeholder.png'">
+          </div>
+          <div class="series-info">
+            <div class="series-title">${escHtml(m.title)}${m.year ? ` <span class="text-muted" style="font-weight:400;">(${m.year})</span>` : ''}</div>
+            <div class="series-badges">
+              <span class="badge series-badge ${statusBadge}">${statusLabel}</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
   }).join('');
 }
 
-// ────────────────────────────────────────────────
-// Status Helper
-// ────────────────────────────────────────────────
-function getStatusText(s) {
-  const map = {
-    continuing: '📺 Continuing',
-    ended: '🏁 Ended',
-    upcoming: '🔜 Upcoming'
-  };
-  return map[s.status] || '❓ Unknown';
+// ── Drawer: Series ─────────────────────────────────────────────────────
+function openSeriesDrawer(seriesId) {
+  const s = allSeriesData.find(x => x.id === seriesId);
+  if (!s) return;
+
+  const poster   = s.images?.find(i => i.coverType === 'poster')?.remoteUrl || '/static/placeholder.png';
+  const rule     = s.assigned_rule && s.assigned_rule !== 'None'
+    ? s.assigned_rule.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase())
+    : 'Unassigned';
+  const genres   = (s.genres || []).join(', ') || '—';
+  const network  = s.network || '—';
+  const stats    = s.statistics || {};
+  const epCount  = stats.episodeCount ?? '—';
+  const epFiles  = stats.episodeFileCount ?? '—';
+  const sizeMB   = stats.sizeOnDisk ? (stats.sizeOnDisk / 1024 / 1024 / 1024).toFixed(2) + ' GB' : '—';
+  const sonarrLink = s.titleSlug
+    ? `${SONARR_URL}/series/${s.titleSlug}`
+    : `${SONARR_URL}/series/${encodeURIComponent(s.title)}`;
+
+  const seasons  = (s.seasons || []).filter(sn => sn.seasonNumber > 0);
+  const seasonsHtml = seasons.length
+    ? seasons.map(sn => {
+        const st = sn.statistics || {};
+        return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border-color);font-size:0.8rem;">
+          <span>Season ${sn.seasonNumber}</span>
+          <span class="text-muted">${st.episodeFileCount ?? 0} / ${st.episodeCount ?? 0} eps</span>
+        </div>`;
+      }).join('')
+    : '<div class="text-muted small">No season data</div>';
+
+  document.getElementById('drawerTitle').textContent = s.title;
+  document.getElementById('drawerBody').innerHTML = `
+    <img src="${poster}" class="drawer-poster" alt="${escHtml(s.title)}" onerror="this.src='/static/placeholder.png'">
+    <div class="drawer-body-content">
+      <div class="drawer-title">${escHtml(s.title)}</div>
+      <div class="drawer-meta">${s.year || ''} · ${escHtml(network)} · <span class="badge badge-${s.status}">${statusText(s.status)}</span></div>
+      <p class="drawer-overview">${escHtml(s.overview || 'No overview available.')}</p>
+
+      <div class="drawer-section">
+        <div class="drawer-label">Rule</div>
+        <div class="drawer-value">${escHtml(rule)}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Genres</div>
+        <div class="drawer-value">${escHtml(genres)}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Episodes</div>
+        <div class="drawer-value">${epFiles} downloaded / ${epCount} total · ${sizeMB}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Seasons</div>
+        <div>${seasonsHtml}</div>
+      </div>
+
+      <div class="d-flex gap-2 mt-3">
+        <a href="${sonarrLink}" target="_blank" class="btn btn-sm btn-outline-primary flex-grow-1">
+          <i class="fas fa-external-link-alt me-1"></i>Open in Sonarr
+        </a>
+        <a href="/api/send-to-selection/${s.id}" class="btn btn-sm btn-primary flex-grow-1">
+          <i class="fas fa-th-list me-1"></i>Select Episodes
+        </a>
+      </div>
+    </div>`;
+
+  bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('detailDrawer')).show();
 }
 
-// ────────────────────────────────────────────────
-// Selection & Bulk Actions
-// ────────────────────────────────────────────────
-function updateSelectedCount() {
-  const count = document.querySelectorAll('.series-checkbox:checked').length;
-  document.getElementById('selectedCount').textContent = `${count} selected`;
-  document.getElementById('bulkSelectedCount').textContent = count;
-  // Bar visibility is controlled by view mode, not selection count
+// ── Drawer: Movies ─────────────────────────────────────────────────────
+function openMovieDrawer(movieId) {
+  const m = allMoviesData.find(x => x.id === movieId);
+  if (!m) return;
+
+  const poster    = m.poster || '/static/placeholder.png';
+  const genres    = (m.genres || []).join(', ') || '—';
+  const sizeStr   = m.sizeOnDisk ? (m.sizeOnDisk / 1024 / 1024 / 1024).toFixed(2) + ' GB' : '—';
+  const statusBadge = m.hasFile ? 'badge-downloaded' : m.monitored ? 'badge-monitored' : 'badge-missing';
+  const statusLabel = m.hasFile ? 'Downloaded' : m.monitored ? 'Monitored' : 'Missing';
+
+  const radarrLink = m.tmdbId ? `${RADARR_URL}/movie/${m.tmdbId}` : RADARR_URL;
+
+  document.getElementById('drawerTitle').textContent = m.title;
+  document.getElementById('drawerBody').innerHTML = `
+    <img src="${poster}" class="drawer-poster" alt="${escHtml(m.title)}" onerror="this.src='/static/placeholder.png'">
+    <div class="drawer-body-content">
+      <div class="drawer-title">${escHtml(m.title)}</div>
+      <div class="drawer-meta">${m.year || ''} · <span class="badge ${statusBadge}">${statusLabel}</span></div>
+      <p class="drawer-overview">${escHtml(m.overview || 'No overview available.')}</p>
+
+      <div class="drawer-section">
+        <div class="drawer-label">Quality Profile</div>
+        <div class="drawer-value">${escHtml(m.qualityProfileName || '—')}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Genres</div>
+        <div class="drawer-value">${escHtml(genres)}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">File Size</div>
+        <div class="drawer-value">${sizeStr}</div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-label">Path</div>
+        <div class="drawer-value" style="font-family:monospace;font-size:0.8rem;word-break:break-all;">${escHtml(m.path || '—')}</div>
+      </div>
+
+      <div class="mt-3">
+        <a href="${radarrLink}" target="_blank" class="btn btn-sm btn-outline-info w-100">
+          <i class="fas fa-external-link-alt me-1"></i>Open in Radarr
+        </a>
+      </div>
+    </div>`;
+
+  bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('detailDrawer')).show();
 }
 
-function toggleAll() {
-  const checked = document.getElementById('select-all-checkbox').checked;
-  document.querySelectorAll('.series-checkbox').forEach(cb => cb.checked = checked);
-  updateSelectedCount();
+// ── Utilities ──────────────────────────────────────────────────────────
+function statusText(status) {
+  return { continuing: '📺 Continuing', ended: '🏁 Ended', upcoming: '🔜 Upcoming' }[status] || '❓ Unknown';
 }
 
-function clearSelection() {
-  document.querySelectorAll('.series-checkbox').forEach(cb => cb.checked = false);
-  document.getElementById('select-all-checkbox').checked = false;
-  updateSelectedCount();
+function escHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function assignSelected() {
-  const rule = document.getElementById('bulkRuleSelect')?.value;
-  if (!rule) return alert('Please select a rule to assign to.');
-
-  const ids = Array.from(document.querySelectorAll('.series-checkbox:checked')).map(cb => cb.value);
-  if (!ids.length) return alert('No series selected.');
-
-  const form = document.getElementById('assignment-form');
-  form.querySelector('[name="rule_name"]').value = rule;
-
-  ids.forEach(id => {
-    const inp = document.createElement('input');
-    inp.type = 'hidden';
-    inp.name = 'series_ids';
-    inp.value = id;
-    form.appendChild(inp);
-  });
-
-  form.submit();
-}
-
-function unassignSelected() {
-  const ids = Array.from(document.querySelectorAll('.series-checkbox:checked')).map(cb => cb.value);
-  if (!ids.length) return alert('No series selected.');
-  if (!confirm(`Unassign ${ids.length} series from all rules?`)) return;
-
-  const form = document.createElement('form');
-  form.method = 'POST';
-  form.action = '{{ url_for("unassign_series") }}';
-
-  ids.forEach(id => {
-    const inp = document.createElement('input');
-    inp.type = 'hidden';
-    inp.name = 'series_ids';
-    inp.value = id;
-    form.appendChild(inp);
-  });
-
-  document.body.appendChild(form);
-  form.submit();
-}
-
-// ────────────────────────────────────────────────
-// Event Listeners
-// ────────────────────────────────────────────────
-function setupEventListeners() {
-  ['seriesSearchInput', 'ruleFilterSelect', 'statusFilterSelect'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      if (el.tagName === 'INPUT') el.addEventListener('input', renderView);
-      else el.addEventListener('change', renderView);
-    }
-  });
-
-  document.querySelectorAll('.sortable').forEach(h => {
-    h.addEventListener('click', () => {
-      const col = h.dataset.sort;
-      if (currentSort.column === col) {
-        currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
-      } else {
-        currentSort.column = col;
-        currentSort.direction = 'asc';
-      }
-      renderView();
-    });
-  });
-}
+// Initial render
+renderSeriesGrid(getFilteredSeries());
 </script>
 {% endblock %}

@@ -111,6 +111,42 @@ class RadarrIntegration(ServiceIntegration):
                 'error': True,
                 'error_message': str(e)
             }
+    def get_setup_fields(self):
+        return [
+            {
+                'name': 'url',
+                'label': 'Radarr URL',
+                'type': 'url',
+                'placeholder': 'http://192.168.1.100:7878',
+                'required': True,
+                'help_text': 'Base URL for your Radarr instance'
+            },
+            {
+                'name': 'apikey',
+                'label': 'API Key',
+                'type': 'text',
+                'placeholder': 'Radarr API key',
+                'required': True,
+                'help_text': 'Settings → General → API Key'
+            },
+            {
+                'name': 'default_root_folder',
+                'label': 'Default Root Folder',
+                'type': 'text',
+                'placeholder': '/movies',
+                'required': False,
+                'help_text': 'Default path for new movies added via Discover'
+            },
+            {
+                'name': 'default_quality_profile_id',
+                'label': 'Default Quality Profile ID',
+                'type': 'text',
+                'placeholder': '1',
+                'required': False,
+                'help_text': 'Numeric ID from Radarr Settings → Profiles'
+            }
+        ]
+
     def get_dashboard_widget(self) -> Dict[str, Any]:
         """
         Define how this service appears on dashboard
