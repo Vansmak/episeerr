@@ -453,7 +453,8 @@
                     <h5><i class="fas fa-anchor text-info me-2"></i>Always Have (Optional)</h5>
                     <p>An expression that defines episodes to always keep downloaded and protected from cleanup. Think of it as the baseline state of a show — these episodes are always there regardless of what Get/Keep does.</p>
                     <p>When a show is assigned to a rule with Always Have, those episodes get monitored and searched immediately. Cleanup (grace, keep) will never delete them. Dormant cleanup is the only exception — dormant is nuclear and ignores Always Have.</p>
-                    
+
+                    <h6 class="mt-3">Base expressions</h6>
                     <table class="table table-sm">
                         <thead>
                             <tr>
@@ -495,7 +496,63 @@
                             </tr>
                         </tbody>
                     </table>
-                    <p><small class="text-muted">Combine with commas: <code>s1, s3e1-3, s*e1</code>. Leave blank to skip — Get/Keep will handle everything.</small></p>
+
+                    <h6 class="mt-3">Modifiers — append to any base expression</h6>
+                    <p>Two independent suffixes change the behaviour of always-have episodes after they are watched.</p>
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>Expression</th>
+                                <th>Behaviour</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>s*e1</code></td>
+                                <td>Grab &amp; permanently keep E1 of every season (default — no change)</td>
+                            </tr>
+                            <tr>
+                                <td><code>s*e1-</code></td>
+                                <td>Grab E1 of every season; after watched, follows normal grace/keep rules</td>
+                            </tr>
+                            <tr>
+                                <td><code>s*e1+</code></td>
+                                <td>Grab E1 of every season; each season's get-count is <strong>held at 0</strong> until its E1 is watched (per-season activation gate)</td>
+                            </tr>
+                            <tr>
+                                <td><code>s*e1+-</code></td>
+                                <td>Per-season gate <em>and</em> E1 removable after activation</td>
+                            </tr>
+                            <tr>
+                                <td><code>e1+</code></td>
+                                <td><strong>Sequential mode</strong>: grab only the current season's E1; when the season finale is watched, automatically grab the next season's E1 and enter held state</td>
+                            </tr>
+                            <tr>
+                                <td><code>e1+-</code></td>
+                                <td>Sequential mode + E1 removable after activation</td>
+                            </tr>
+                            <tr>
+                                <td><code>s1e1+</code></td>
+                                <td>Activation gate on pilot only; full auto from S2 onward</td>
+                            </tr>
+                            <tr>
+                                <td><code>pilot+</code></td>
+                                <td>Alias for <code>e1+</code> (sequential mode)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="alert alert-secondary mt-2 py-2">
+                        <strong><i class="fas fa-info-circle me-1"></i>Modifier notes:</strong>
+                        <ul class="mb-0 mt-1">
+                            <li><strong><code>+</code></strong> — activation gate: the rule's get-count is suppressed to 0 for a season until the activation episode is watched. State is stored per-season in <code>config.json</code>.</li>
+                            <li><strong><code>-</code></strong> — removable: the always-have episode is <em>not</em> permanently anchored; grace/keep cleanup can delete it once it has been watched.</li>
+                            <li>Series already in progress when a <code>+</code> rule is assigned are treated as immediately active — no retroactive hold.</li>
+                            <li>Sequential mode (<code>e1+</code>) does not advance past the final season of an ended series.</li>
+                        </ul>
+                    </div>
+
+                    <p><small class="text-muted">Combine expressions with commas: <code>s1, s*e1+</code>. Leave blank to skip — Get/Keep will handle everything.</small></p>
                 </div>
             </div>
 

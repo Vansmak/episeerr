@@ -924,7 +924,7 @@ The season selection page shows a **rule dropdown** at the top regardless of how
 
 This is about setting up the show, not ongoing watching. When a show enters a rule with Always Have, those episodes get downloaded immediately. Grace and Keep cleanup will never touch them — only Dormant (which is intentionally nuclear) overrides this.
 
-**Expression syntax:**
+**Base expressions:**
 
 | Expression | Result |
 |------------|--------|
@@ -934,6 +934,21 @@ This is about setting up the show, not ongoing watching. When a show enters a ru
 | `s1-3` | Seasons 1 through 3 |
 | `s1e1-5` | Season 1, episodes 1-5 |
 | `all` | Everything |
+
+**Modifiers** (append to any base expression):
+
+| Expression | Behaviour |
+|------------|-----------|
+| `s*e1` | Grab & permanently keep E1 of every season (default) |
+| `s*e1-` | Grab E1 of every season; follows grace/keep rules after watched |
+| `s*e1+` | Per-season activation gate — get-count held at 0 until E1 is watched |
+| `s*e1+-` | Per-season gate + E1 removable after activation |
+| `e1+` | Sequential: grab one season at a time, advance on finale |
+| `s1e1+` | Activation gate on pilot only; full auto from S2 |
+| `pilot+` | Alias for `e1+` |
+
+- **`+`** — suppresses get-count until the activation episode is watched (per-season state)
+- **`-`** — activation episode is removable by grace/keep after activation fires
 
 Combine with commas. Leave blank to skip. Always Have, Get, Keep, Grace, and Dormant are all independent — use any combination.
 
@@ -1126,6 +1141,26 @@ Dormant: 60 days
 
 ---
 
+### Sequential Activation (one season at a time)
+
+**Profile:** Grab only the current season; unlock the next when the finale is watched
+
+```yaml
+Rule Name: sequential
+Always Have: e1+
+GET: 1 episode
+KEEP: 1 episode
+Action: Search
+```
+
+**What happens:**
+- Show added → S1E1 downloaded, get-count held at 0 until S1E1 is watched
+- Watch S1E1 → activation fires, get-count unlocked, normal Get/Keep applies
+- Watch S1 finale → S2E1 grabbed, get-count held again until S2E1 is watched
+- Ended series: does not advance past the final season
+
+---
+
 ## Troubleshooting
 
 ### Container Won't Start
@@ -1281,7 +1316,7 @@ A: No! Only set up webhooks for features you want:
 - Full automation: All webhooks
 
 **Q: What does Always Have do?**  
-A: It's an expression on a rule that defines episodes to always keep. When a show enters the rule, those episodes get downloaded immediately. Grace and Keep cleanup won't delete them. Only Dormant (which is intentionally nuclear) overrides it.
+A: It's an expression on a rule that defines episodes to always keep. When a show enters the rule, those episodes get downloaded immediately. Grace and Keep cleanup won't delete them. Only Dormant (which is intentionally nuclear) overrides it. Add `+` to create an activation gate (get-count held until the episode is watched) or `-` to make the episode removable after it's watched.
 
 **Q: Does Always Have apply when I move a show to a different rule?**  
 A: Yes. Whether it's a new show or a reassignment, the Always Have expression runs and ensures those episodes are monitored.

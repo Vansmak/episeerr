@@ -1,3 +1,189 @@
+## v3.5.0
+
+### 🔌 Dispatcharr Integration
+- Dashboard stat pill shows active streams and queue count
+- Streaming widget on dashboard — live view of active sessions with channel, quality, and user info
+- Auto-generates sidebar quick link when configured
+- Fixed widget response format to return JSON `{success, html}` (was returning raw HTML string)
+
+### 🎬 Plex — Native Webhook Episode Detection (replaces Tautulli requirement)
+- Plex now has its own standalone integration module (`integrations/plex.py`)
+- **Three detection modes** — choose per your setup:
+  - **Scrobble (90%)**: Plex's native watched event. Zero config, most reliable.
+  - **Stop + Threshold**: Process when you stop at ≥ your threshold % (e.g. 50%). Scrobble fires automatically as a safety net — if the stop event is missed (crash, autoplay, network drop) processing happens at 90% instead. Episodes are never double-processed.
+  - **Polling**: Background thread checks `/status/sessions` every N minutes at custom threshold.
+- **Allowed Users** filter — comma-separated Plex usernames; blank = all users
+- **Webhook URL:** `http://your-episeerr:5002/api/integration/plex/webhook` (Plex Pass required)
+- Dashboard "Now Playing" widget driven by the same webhook (all modes)
+- Stale-state fallback: widget falls back to polling when webhook state is > 5 min old
+
+### 🔀 Tautulli — Standalone Optional Integration
+- Tautulli moved to its own module (`integrations/tautulli.py`), no longer hardcoded
+- **Tautulli is now optional** — only needed if you prefer its watch history over Plex's native API
+- **Override Plex** toggle: when enabled, all watch-history lookups (grace period, dormant detection) use Tautulli instead of Plex
+- Webhook URL updated: `http://your-episeerr:5002/api/integration/tautulli/webhook`
+- Legacy URL `/webhook` still works — existing Tautulli setups continue without changes
+- **⚠️ If you use Plex native webhooks for episode detection, do NOT also configure a Tautulli "Watched" webhook — use one or the other, not both**
+
+### 🏗️ Integration System Improvements
+- `setup.html` hardcoded Plex/Tautulli card removed — both now appear in auto-generated Integrations section
+- `setup_complete` check updated: Sonarr + any media server (Plex, Jellyfin, Emby) satisfies setup
+- `get_media_server()` endpoint now includes Plex directly (not via Tautulli)
+- `get_optional_integrations()` excludes Plex and Tautulli from the optional sidebar section
+- Auth bypass list updated for new integration webhook endpoints
+- Watch history router `get_episode_watch_history(rating_key)` added — routes to Tautulli (if override enabled) or Plex
+- `get_plex_series_watch_history()` added — queries max `lastViewedAt` across all episodes in a series
+- `settings_db.py`: added `get_plex_config()` and `get_tautulli_config()` with env fallback
+
+### 🐛 Fixes
+- Plex Watchlist: TV shows stuck on "Requested" — `episodeFileCount` nested under `statistics` in Sonarr API, not top-level
+- Plex Watchlist: TV shows never showed "Watched" — `mark_item_watched` now sets `watched=True`/`status='watched'` for TV
+- Plex Polling: `session_key` now read from `Metadata.sessionKey` (was reading from `Player` which is empty/UUID)
+- Plex Polling: session match now falls back to title/season/episode if key doesn't match
+- Plex Polling: `session_key` always non-empty — content-based fallback prevents polling thread never starting
+- Plex Polling: threshold checked on every play/pause/resume webhook event — triggers immediately without waiting for next poll interval
+- Tautulli movie detection: `{season_num}` sends `"0"` for movies (not empty) — detection now treats `0`/`"0"` as absent
+- Tautulli: movie detection no longer requires `themoviedb_id` to be present; logs a clear warning if missing
+- Tautulli: `{show_name}` is TV-only — added `plex_movie_title` field using `{title}` for movie title
+
+### 🎬 Jellyfin Fixes (v3.4.1)
+- Detection Method field now renders as a dropdown in setup UI (was rendering as a text input)
+- Fixed critical bug in PlaybackProgress mode: episode was marked as processed *before* `process_episode()` ran, and a duplicate dedup check inside `process_episode()` caused it to immediately return `False` — subprocess never executed despite logs claiming success
+- Dedup check now happens before the "In trigger range" log so duplicate ticks are silent at debug level
+- Per-tick progress % log demoted to debug — no more log spam during playback
+- `process_episode()` now logs Sonarr series lookup result, assigned rule, and full media_processor output on failure
+- Sonarr series not found returns `False` immediately with a clear warning instead of silently continuing
+
+### 🗝️ Misc
+- `use :custom tag` — alternate URL for configs (HTTP can open in iframe, HTTPS always opens externally)
+- Alternate URL added to quick link configs
+
+---
+
+### v3.4.0
+
+🔐 **Auth**
+- Webhook endpoints for Jellyfin, Emby, and Jellyseerr integrations are now exempt from authentication — external services no longer receive `401 Unauthorized` when `REQUIRE_AUTH=true`
+
+🛠️ **Fixes**
+- Episeerr starts cleanly even when Sonarr is offline — tag reconciliation and delay profile sync log a warning instead of erroring out
+- `/api/series-stats` returns `503 Sonarr unavailable` (instead of crashing) when Sonarr is unreachable at startup or during operation
+- Series and Rules pages show an empty list instead of a 500 error when Sonarr is down
+- Config cleanup scheduler skips silently when Sonarr is unreachable, preventing accidental series removal from config
+
+### v3.3.9
+- **Fix** — `get_rule_for_series` phantom import removed from `media_processor.py`; replaced with inline lookup over `config['rules']` (function never existed, caused import error during webhook processing)
+
+### v3.3.8
+⚠️ **BREAKING CHANGES**
+- **Webhook URLs Changed** - Update webhook configurations:
+  - Jellyfin: `/jellyfin-webhook` → `/api/integration/jellyfin/webhook`
+  - Emby: `/emby-webhook` → `/api/integration/emby/webhook`
+  - Jellyseerr: `/seerr-webhook` → `/api/integration/seerr/webhook`
+
+🏗️ **Integrations Refactor**
+- Jellyfin, Emby, and Jellyseerr migrated to modular integration system (~1500 lines refactored)
+- Self-contained integration modules with auto-discovery
+- Easier maintenance and future extensibility
+
+🔐 **Security**
+- Optional password authentication
+- Session-based login with configurable timeout (default 24 hours)
+- Localhost bypass for admin access
+- Environment variables: `REQUIRE_AUTH`, `AUTH_USERNAME`, `AUTH_PASSWORD`
+
+🎨 **UI/UX**
+- Reorganized System Links with clearer categories (Required Services, Media Servers, Optional Integrations, Custom Links)
+- Docker integration now supports optional web UI URL
+- All configured media servers shown (Plex, Jellyfin, Emby)
+
+### v3.3.6 - 2026-02-25
+- Sidebar rearranged and cleaned up
+- Docker integration added — select compose/stack or all containers for sidebar display
+
+### v3.3.5 - 2026-02-24
+- Notifications: Added notification option if episodes released but not in library
+- New Cyber Neon Theme
+
+### v3.3.4 - 2026-02-22
+- **Always Have** — new rule parameter with expression syntax for episodes that should always be present and protected from cleanup
+  - Expression examples: `s1` (full season), `s1e1` (pilot), `s1, s*e1` (showcase), `s1-3` (season range)
+  - Processes on rule assignment — monitors and searches matching episodes
+  - Protected from Grace and Keep cleanup; only Dormant overrides it
+- **Series page selection** — list icon on every poster (grid) and table row launches the selection flow
+- **Plex integration** — watchlist sync, now-playing widget; TV shows → pending selection, movies → Radarr
+- **Plex/Spotify now-playing widgets** on dashboard
+- **Rule picker on selection page** — dropdown pre-selects current rule; Apply to reassign or pick episodes manually
+
+### v3.3.3 - 2026-02-15
+- **Jellyfin Detection Method Overhaul**: Changed default to Webhook-Triggered Polling
+- **Emby Polling Improvements**: Increased default poll interval to 900s
+- **Database Optimization**: Form handler saves only method-specific fields
+
+### v3.3.2 - 2025-02-15
+- Centralized logging with `LOG_LEVEL` env var support
+- Log rotation (10MB max, 5 backups)
+- Reduced log spam by ~90%
+
+### v3.3.1 - 2026-02-06
+- Cosmetic fixes; removed duplicate "recently downloaded" on dashboard
+
+### v3.3.0 - 2026-02-05
+- Plugin System (beta): Dashboard integrations with auto-discovery
+- Initial integrations: Radarr, Sabnzbd, Prowlarr
+
+### v3.2.0 - 2026-02-04
+- Setup Page: Configure services via GUI at /setup
+- Emby Support: Full webhook integration
+- Quick Links: Auto-populated sidebar links
+- Database Configuration: All settings stored in DB with .env fallback
+
+### v3.1.3 - 2026-01-31
+- Fixed mobile layout
+
+### v3.1.2 - 2026-01-30
+- Series Management in Rules Tab
+- Fixed Duplicate Search Bug (removed `episeerr_default` tag system)
+- Fixed UI layout (content behind sidebar)
+- Enhanced README with setup guides
+
+### v3.1.1 - 2026-01-XX
+- Pilot Protection: Global and per-rule settings to always keep S01E01
+
+### v3.1.0 - 2026-01-XX
+- Dashboard Page with activity feed, stats cards, 7-day episode calendar
+- Rules Management Page
+- Download Tracking with green "Ready" badge
+
+### v3.0.0 - 2026-01-25
+- Tag System Overhaul: Removed `episeerr_default` tag; direct rule tags `episeerr_[rule_name]`
+- Tag Drift Detection: Auto-corrects tag mismatches
+- Auto-Cleanup: Deleted series removed from config automatically
+
+### v2.9.8
+- Auto-cleanup of deleted series from config
+- Smart Jellyfin mode detection
+- Webhook string/integer tag handling
+
+### v2.9.7 - 2026-01-21
+- Orphaned tag detection in watch webhooks
+- Case-sensitivity fix in drift detection
+- Jellyfin configuration detection fix
+
+### v2.9.6 - 2026-01-20
+- Rule descriptions (optional tooltip field)
+- Orphaned tag detection on startup, cleanup, and Clean Config
+- Enhanced drift detection in multiple locations
+- Case-insensitive tag matching
+
+### v2.9.5 - 2026-01-19
+- Automatic tag system: rule-specific tags auto-created in Sonarr
+- Tag migration: one-time bulk sync on first startup
+- Drift detection: auto-corrects when tags manually changed in Sonarr
+- Delay profile integration: Episeerr tags managed in Sonarr delay profiles
+
+---
+
 ## [2.9.2] - 2026-01-18
 
 ### Documentation

@@ -2548,6 +2548,11 @@ def create_rule():
         grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
         dormant_days = None if not dormant_days else int(dormant_days)
         
+        always_have = request.form.get('always_have', '').strip()
+        ah_valid, ah_error = media_processor.validate_always_have_expression(always_have)
+        if not ah_valid:
+            return render_template('create_rule.html', error=ah_error, always_have_value=always_have)
+
         # Save rule
         config['rules'][rule_name] = {
             'description': request.form.get('description', ''),
@@ -2562,7 +2567,7 @@ def create_rule():
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
-            'always_have': request.form.get('always_have', '').strip(),
+            'always_have': always_have,
             'series': {},
             'dry_run': False
         }
@@ -2620,6 +2625,13 @@ def edit_rule(rule_name):
         grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
         dormant_days = None if not dormant_days else int(dormant_days)
         
+        always_have = request.form.get('always_have', '').strip()
+        ah_valid, ah_error = media_processor.validate_always_have_expression(always_have)
+        if not ah_valid:
+            rule = config['rules'][rule_name]
+            return render_template('edit_rule.html', rule_name=rule_name, rule=rule,
+                                   config=config, error=ah_error)
+
         # Update rule
         config['rules'][rule_name].update({
             'description': request.form.get('description', ''),
@@ -2634,7 +2646,7 @@ def edit_rule(rule_name):
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
-            'always_have': request.form.get('always_have', '').strip()
+            'always_have': always_have
         })
         
         # Handle default rule setting

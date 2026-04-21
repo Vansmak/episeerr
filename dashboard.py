@@ -59,7 +59,7 @@ def get_series_banner(series_id):
     try:
         headers = {'X-Api-Key': SONARR_API_KEY}
         response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
-        
+
         if response.ok:
             series_data = response.json()
             for image in series_data.get('images', []):
@@ -69,6 +69,108 @@ def get_series_banner(series_id):
     except:
         return None
 
+
+def _enrich_watched_from_jellyfin(watched_episodes: set, recent_downloads: list) -> None:
+    """
+    Supplement watched_episodes with live played-status data from Jellyfin.
+
+    watched.json only captures episodes that flow through Episeerr's webhook
+    processing (series must have a rule AND the watch event must be caught by
+    the integration).  This function covers the gaps:
+      - Series grabbed by Sonarr but not assigned to an Episeerr rule
+      - Watch events missed by the polling/progress integration
+
+    Strategy: one API call to fetch all played episodes for the configured user,
+    then match by (normalized title, season, episode) against recent_downloads.
+    Fails silently — the existing watched.json filter still applies.
+    """
+    if not recent_downloads:
+        return
+
+    try:
+        from settings_db import get_service
+        from episeerr_utils import normalize_url
+
+        svc = get_service('jellyfin', 'default')
+        if not svc:
+            return
+
+        jf_url = normalize_url(svc.get('url', ''))
+        jf_api_key = svc.get('api_key', '')
+        configured_user = svc.get('user_id', '').strip()  # username string or empty
+
+        if not jf_url or not jf_api_key:
+            return
+
+        headers = {'X-Emby-Token': jf_api_key}
+
+        # Resolve a Jellyfin user UUID to scope the played-status query.
+        # GET /Users returns all users (requires an admin-scoped API key).
+        user_uuid = None
+        try:
+            users_resp = requests.get(f"{jf_url}/Users", headers=headers, timeout=5)
+            if users_resp.ok:
+                users = users_resp.json()
+                if configured_user:
+                    user_uuid = next(
+                        (u['Id'] for u in users
+                         if u.get('Name', '').lower() == configured_user.lower()),
+                        None
+                    )
+                if not user_uuid and users:
+                    user_uuid = users[0]['Id']
+        except Exception:
+            pass
+
+        if not user_uuid:
+            logger.debug("Jellyfin watched enrichment: could not resolve user UUID")
+            return
+
+        # Fetch all played episodes for this user (one request)
+        ep_resp = requests.get(
+            f"{jf_url}/Users/{user_uuid}/Items",
+            headers=headers,
+            params={
+                'IncludeItemTypes': 'Episode',
+                'Filters': 'IsPlayed',
+                'Recursive': 'true',
+                'Fields': 'UserData',
+                'Limit': 500,
+            },
+            timeout=10
+        )
+        if not ep_resp.ok:
+            logger.debug(f"Jellyfin watched enrichment: items query failed ({ep_resp.status_code})")
+            return
+
+        # Build lookup: (normalized_series_name, season_int, episode_int)
+        jf_played: set = set()
+        for item in ep_resp.json().get('Items', []):
+            name = item.get('SeriesName', '').lower().strip()
+            s = item.get('ParentIndexNumber')
+            e = item.get('IndexNumber')
+            if name and s is not None and e is not None:
+                jf_played.add((name, int(s), int(e)))
+
+        if not jf_played:
+            return
+
+        # Match recent_downloads against Jellyfin played set
+        added = 0
+        for dl in recent_downloads:
+            dl_key = (dl['series_id'], dl['season'], dl['episode'])
+            if dl_key in watched_episodes:
+                continue
+            title_norm = dl.get('series_title', '').lower().strip()
+            if (title_norm, dl['season'], dl['episode']) in jf_played:
+                watched_episodes.add(dl_key)
+                added += 1
+
+        if added:
+            logger.info(f"Jellyfin watched enrichment: marked {added} additional episode(s) as watched")
+
+    except Exception as e:
+        logger.debug(f"Jellyfin watched enrichment skipped: {e}")
 
 
 @dashboard_bp.route('/dashboard')
@@ -138,7 +240,7 @@ def calendar_data():
         # ──────────────────────────────────────────────────────
         watched_episodes = set()
         watched_file = os.path.join(os.getcwd(), 'data', 'activity', 'watched.json')
-        
+
         if os.path.exists(watched_file):
             try:
                 with open(watched_file, 'r') as f:
@@ -152,8 +254,13 @@ def calendar_data():
                 logger.info(f"Loaded {len(watched_episodes)} watched episodes to filter")
             except Exception as e:
                 logger.error(f"Error loading watched episodes: {e}")
-        
-               
+
+        # Supplement watched_episodes with live Jellyfin played status.
+        # watched.json only records episodes processed via Episeerr's webhook path
+        # (series must have a rule).  Querying Jellyfin directly covers series
+        # without rules and any watches the integration missed.
+        _enrich_watched_from_jellyfin(watched_episodes, recent_downloads)
+
         # ──────────────────────────────────────────────────────
         # 3. LOAD EPISEERR CONFIG FOR RULES
         # ──────────────────────────────────────────────────────

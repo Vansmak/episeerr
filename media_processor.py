@@ -1141,78 +1141,232 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
     """
     Clean webhook processing - ONLY handles real-time episode management.
     Grace cleanup happens separately during scheduled cleanup (every 6 hours).
+
+    Activation gate (+ modifier):
+      If the watched series/season is in 'held' state and the watched episode is
+      NOT the activation episode, get_count logic is suppressed (only activity
+      date is updated).  If the watched episode IS the activation episode, the
+      season is released to 'active' and normal processing runs.
+
+    Sequential mode (eN+ without s prefix):
+      After normal processing, if the watched episode is the season finale the
+      next season's activation episode is grabbed and set to held.
     """
     try:
         logger.info(f"Processing webhook for series {series_id}: S{season_number}E{episode_number}")
-        
+
         # Parse rule using dropdown format
         if 'get_type' in rule and 'get_count' in rule:
             get_type = rule.get('get_type', 'episodes')
             get_count = rule.get('get_count', 1)
-            keep_type = rule.get('keep_type', 'episodes') 
+            keep_type = rule.get('keep_type', 'episodes')
             keep_count = rule.get('keep_count', 1)
         else:
-            # Fall back to legacy conversion for old rules
             get_option, keep_watched = rule_to_legacy_params(rule)
             get_type, get_count = parse_legacy_value(get_option)
             keep_type, keep_count = parse_legacy_value(keep_watched)
-        
-        # UPDATE ACTIVITY DATE (includes season/episode info)
+
+        # ── Activation gate check ──────────────────────────────────────────
+        always_have = rule.get('always_have', '')
+        parsed_ah = parse_always_have(always_have) if always_have else None
+        skip_rule_processing = False
+
+        if parsed_ah and parsed_ah['has_plus']:
+            config = load_config()
+            rule_name = _find_rule_name_for_series(series_id, config)
+            if rule_name:
+                sid = str(series_id)
+                series_data = config['rules'][rule_name]['series'].get(sid, {})
+                act_seasons = series_data.get('activation_seasons', {})
+                season_state = act_seasons.get(str(season_number))
+
+                if season_state == 'held':
+                    activation_ep = parsed_ah['activation_ep']
+                    if activation_ep and episode_number == activation_ep:
+                        # Release this season — rule runs normally from here
+                        act_seasons[str(season_number)] = 'active'
+                        config['rules'][rule_name]['series'][sid]['activation_seasons'] = act_seasons
+                        save_config(config)
+                        logger.info(
+                            f"Activation released: series {series_id} "
+                            f"S{season_number}E{episode_number}"
+                        )
+                    else:
+                        skip_rule_processing = True
+                        logger.info(
+                            f"Series {series_id} S{season_number} still held "
+                            f"(activation ep is E{activation_ep}); skipping get_count"
+                        )
+
+        # ── Always update activity date ────────────────────────────────────
         update_activity_date(series_id, season_number, episode_number)
-        
-        # Get and unmonitor current episode if needed
+
+        # Get all episodes once (used for current-ep lookup, keep block, and
+        # optional sequential finale check)
         all_episodes = fetch_all_episodes(series_id)
         current_episode = next(
-            (ep for ep in all_episodes 
-             if ep['seasonNumber'] == season_number and ep['episodeNumber'] == episode_number), 
+            (ep for ep in all_episodes
+             if ep['seasonNumber'] == season_number and ep['episodeNumber'] == episode_number),
             None
         )
-        
+
         if not current_episode:
             logger.error(f"Could not find current episode S{season_number}E{episode_number}")
             return
-            
+
         if not rule.get('monitor_watched', True):
             unmonitor_episodes([current_episode['id']])
-        
-        # GET NEXT EPISODES using dropdown system
-        next_episode_ids = fetch_next_episodes_dropdown(
-            series_id, season_number, episode_number, get_type, get_count
-        )
-        
-        if next_episode_ids:
-            monitor_or_search_episodes(next_episode_ids, rule.get('action_option', 'monitor'), series_id, series_title, get_type)
-            logger.info(f"Processed {len(next_episode_ids)} next episodes")
-        
-        # IMMEDIATE DELETION: Episodes leaving keep block (real-time cleanup)
-        episodes_leaving_keep_block = find_episodes_leaving_keep_block(
-            all_episodes, keep_type, keep_count, season_number, episode_number
-        )
-        
-        if episodes_leaving_keep_block:
-            # Filter out anchor episodes (S01E01) - never delete these
-            episodes_to_delete = [ep for ep in episodes_leaving_keep_block if not is_anchor_episode(ep, series_id)]
-            
-            if episodes_to_delete:
-                episode_file_ids = [ep['episodeFileId'] for ep in episodes_to_delete if 'episodeFileId' in ep]
-                if episode_file_ids:
-                    delete_episodes_immediately(
-                        episode_file_ids, 
-                        series_title or f"Series {series_id}",
-                        reason=f"Keep Rule (keeping {keep_count} {keep_type})"
-                    )
-                    logger.info(f"Immediately deleted {len(episode_file_ids)} episodes leaving keep block")
-            
-            # Log if we protected any anchors
-            protected_anchors = [ep for ep in episodes_leaving_keep_block if is_anchor_episode(ep, series_id)]
-            if protected_anchors:
+
+        if not skip_rule_processing:
+            # GET NEXT EPISODES using dropdown system
+            next_episode_ids = fetch_next_episodes_dropdown(
+                series_id, season_number, episode_number, get_type, get_count
+            )
+
+            if next_episode_ids:
+                monitor_or_search_episodes(
+                    next_episode_ids, rule.get('action_option', 'monitor'),
+                    series_id, series_title, get_type
+                )
+                logger.info(f"Processed {len(next_episode_ids)} next episodes")
+
+            # IMMEDIATE DELETION: Episodes leaving keep block (real-time cleanup)
+            episodes_leaving_keep_block = find_episodes_leaving_keep_block(
+                all_episodes, keep_type, keep_count, season_number, episode_number
+            )
+
+            if episodes_leaving_keep_block:
+                episodes_to_delete = [
+                    ep for ep in episodes_leaving_keep_block
+                    if not is_anchor_episode(ep, series_id)
+                ]
+
+                if episodes_to_delete:
+                    episode_file_ids = [
+                        ep['episodeFileId'] for ep in episodes_to_delete
+                        if 'episodeFileId' in ep
+                    ]
+                    if episode_file_ids:
+                        delete_episodes_immediately(
+                            episode_file_ids,
+                            series_title or f"Series {series_id}",
+                            reason=f"Keep Rule (keeping {keep_count} {keep_type})"
+                        )
+                        logger.info(
+                            f"Immediately deleted {len(episode_file_ids)} episodes leaving keep block"
+                        )
+
+                protected_anchors = [
+                    ep for ep in episodes_leaving_keep_block
+                    if is_anchor_episode(ep, series_id)
+                ]
                 for ep in protected_anchors:
-                    logger.info(f"🔒 Protected anchor S{ep.get('seasonNumber')}E{ep.get('episodeNumber')} from keep rule deletion")
-        
+                    logger.info(
+                        f"🔒 Protected anchor S{ep.get('seasonNumber')}E{ep.get('episodeNumber')} "
+                        f"from keep rule deletion"
+                    )
+
+        # ── Sequential mode: advance to next season on finale ──────────────
+        if (parsed_ah and parsed_ah['has_plus'] and parsed_ah['is_sequential']
+                and not skip_rule_processing):
+            _advance_sequential_if_finale(
+                series_id, season_number, episode_number, rule, series_title, all_episodes
+            )
+
         logger.info(f"✅ Webhook processing complete for {series_id}")
-            
+
     except Exception as e:
         logger.error(f"Error in webhook processing: {str(e)}")
+
+
+def _advance_sequential_if_finale(series_id, season_number, episode_number, rule,
+                                   series_title, all_episodes):
+    """
+    For sequential (eN+) mode: if the watched episode is the season finale,
+    grab the next season's activation episode and set it to held state.
+    Does nothing if the series is ended or next season data is unavailable.
+    """
+    try:
+        # Determine if this episode is the season finale
+        season_eps = sorted(
+            [ep for ep in all_episodes
+             if ep['seasonNumber'] == season_number and ep['seasonNumber'] > 0],
+            key=lambda e: e['episodeNumber']
+        )
+        if not season_eps or episode_number != season_eps[-1]['episodeNumber']:
+            return  # Not the finale
+
+        # Check if series is ended
+        headers = {'X-Api-Key': SONARR_API_KEY}
+        try:
+            sr = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+            if sr.ok and sr.json().get('status', '').lower() == 'ended':
+                logger.info(
+                    f"Sequential advance skipped: series {series_id} is ended"
+                )
+                return
+        except Exception:
+            pass
+
+        always_have = rule.get('always_have', '')
+        parsed_ah = parse_always_have(always_have)
+        activation_ep = parsed_ah['activation_ep']
+        if activation_ep is None:
+            return
+
+        next_season = season_number + 1
+        target_ep = next(
+            (ep for ep in all_episodes
+             if ep['seasonNumber'] == next_season and ep['episodeNumber'] == activation_ep),
+            None
+        )
+        if not target_ep:
+            logger.info(
+                f"Sequential advance: no S{next_season}E{activation_ep} found for series {series_id}"
+            )
+            return
+
+        # Monitor the next season's activation episode
+        monitor_resp = http.put(
+            f"{SONARR_URL}/api/v3/episode/monitor",
+            headers=headers,
+            json={"episodeIds": [target_ep['id']], "monitored": True}
+        )
+        if not monitor_resp.ok:
+            logger.error(
+                f"Sequential advance: failed to monitor S{next_season}E{activation_ep}: "
+                f"{monitor_resp.text}"
+            )
+            return
+
+        if rule.get('action_option', 'monitor') == 'search':
+            http.post(
+                f"{SONARR_URL}/api/v3/command",
+                headers=headers,
+                json={"name": "EpisodeSearch", "episodeIds": [target_ep['id']]}
+            )
+
+        logger.info(
+            f"Sequential advance: grabbed S{next_season}E{activation_ep} "
+            f"for series {series_id} ({series_title})"
+        )
+
+        # Set next season to held state
+        config = load_config()
+        rule_name = _find_rule_name_for_series(series_id, config)
+        if rule_name:
+            sid = str(series_id)
+            series_data = config['rules'][rule_name]['series'].setdefault(sid, {})
+            series_data.setdefault('activation_seasons', {})[str(next_season)] = 'held'
+            save_config(config)
+            logger.info(
+                f"Sequential advance: set S{next_season} to held for series {series_id}"
+            )
+
+    except Exception as e:
+        logger.error(f"_advance_sequential_if_finale error: {e}", exc_info=True)
+
+
 # ============================================================================
 # GLOBAL SETTINGS & STORAGE GATE
 # ============================================================================
@@ -1342,6 +1496,119 @@ def check_time_based_cleanup(series_id, rule):
     except Exception as e:
         return False, f"Error: {str(e)}"
 
+def _strip_modifiers(expr_part):
+    """
+    Strip trailing +/- modifiers from a single always_have expression part.
+    Returns (base, has_plus, has_minus).
+
+    The range dash in 's1e1-5' is between digits; modifier chars always follow
+    the last alphanumeric/wildcard character, so regex .*[\\w*] captures the base.
+
+    Examples:
+      's*e1+'   → ('s*e1', True, False)
+      's*e1+-'  → ('s*e1', True, True)
+      's1e1-5'  → ('s1e1-5', False, False)
+      'e1+'     → ('e1', True, False)
+    """
+    m = re.match(r'^(.*[\w*])([+\-]*)$', expr_part.strip())
+    if not m:
+        return expr_part.strip(), False, False
+    base = m.group(1)
+    mods = m.group(2)
+    return base, ('+' in mods), ('-' in mods)
+
+
+def parse_always_have(expression):
+    """
+    Parse an always_have expression string and return its components.
+
+    Returns:
+        base (str)          : expression with modifiers stripped
+        has_plus (bool)     : activation (+) modifier present
+        has_minus (bool)    : removable (-) modifier present
+        is_sequential (bool): True when base starts with 'eN' (no season prefix)
+        activation_ep (int) : episode number for activation / sequential advance
+    """
+    empty = {'base': '', 'has_plus': False, 'has_minus': False,
+             'is_sequential': False, 'activation_ep': None}
+    if not expression or not expression.strip():
+        return empty
+
+    expr = expression.strip().lower()
+    # Normalize pilot alias before any other processing
+    expr = re.sub(r'\bpilot\b', 'e1', expr)
+
+    has_plus = False
+    has_minus = False
+    base_parts = []
+
+    for part in expr.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        base_part, p_plus, p_minus = _strip_modifiers(part)
+        has_plus = has_plus or p_plus
+        has_minus = has_minus or p_minus
+        base_parts.append(base_part)
+
+    if not base_parts:
+        return empty
+
+    base = ','.join(base_parts)
+    # Sequential mode: first token starts with 'e' (no season prefix)
+    is_sequential = base_parts[0].startswith('e')
+
+    # Extract activation episode number from the first token
+    activation_ep = None
+    ep_m = re.search(r'e(\d+)$', base_parts[0])
+    if ep_m:
+        activation_ep = int(ep_m.group(1))
+
+    return {
+        'base': base,
+        'has_plus': has_plus,
+        'has_minus': has_minus,
+        'is_sequential': is_sequential,
+        'activation_ep': activation_ep,
+    }
+
+
+_ALWAYS_HAVE_PART_RE = re.compile(
+    r'^(?:all|s\*e\d+|s\d+e\d+(?:-\d+)?|s\d+(?:-\d+)?|e\d+)[+\-]*$',
+    re.IGNORECASE,
+)
+
+
+def validate_always_have_expression(expression):
+    """
+    Validate always_have expression syntax.
+    Returns (is_valid: bool, error_msg: str | None).
+    """
+    if not expression or not expression.strip():
+        return True, None
+
+    expr = expression.strip().lower()
+    expr = re.sub(r'\bpilot\b', 'e1', expr)
+
+    for part in expr.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if not _ALWAYS_HAVE_PART_RE.match(part):
+            return False, f"Invalid always_have expression part: '{part}'"
+
+    return True, None
+
+
+def _find_rule_name_for_series(series_id, config):
+    """Return the rule name that owns this series_id, or None."""
+    sid = str(series_id)
+    for rule_name, rule_data in config.get('rules', {}).items():
+        if sid in rule_data.get('series', {}):
+            return rule_name
+    return None
+
+
 def is_protected_by_expression(season_num, episode_num, expression, total_seasons=None):
     """
     Check if a season/episode matches an always_have expression.
@@ -1353,11 +1620,16 @@ def is_protected_by_expression(season_num, episode_num, expression, total_season
       s1e1-5     - season 1 episodes 1 through 5
       s1-3       - all episodes of seasons 1 through 3
       s*e1       - episode 1 of every season (wildcard expands with total_seasons)
+
+    Modifiers (+/-) are stripped before matching — this function only checks
+    structural match, not activation state.
     """
     if not expression:
         return False
 
     expression = expression.strip().lower()
+    # Normalize pilot alias
+    expression = re.sub(r'\bpilot\b', 'e1', expression)
     if not expression:
         return False
 
@@ -1366,8 +1638,22 @@ def is_protected_by_expression(season_num, episode_num, expression, total_season
         if not part:
             continue
 
+        # Strip trailing modifiers before structural matching
+        part, _, _ = _strip_modifiers(part)
+        if not part:
+            continue
+
         if part == 'all':
             return True
+
+        # eN without season prefix: matches episode N in any season (sequential base)
+        if re.match(r'^e\d+$', part):
+            try:
+                if episode_num == int(part[1:]):
+                    return True
+            except ValueError:
+                pass
+            continue
 
         if not part.startswith('s'):
             continue
@@ -1430,13 +1716,23 @@ def is_protected_by_expression(season_num, episode_num, expression, total_season
 def process_always_have(series_id, expression):
     """
     Monitor any episodes matching the always_have expression and trigger a search.
-    Only ever adds monitoring - never unmonitors or deletes anything.
+    Only ever adds monitoring — never unmonitors or deletes anything.
 
-    Args:
-        series_id: Sonarr series ID (int)
-        expression: always_have expression string (e.g. 's1', 's*e1', 'all')
+    Handles +/- modifier suffixes:
+      +  activation modifier — sets per-season held state; skips if series already watched
+      -  removable modifier  — no special grab logic, only affects anchor protection
+    Sequential mode (eN without s prefix): grabs only the first season's EN.
     """
     if not expression or not expression.strip():
+        return
+
+    parsed = parse_always_have(expression)
+    base = parsed['base']
+    has_plus = parsed['has_plus']
+    is_sequential = parsed['is_sequential']
+    activation_ep = parsed['activation_ep']
+
+    if not base:
         return
 
     headers = {'X-Api-Key': SONARR_API_KEY}
@@ -1454,50 +1750,96 @@ def process_always_have(series_id, expression):
 
         # Collect unmonitored episodes that match the expression
         to_monitor = []
-        for ep in all_episodes:
-            season = ep.get('seasonNumber', 0)
-            ep_num = ep.get('episodeNumber', 0)
-            if season == 0:
-                continue  # skip specials
-            if is_protected_by_expression(season, ep_num, expression):
-                if not ep.get('monitored', False):
-                    to_monitor.append(ep['id'])
+        grabbed_seasons = set()
+
+        if is_sequential and activation_ep is not None:
+            # Sequential mode: grab only the first (lowest-numbered) season's activation ep
+            season_nums = sorted(set(
+                ep['seasonNumber'] for ep in all_episodes
+                if ep['seasonNumber'] > 0
+            ))
+            if season_nums:
+                first_season = season_nums[0]
+                for ep in all_episodes:
+                    if ep['seasonNumber'] == first_season and ep['episodeNumber'] == activation_ep:
+                        grabbed_seasons.add(first_season)
+                        if not ep.get('monitored', False):
+                            to_monitor.append(ep['id'])
+                        break
+        else:
+            # Standard mode: grab all episodes matching the base expression
+            for ep in all_episodes:
+                season = ep.get('seasonNumber', 0)
+                ep_num = ep.get('episodeNumber', 0)
+                if season == 0:
+                    continue
+                if is_protected_by_expression(season, ep_num, base):
+                    grabbed_seasons.add(season)
+                    if not ep.get('monitored', False):
+                        to_monitor.append(ep['id'])
 
         if not to_monitor:
             logger.info(
                 f"process_always_have: no unmonitored matches for series {series_id} "
                 f"with expression '{expression}'"
             )
-            return
-
-        # Monitor matching episodes
-        monitor_resp = http.put(
-            f"{SONARR_URL}/api/v3/episode/monitor",
-            headers=headers,
-            json={"episodeIds": to_monitor, "monitored": True}
-        )
-        if not monitor_resp.ok:
-            logger.error(
-                f"process_always_have: failed to monitor episodes for series {series_id}: "
-                f"{monitor_resp.text}"
-            )
-            return
-
-        logger.info(
-            f"process_always_have: monitored {len(to_monitor)} episodes for series {series_id} "
-            f"(always_have: '{expression}')"
-        )
-
-        # Trigger search for the newly monitored episodes
-        search_resp = http.post(
-            f"{SONARR_URL}/api/v3/command",
-            headers=headers,
-            json={"name": "EpisodeSearch", "episodeIds": to_monitor}
-        )
-        if search_resp.ok:
-            logger.info(f"process_always_have: triggered search for {len(to_monitor)} episodes")
         else:
-            logger.error(f"process_always_have: search trigger failed: {search_resp.text}")
+            # Monitor matching episodes
+            monitor_resp = http.put(
+                f"{SONARR_URL}/api/v3/episode/monitor",
+                headers=headers,
+                json={"episodeIds": to_monitor, "monitored": True}
+            )
+            if not monitor_resp.ok:
+                logger.error(
+                    f"process_always_have: failed to monitor episodes for series {series_id}: "
+                    f"{monitor_resp.text}"
+                )
+                return
+
+            logger.info(
+                f"process_always_have: monitored {len(to_monitor)} episodes for series {series_id} "
+                f"(always_have: '{expression}')"
+            )
+
+            # Trigger search for the newly monitored episodes
+            search_resp = http.post(
+                f"{SONARR_URL}/api/v3/command",
+                headers=headers,
+                json={"name": "EpisodeSearch", "episodeIds": to_monitor}
+            )
+            if search_resp.ok:
+                logger.info(f"process_always_have: triggered search for {len(to_monitor)} episodes")
+            else:
+                logger.error(f"process_always_have: search trigger failed: {search_resp.text}")
+
+        # Initialize per-season held state for + modifier
+        if has_plus and grabbed_seasons:
+            config = load_config()
+            rule_name = _find_rule_name_for_series(series_id, config)
+            if rule_name:
+                sid = str(series_id)
+                series_data = config['rules'][rule_name]['series'].setdefault(sid, {})
+                # Don't apply held state if the series already has watch history
+                already_watched = series_data.get('activity_date') is not None
+                if already_watched:
+                    logger.info(
+                        f"process_always_have: series {series_id} already has watch history — "
+                        f"treating as active (no held state)"
+                    )
+                else:
+                    act_seasons = series_data.setdefault('activation_seasons', {})
+                    newly_held = []
+                    for s in grabbed_seasons:
+                        if str(s) not in act_seasons:
+                            act_seasons[str(s)] = 'held'
+                            newly_held.append(s)
+                    if newly_held:
+                        save_config(config)
+                        logger.info(
+                            f"process_always_have: set held state for series {series_id} "
+                            f"seasons {sorted(newly_held)}"
+                        )
 
     except Exception as e:
         logger.error(f"process_always_have: error for series {series_id}: {e}", exc_info=True)
@@ -1515,17 +1857,15 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
     NOTE: pass check_always_have=False from dormant cleanup - dormant is
     intentionally nuclear and should not respect always_have expressions.
 
-    Currently anchored:
-    - S01E01 (pilot episode) - IF rule-level 'keep_pilot' is enabled
-    - Any episode matching the rule's 'always_have' expression
+    Modifier semantics for always_have:
+      no modifier : always anchor if expression matches (original behaviour)
+      -  only     : never anchor (grabbed but fully subject to grace/keep)
+      +  only     : always anchor if expression matches (same as no modifier)
+      +- combined : anchor only while the season is still in 'held' state;
+                    once activation fires the episode becomes deletable
 
-    Args:
-        episode: Episode dict with 'seasonNumber' and 'episodeNumber'
-        series_id: Optional series ID to check rule-based protection
-        check_always_have: Whether to evaluate the always_have expression (default True)
-
-    Returns:
-        bool: True if episode should be protected from deletion
+    For sequential mode (eN+ without s prefix) the matching is done against
+    the activation_seasons state rather than is_protected_by_expression.
     """
     season = episode.get('seasonNumber')
     episode_num = episode.get('episodeNumber')
@@ -1549,8 +1889,40 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
             # always_have expression (skipped for dormant cleanup)
             if check_always_have:
                 always_have = rule.get('always_have', '')
-                if always_have and is_protected_by_expression(season, episode_num, always_have):
-                    return True
+                if not always_have:
+                    return False
+
+                parsed = parse_always_have(always_have)
+                has_plus = parsed['has_plus']
+                has_minus = parsed['has_minus']
+                is_sequential = parsed['is_sequential']
+                activation_ep = parsed['activation_ep']
+                base = parsed['base']
+
+                # - only modifier: never anchor regardless of expression match
+                if has_minus and not has_plus:
+                    return False
+
+                # Get activation state for this season
+                series_data = rule.get('series', {}).get(series_id_str, {})
+                activation_seasons = series_data.get('activation_seasons', {})
+                season_state = activation_seasons.get(str(season))
+
+                if has_plus and has_minus:
+                    # +- : anchor only while season is in held state
+                    if season_state != 'held':
+                        return False
+                    # Falls through to expression check below
+
+                # Check if this episode matches the expression
+                if is_sequential and activation_ep is not None:
+                    # Sequential mode: anchor if this is the activation ep
+                    # AND the season appears in activation_seasons (was grabbed)
+                    if episode_num == activation_ep and season_state is not None:
+                        return True
+                else:
+                    if is_protected_by_expression(season, episode_num, base):
+                        return True
 
     return False
 
@@ -2194,10 +2566,203 @@ def get_sonarr_disk_space():
         logger.error(f"Error getting disk space: {str(e)}")
         return None
 
+def reconcile_future_seasons():
+    """
+    For every series managed by an Episeerr rule, identify Sonarr-auto-monitored
+    seasons whose episodes are entirely in the future (or have no air date yet) and
+    that are not already tracked in activation_seasons.  These are newly-announced
+    seasons that Sonarr monitors automatically.
+
+    Actions taken per future season:
+      1. Unmonitor all currently-monitored episodes in that season.
+      2. Re-apply the rule's always_have expression to that season (if present and
+         not sequential mode) so the correct episodes end up monitored.
+      3. If the always_have expression carries a + modifier, record the season as
+         'held' in activation_seasons (skipped when series already has watch history).
+
+    A season is considered "future" when:
+      - Every non-special episode either has a future air date or has no air date.
+      - No episode in the season has a file (hasFile is False for all).
+      - The season is not already present in activation_seasons.
+
+    Seasons with any past air date or any downloaded file are left untouched —
+    the user may have made intentional manual changes there.
+    """
+    from collections import defaultdict
+
+    config = load_config()
+    headers = {'X-Api-Key': SONARR_API_KEY}
+    now = datetime.now(timezone.utc)
+    config_changed = False
+    reconciled_seasons = 0
+
+    for rule_name, rule_data in config.get('rules', {}).items():
+        always_have = rule_data.get('always_have', '')
+        parsed_ah = parse_always_have(always_have) if always_have else None
+        is_sequential = parsed_ah['is_sequential'] if parsed_ah else False
+
+        for series_id_str, series_data in list(rule_data.get('series', {}).items()):
+            series_id = int(series_id_str)
+            activation_seasons = series_data.get('activation_seasons', {})
+
+            try:
+                resp = http.get(
+                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                    headers=headers
+                )
+                if not resp.ok:
+                    cleanup_logger.warning(
+                        f"Future season reconcile: cannot fetch episodes for series {series_id}"
+                    )
+                    continue
+
+                all_episodes = resp.json()
+
+                # Lazy-fetch series title only if we're going to log something
+                _title_cache = {}
+
+                def _series_title():
+                    if series_id not in _title_cache:
+                        try:
+                            sr = http.get(
+                                f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers
+                            )
+                            _title_cache[series_id] = sr.json().get('title', f"series:{series_id}") if sr.ok else f"series:{series_id}"
+                        except Exception:
+                            _title_cache[series_id] = f"series:{series_id}"
+                    return _title_cache[series_id]
+
+                # Group non-special episodes by season
+                seasons_map = defaultdict(list)
+                for ep in all_episodes:
+                    sn = ep.get('seasonNumber', 0)
+                    if sn > 0:
+                        seasons_map[sn].append(ep)
+
+                for season_num, eps in sorted(seasons_map.items()):
+                    season_str = str(season_num)
+
+                    # Already tracked by activation system — leave alone
+                    if season_str in activation_seasons:
+                        continue
+
+                    # Classify season: future only if every episode is in the future
+                    # and none have a downloaded file
+                    is_future = True
+                    for ep in eps:
+                        if ep.get('hasFile', False):
+                            is_future = False
+                            break
+                        air_str = ep.get('airDateUtc', '')
+                        if air_str:
+                            try:
+                                air_dt = datetime.fromisoformat(
+                                    air_str.replace('Z', '+00:00')
+                                )
+                                if air_dt < now:
+                                    is_future = False
+                                    break
+                            except Exception:
+                                pass  # Unparseable date — treat as "no date" (future)
+
+                    if not is_future:
+                        continue
+
+                    # Only act if Sonarr auto-monitored some episodes in this season
+                    monitored_ids = [ep['id'] for ep in eps if ep.get('monitored', False)]
+                    if not monitored_ids:
+                        continue  # Already fully unmonitored — nothing to fix
+
+                    # Step 1: unmonitor everything in this future season
+                    unmon_resp = http.put(
+                        f"{SONARR_URL}/api/v3/episode/monitor",
+                        headers=headers,
+                        json={"episodeIds": monitored_ids, "monitored": False}
+                    )
+                    if not unmon_resp.ok:
+                        cleanup_logger.error(
+                            f"Future season reconcile: failed to unmonitor "
+                            f"'{_series_title()}' S{season_num}: {unmon_resp.text}"
+                        )
+                        continue
+
+                    cleanup_logger.info(
+                        f"📅 Future season reconciled: '{_series_title()}' S{season_num} — "
+                        f"unmonitored {len(monitored_ids)} Sonarr-auto-monitored episodes"
+                    )
+                    reconciled_seasons += 1
+
+                    # Step 2: re-apply always_have expression to this season
+                    # Sequential mode (e1+) is handled by the on-finale advance logic;
+                    # skip it here to avoid grabbing ahead of schedule.
+                    if parsed_ah and always_have and not is_sequential:
+                        base = parsed_ah['base']
+                        has_plus = parsed_ah['has_plus']
+
+                        to_remonitor = [
+                            ep['id'] for ep in eps
+                            if is_protected_by_expression(
+                                season_num, ep.get('episodeNumber', 0), base
+                            )
+                        ]
+
+                        if to_remonitor:
+                            mon_resp = http.put(
+                                f"{SONARR_URL}/api/v3/episode/monitor",
+                                headers=headers,
+                                json={"episodeIds": to_remonitor, "monitored": True}
+                            )
+                            if mon_resp.ok:
+                                cleanup_logger.info(
+                                    f"  🔒 Always Have re-applied: '{_series_title()}' S{season_num} — "
+                                    f"monitored {len(to_remonitor)} episodes ('{always_have}')"
+                                )
+                                # Step 3: set held state for + modifier
+                                if has_plus:
+                                    already_watched = series_data.get('activity_date') is not None
+                                    if already_watched:
+                                        cleanup_logger.info(
+                                            f"  ↪ Series has watch history — treating S{season_num} as active"
+                                        )
+                                    else:
+                                        if 'activation_seasons' not in series_data:
+                                            series_data['activation_seasons'] = {}
+                                        series_data['activation_seasons'][season_str] = 'held'
+                                        config_changed = True
+                                        cleanup_logger.info(
+                                            f"  🔒 Held state set: '{_series_title()}' S{season_num}"
+                                        )
+                            else:
+                                cleanup_logger.error(
+                                    f"  ✗ Failed to re-apply always_have for "
+                                    f"'{_series_title()}' S{season_num}: {mon_resp.text}"
+                                )
+                        # else: expression present but no match in this season (e.g. s1e1+ for S2)
+                    elif is_sequential and always_have:
+                        cleanup_logger.info(
+                            f"  ↪ Sequential mode ('{always_have}'): S{season_num} left fully "
+                            f"unmonitored — sequential advance will handle it on finale"
+                        )
+
+            except Exception as e:
+                cleanup_logger.error(
+                    f"Future season reconcile error for series {series_id}: {e}",
+                    exc_info=True
+                )
+
+    if config_changed:
+        save_config(config)
+
+    cleanup_logger.info(
+        f"📅 Future season reconciliation complete: {reconciled_seasons} season(s) processed"
+    )
+    return reconciled_seasons
+
+
 def run_unified_cleanup():
     """
     UNIFIED CLEANUP: Uses your 3 existing functions with smart storage logic
-    
+
     LOGIC:
     - No storage gate → Always run all 3 functions (manual/scheduled)
     - Storage gate set → Only run if below threshold
@@ -2274,9 +2839,18 @@ def run_unified_cleanup():
         except Exception as e:
             cleanup_logger.error(f"❌ Error in tag reconciliation: {str(e)}")
         # ==================== END PHASE 0 ====================
-        
+
+        # ==================== PHASE 0.5 - FUTURE SEASON RECONCILIATION ====================
+        cleanup_logger.info("=" * 80)
+        cleanup_logger.info("📅 Phase 0.5: Future season reconciliation")
+        try:
+            reconcile_future_seasons()
+        except Exception as e:
+            cleanup_logger.error(f"❌ Error in future season reconciliation: {str(e)}")
+        # ==================== END PHASE 0.5 ====================
+
         total_processed = 0
-        
+
         # PRIORITY 1: DORMANT (oldest, most aggressive)
         cleanup_logger.info("🔴 Phase 1: Dormant cleanup (delete ALL episodes from abandoned series)")
         dormant_count = run_dormant_cleanup()
