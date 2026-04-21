@@ -739,6 +739,10 @@ def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_t
     Fetch next episodes using dropdown system (get_type + get_count).
     Assumes linear watching only.
     """
+    # get_count=0 means don't fetch anything
+    if get_count == 0 and get_type != 'all':
+        logger.info("get_count=0: not fetching any next episodes")
+        return []
     next_episode_ids = []
 
     try:
@@ -761,7 +765,7 @@ def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_t
             next_episode_ids.extend(remaining_current)
             
             # Get additional full seasons if needed
-            seasons_to_get = get_count if get_count else 1
+            seasons_to_get = get_count if get_count is not None else 1
             if not remaining_current:
                 # Current season finished, get next X seasons
                 for season_offset in range(1, seasons_to_get + 1):
@@ -778,7 +782,7 @@ def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_t
             
         else:  # episodes
             # Get specific number of episodes in linear order
-            num_episodes = get_count if get_count else 1
+            num_episodes = get_count if get_count is not None else 1
             
             # Get remaining episodes in current season first
             current_season_episodes = get_episode_details(series_id, season_number)
@@ -1051,7 +1055,7 @@ def rule_to_legacy_params(rule):
     elif get_type == 'seasons':
         get_option = 'season' if get_count == 1 else str(get_count)
     else:
-        get_option = str(get_count) if get_count else '1'
+        get_option = str(get_count) if get_count is not None else '1'
     
     # Convert keep params
     if keep_type == 'all':

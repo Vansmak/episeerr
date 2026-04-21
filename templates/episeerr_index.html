@@ -33,7 +33,7 @@
                         
                         <div id="requests-table-container" style="display: none;">
                             <div class="table-responsive">
-                                <table class="table table-hover">
+                                <table class="table table-dark table-hover">
                                     <thead>
                                         <tr>
                                             <th>Series</th>
@@ -234,4 +234,12 @@ function getTimeAgo(timestamp) {
     return Math.floor(diff / 86400) + ' days ago';
 }
 </script>
+
+<style>
+.alert-warning {
+    background-color: #4a3a1a;
+    border-color: #6b5420;
+    color: #f3d99d;
+}
+</style>
 {% endblock %}

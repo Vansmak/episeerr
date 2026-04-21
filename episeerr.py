@@ -1,4 +1,4 @@
-__version__ = "3.6.1"
+__version__ = "3.6.2"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -3833,13 +3833,13 @@ def apply_rule_to_selection():
                     if _get_type == 'all':
                         _to_monitor = [ep['id'] for ep in _all_eps if ep.get('seasonNumber', 0) >= _starting_season]
                     elif _get_type == 'seasons':
-                        _n = _get_count or 1
+                        _n = _get_count if _get_count is not None else 1
                         _to_monitor = [
                             ep['id'] for ep in _all_eps
                             if _starting_season <= ep.get('seasonNumber', 0) < (_starting_season + _n)
                         ]
                     else:  # episodes
-                        _n = _get_count or 1
+                        _n = _get_count if _get_count is not None else 1
                         _to_monitor = [ep['id'] for ep in _season_eps[:_n]]
 
                     if _to_monitor:

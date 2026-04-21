@@ -90,7 +90,7 @@
                         
                         <!-- Episodes Table -->
                         <div class="table-responsive">
-                            <table class="table table-sm table-hover">
+                            <table class="table table-dark table-sm table-hover">
                                 <thead>
                                     <tr>
                                         <th style="width: 40px;">
@@ -353,12 +353,41 @@ function rejectEpisodes(episodeIds) {
     padding-left: 15px;
 }
 
-.table-hover tbody tr:hover {
-    background-color: rgba(0, 0, 0, 0.02);
+/* Dark accordion */
+.accordion-item {
+    background-color: var(--bg-secondary, #1a1f24);
+    border-color: var(--border-color, #2d3142);
+}
+
+.accordion-button {
+    background-color: var(--bg-secondary, #1a1f24);
+    color: var(--text-light, #e2e8f0);
 }
 
 .accordion-button:not(.collapsed) {
-    background-color: #f8f9fa;
+    background-color: var(--sidebar-bg, #1a1d29);
+    color: var(--text-light, #e2e8f0);
+    box-shadow: inset 0 -1px 0 var(--border-color, #2d3142);
+}
+
+.accordion-button::after {
+    filter: invert(1);
+}
+
+.accordion-body {
+    background-color: var(--bg-secondary, #1a1f24);
+}
+
+/* Dark table hover */
+.table-dark.table-hover tbody tr:hover {
+    --bs-table-hover-bg: rgba(255, 255, 255, 0.06);
+}
+
+/* Dark alert-warning */
+.alert-warning {
+    background-color: #4a3a1a;
+    border-color: #6b5420;
+    color: #f3d99d;
 }
 </style>
 {% endblock %}

@@ -45,7 +45,8 @@
                                         <div class="col-md-6" id="get_count_container">
                                             <label for="get_count" class="form-label">Count</label>
                                             <input type="number" class="form-control" id="get_count" name="get_count" 
-                                                   min="1" value="1" required>
+                                                   min="0" value="1" required>
+                                            <div class="form-text">0 = Don't get anything</div>
                                         </div>
                                     </div>
                                     <div class="form-text mt-2">
@@ -219,12 +220,15 @@ function updateExplanation(type, count, targetId) {
     const explanation = document.getElementById(targetId);
     if (!explanation) return;
     
+    const isGet = targetId.includes('get');
     if (type === 'all') {
-        explanation.textContent = type.includes('get') ? 'Get all available episodes' : 'Keep all episodes forever';
+        explanation.textContent = isGet ? 'Get all available episodes' : 'Keep all episodes forever';
+    } else if (count == 0) {
+        explanation.textContent = isGet ? "Don't get anything (keep-only mode)" : 'Keep nothing (immediate delete after watching)';
     } else if (type === 'episodes') {
-        explanation.textContent = `${targetId.includes('get') ? 'Get' : 'Keep'} ${count} episode${count > 1 ? 's' : ''}`;
+        explanation.textContent = `${isGet ? 'Get' : 'Keep'} ${count} episode${count > 1 ? 's' : ''}`;
     } else if (type === 'seasons') {
-        explanation.textContent = `${targetId.includes('get') ? 'Get' : 'Keep'} ${count} season${count > 1 ? 's' : ''}`;
+        explanation.textContent = `${isGet ? 'Get' : 'Keep'} ${count} season${count > 1 ? 's' : ''}`;
     }
 }
 

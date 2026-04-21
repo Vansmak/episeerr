@@ -1,4 +1,9 @@
 # Changelog
+get count now accepts 0
+## v3.6.2
+
+### 🎨 UI
+- Dark theme applied consistently to Pending Deletions and Episeerr index pages — accordion, table, and alert-warning now use app CSS variables instead of Bootstrap light defaults
 
 ## v3.6.1
 
