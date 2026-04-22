@@ -1,4 +1,4 @@
-__version__ = "3.6.2"
+__version__ = "3.6.6"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -2567,6 +2567,7 @@ def create_rule():
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
+            'release_keep_on_finale': 'release_keep_on_finale' in request.form,
             'always_have': always_have,
             'series': {},
             'dry_run': False
@@ -2646,6 +2647,7 @@ def edit_rule(rule_name):
             'dormant_days': dormant_days,
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
+            'release_keep_on_finale': 'release_keep_on_finale' in request.form,
             'always_have': always_have
         })
         
@@ -2914,7 +2916,7 @@ def inject_service_urls():
                 'icon': service_icon
             }
     
-    return {'services': services}
+    return {'services': services, 'app_version': __version__}
 
 # UPDATE unassign_series() function
 

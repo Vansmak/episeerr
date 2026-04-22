@@ -48,6 +48,15 @@
         transition: transform 0.3s ease-in-out;
     }
 
+    .sidebar-version {
+        padding: 8px 20px 12px;
+        font-size: 0.7rem;
+        color: var(--nav-text, #9ca3af);
+        opacity: 0.5;
+        text-align: center;
+        letter-spacing: 0.05em;
+    }
+
     /* Sidebar Logo Header */
     .sidebar-logo {
         padding: 16px 20px;
@@ -580,6 +589,7 @@
             </div>
 
         </nav>
+        <div class="sidebar-version">v{{ app_version }}</div>
     </aside>
 
     <!-- Main Content Area -->

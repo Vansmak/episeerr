@@ -108,6 +108,18 @@
                             </div>
 
                             <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="release_keep_on_finale"
+                                           name="release_keep_on_finale"
+                                           {% if rule.get('release_keep_on_finale') %}checked{% endif %}>
+                                    <label class="form-check-label" for="release_keep_on_finale">
+                                        <i class="fas fa-flag-checkered text-info me-1"></i>Release Keep on Season Finale (when no next season is available)
+                                    </label>
+                                    <div class="form-text">When the last episode of a season is watched and no next season exists, kept episodes are released immediately. If a grace period is set they will enter the grace timer, otherwise they are deleted immediately.</div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
                                 <label for="always_have" class="form-label"><i class="fas fa-lock text-success me-1"></i>Always Have</label>
                                 {% if error %}
                                 <div class="alert alert-danger py-1 px-2 mb-1 small">{{ error }}</div>

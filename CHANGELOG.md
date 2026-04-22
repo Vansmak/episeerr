@@ -1,5 +1,24 @@
 # Changelog
 
+## v3.6.6
+
+### ✨ Release keep on season finale
+
+- New rule flag: **Release Keep on Season Finale** (`release_keep_on_finale`)
+- When the last episode of a season is watched and no next season exists in Sonarr with future or unscheduled episodes, episodes currently held in the keep window are released from keep protection
+- If a grace period (`grace_watched`) is set on the rule, released episodes enter the grace countdown (timer starts from the finale watch); otherwise they are deleted immediately
+- "No next season" = no episodes exist in a future season without a file and with a future or null air date — if any such episodes exist, the keep window is left unchanged
+- Anchor-protected episodes (`always_have`, `keep_pilot`) are never released
+- Fires only on the season finale (highest episode number in the season), not on mid-season watches
+- Works independently of the `+` activation modifier system
+- Checkbox added to Create Rule and Edit Rule forms below Keep Pilot
+
+### 🎨 UI
+
+- App version now displayed at the bottom of the sidebar (e.g. `v3.6.5`) — useful for users running the `latest` Docker tag
+
+---
+
 ## v3.6.5
 
 ### ✨ Always Have expression modifiers (`+` and `-`)

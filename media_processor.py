@@ -1137,6 +1137,49 @@ def find_episodes_leaving_keep_block(all_episodes, keep_type, keep_count, last_w
         logger.error(f"Error finding episodes leaving keep block: {str(e)}")
         return []
 
+def _has_next_season_available(all_episodes, current_season):
+    """Returns True if any next-season episode exists that hasn't aired yet (future or unscheduled)."""
+    now = datetime.now(timezone.utc)
+    for ep in all_episodes:
+        s = ep.get('seasonNumber', 0)
+        if s <= current_season or s == 0:
+            continue
+        if ep.get('hasFile'):
+            continue
+        air_date = ep.get('airDateUtc')
+        if not air_date:
+            return True  # unscheduled episode means next season is coming
+        try:
+            air_dt = datetime.fromisoformat(air_date.replace('Z', '+00:00'))
+            if air_dt > now:
+                return True
+        except Exception:
+            return True
+    return False
+
+
+def _find_episodes_in_keep_window(all_episodes, keep_type, keep_count, last_watched_season, last_watched_episode):
+    """Return episodes currently protected by the keep block (have files, not slated for deletion)."""
+    if keep_type == "all":
+        return [ep for ep in all_episodes if ep.get('hasFile') and ep['seasonNumber'] > 0]
+
+    leaving_ids = {
+        ep['id'] for ep in find_episodes_leaving_keep_block(
+            all_episodes, keep_type, keep_count, last_watched_season, last_watched_episode
+        )
+    }
+
+    return [
+        ep for ep in all_episodes
+        if ep.get('hasFile')
+        and ep['seasonNumber'] > 0
+        and ep['id'] not in leaving_ids
+        and (ep['seasonNumber'] < last_watched_season
+             or (ep['seasonNumber'] == last_watched_season
+                 and ep['episodeNumber'] <= last_watched_episode))
+    ]
+
+
 def process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_title=None):
     """
     Clean webhook processing - ONLY handles real-time episode management.
@@ -1265,6 +1308,61 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                         f"🔒 Protected anchor S{ep.get('seasonNumber')}E{ep.get('episodeNumber')} "
                         f"from keep rule deletion"
                     )
+
+        # ── Season finale: release keep protection when no next season exists ─
+        if rule.get('release_keep_on_finale', False) and not skip_rule_processing:
+            season_eps = sorted(
+                [ep for ep in all_episodes
+                 if ep['seasonNumber'] == season_number and ep['seasonNumber'] > 0],
+                key=lambda e: e['episodeNumber']
+            )
+            is_finale = bool(season_eps and episode_number == season_eps[-1]['episodeNumber'])
+
+            if is_finale:
+                if _has_next_season_available(all_episodes, season_number):
+                    logger.info(
+                        f"🏁 {series_title or series_id} S{season_number} finale: "
+                        f"next season detected — keep protection unchanged"
+                    )
+                else:
+                    kept = _find_episodes_in_keep_window(
+                        all_episodes, keep_type, keep_count, season_number, episode_number
+                    )
+                    releasable = [ep for ep in kept if not is_anchor_episode(ep, series_id)]
+                    title = series_title or f"Series {series_id}"
+                    ep_list = ', '.join(
+                        f"S{ep['seasonNumber']:02d}E{ep['episodeNumber']:02d}"
+                        for ep in releasable
+                    )
+
+                    if releasable:
+                        grace_watched = rule.get('grace_watched')
+                        if grace_watched:
+                            logger.info(
+                                f"🏁 {title} S{season_number} finale — no next season: "
+                                f"{len(releasable)} kept episode(s) released from keep protection, "
+                                f"entering grace period ({grace_watched}d): {ep_list}"
+                            )
+                        else:
+                            file_ids = [
+                                ep['episodeFileId'] for ep in releasable
+                                if ep.get('episodeFileId')
+                            ]
+                            if file_ids:
+                                delete_episodes_immediately(
+                                    file_ids, title,
+                                    reason=f"Season finale, no next season (released from keep)"
+                                )
+                                logger.info(
+                                    f"🏁 {title} S{season_number} finale — no next season: "
+                                    f"deleted {len(file_ids)} episode(s) released from keep. "
+                                    f"Episodes: {ep_list}"
+                                )
+                    else:
+                        logger.info(
+                            f"🏁 {title} S{season_number} finale — no next season: "
+                            f"no releasable kept episodes (all anchor-protected)"
+                        )
 
         # ── Sequential mode: advance to next season on finale ──────────────
         if (parsed_ah and parsed_ah['has_plus'] and parsed_ah['is_sequential']
