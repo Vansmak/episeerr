@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.6.7
+
+### 🐛 Bug Fixes
+
+- Fixed Approve All / Reject All buttons misalignment in Pending Deletions accordion headers — buttons are now outside the `accordion-button` element to avoid Bootstrap flexbox/chevron conflicts
+- Jellyfin documentation fixes
+
+---
+
 ## v3.6.6
 
 ### ✨ Release keep on season finale
