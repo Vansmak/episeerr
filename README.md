@@ -540,12 +540,37 @@ docker logs episeerr | grep "\[Plex webhook\]"
      "plex_season_num": "{season_num}",
      "plex_ep_num": "{episode_num}",
      "thetvdb_id": "{thetvdb_id}",
-     "themoviedb_id": "{themoviedb_id}"
+     "themoviedb_id": "{themoviedb_id}",
+     "notification_type": "{notification_type}"
    }
    ```
 4. **Save**
 
 > **Legacy URL:** `/webhook` still works if you have an existing Tautulli setup — no changes needed.
+
+**Optional: Playback Start activation (for `+` modifier rules)**
+
+If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold released the moment you press play rather than after the watch threshold, add a **second** notification agent:
+
+1. **Tautulli** → Settings → Notification Agents → Add → Webhook
+2. **Configure:**
+   - **Webhook URL:** `http://your-episeerr:5002/api/integration/tautulli/webhook`
+   - **Method:** POST
+   - **Trigger:** "Playback Start"
+3. **Data → Text:** *(same template as above — `notification_type` is what tells Episeerr this is a play-start event)*
+   ```json
+   {
+     "plex_title": "{show_name}",
+     "plex_season_num": "{season_num}",
+     "plex_ep_num": "{episode_num}",
+     "thetvdb_id": "{thetvdb_id}",
+     "themoviedb_id": "{themoviedb_id}",
+     "notification_type": "{notification_type}"
+   }
+   ```
+4. **Save**
+
+> For non-held series (no `+` modifier), playback start events are silently ignored — no risk of double-processing.
 
 In Tautulli → Settings → General, set **TV Episode Watched Percent** between 50–95% (recommended: 80%).
 
@@ -941,13 +966,13 @@ This is about setting up the show, not ongoing watching. When a show enters a ru
 |------------|-----------|
 | `s*e1` | Grab & permanently keep E1 of every season (default) |
 | `s*e1-` | Grab E1 of every season; follows grace/keep rules after watched |
-| `s*e1+` | Per-season activation gate — get-count held at 0 until E1 is watched |
+| `s*e1+` | Per-season activation gate — get-count held at 0 until E1 playback starts |
 | `s*e1+-` | Per-season gate + E1 removable after activation |
 | `e1+` | Sequential: grab one season at a time, advance on finale |
 | `s1e1+` | Activation gate on pilot only; full auto from S2 |
 | `pilot+` | Alias for `e1+` |
 
-- **`+`** — suppresses get-count until the activation episode is watched (per-season state)
+- **`+`** — suppresses get-count until the activation episode **starts playing** (per-season state); fires on playback start across Plex, Jellyfin, Emby, and Tautulli
 - **`-`** — activation episode is removable by grace/keep after activation fires
 
 Combine with commas. Leave blank to skip. Always Have, Get, Keep, Grace, and Dormant are all independent — use any combination.
@@ -1154,9 +1179,9 @@ Action: Search
 ```
 
 **What happens:**
-- Show added → S1E1 downloaded, get-count held at 0 until S1E1 is watched
-- Watch S1E1 → activation fires, get-count unlocked, normal Get/Keep applies
-- Watch S1 finale → S2E1 grabbed, get-count held again until S2E1 is watched
+- Show added → S1E1 downloaded, get-count held at 0 until S1E1 starts playing
+- Press play on S1E1 → activation fires immediately, get-count unlocked, normal Get/Keep applies
+- Watch S1 finale → S2E1 grabbed, get-count held again until S2E1 starts playing
 - Ended series: does not advance past the final season
 
 ---

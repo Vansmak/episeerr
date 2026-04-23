@@ -521,9 +521,9 @@ class JellyfinIntegration(ServiceIntegration):
                         return jsonify({'status': 'success', 'message': 'Not an episode'}), 200
                 
                 # ============================================================================
-                # POLLING MODE: SessionStart or PlaybackStart
+                # SESSION START: SessionStart or PlaybackStart
                 # ============================================================================
-                elif notification_type in ['SessionStart', 'PlaybackStart'] and method == 'polling':
+                elif notification_type in ['SessionStart', 'PlaybackStart']:
                     item_type = data.get('ItemType')
                     if item_type == 'Episode':
                         series_name = data.get('SeriesName')
@@ -531,13 +531,13 @@ class JellyfinIntegration(ServiceIntegration):
                         episode = data.get('EpisodeNumber')
                         webhook_id = data.get('Id')
                         user_name = data.get('NotificationUsername', 'Unknown')
-                        
+
                         if all([series_name, season is not None, episode is not None]):
                             logger.info(f"📺 Jellyfin session started: {series_name} S{season}E{episode} (User: {user_name})")
-                            
+
                             if not integration.check_user(user_name):
                                 return jsonify({'status': 'success', 'message': 'User not configured'}), 200
-                            
+
                             episode_info = {
                                 'user_name': user_name,
                                 'series_name': series_name,
@@ -546,14 +546,38 @@ class JellyfinIntegration(ServiceIntegration):
                                 'progress_percent': 0.0,
                                 'is_paused': False
                             }
-                            
-                            polling_started = integration.start_polling(webhook_id, episode_info)
-                            
-                            if polling_started:
-                                logger.info(f"✅ Started polling for {series_name} S{season}E{episode}")
-                                return jsonify({'status': 'success', 'message': 'Started polling'}), 200
+
+                            # Held activation check — fires for any detection method
+                            from media_processor import is_held_activation_episode
+                            is_activation, _ = is_held_activation_episode(
+                                series_name, int(season), int(episode)
+                            )
+                            if is_activation:
+                                logger.info(
+                                    f"🔓 Held activation: {series_name} S{season}E{episode} "
+                                    "— releasing hold on play start"
+                                )
+                                tracking_key = get_episode_tracking_key(
+                                    series_name, int(season), int(episode), user_name
+                                )
+                                processed_jellyfin_episodes.add(tracking_key)
+                                threading.Thread(
+                                    target=integration.process_episode,
+                                    args=(episode_info,),
+                                    daemon=True,
+                                    name="JellyfinHeldActivation"
+                                ).start()
+                                return jsonify({'status': 'success', 'message': 'Held activation triggered'}), 200
+
+                            if method == 'polling':
+                                polling_started = integration.start_polling(webhook_id, episode_info)
+                                if polling_started:
+                                    logger.info(f"✅ Started polling for {series_name} S{season}E{episode}")
+                                    return jsonify({'status': 'success', 'message': 'Started polling'}), 200
+                                else:
+                                    return jsonify({'status': 'warning', 'message': 'Polling may already be active'}), 200
                             else:
-                                return jsonify({'status': 'warning', 'message': 'Polling may already be active'}), 200
+                                return jsonify({'status': 'success', 'message': 'Session start noted'}), 200
                         else:
                             return jsonify({'status': 'error', 'message': 'Missing fields'}), 400
                     else:

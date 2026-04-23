@@ -1873,6 +1873,27 @@ class PlexIntegration(ServiceIntegration):
                         if series_name and season is not None and ep_num is not None:
                             ep_key = _ep_key(series_name, season, ep_num)
 
+                            # Held activation check — only on play start, before threshold logic
+                            if event == 'media.play' and not _was_episode_processed(ep_key):
+                                from media_processor import is_held_activation_episode
+                                is_activation, _ = is_held_activation_episode(
+                                    series_name, int(season), int(ep_num)
+                                )
+                                if is_activation:
+                                    logger.info(
+                                        f"[Plex] Held activation: {series_name} S{season}E{ep_num} "
+                                        "— releasing hold on play start"
+                                    )
+                                    _mark_episode_processed(ep_key)
+                                    threading.Thread(
+                                        target=integration.process_episode,
+                                        args=({'series_name': series_name, 'season_number': season,
+                                               'episode_number': ep_num, 'user_name': _evt_user,
+                                               'progress_percent': 0.0},),
+                                        daemon=True,
+                                        name="PlexHeldActivation",
+                                    ).start()
+
                             if not _was_episode_processed(ep_key) and progress >= threshold:
                                 # Threshold already met from webhook data — process now
                                 _mark_episode_processed(ep_key)
@@ -1913,6 +1934,33 @@ class PlexIntegration(ServiceIntegration):
                                         f"[Plex] Polling started (fallback) for "
                                         f"{series_name} S{season}E{ep_num}"
                                     )
+
+                    elif event == 'media.play':
+                        # Held activation for scrobble/stop_threshold detection modes
+                        series_name = metadata.get('grandparentTitle', 'Unknown')
+                        season      = metadata.get('parentIndex')
+                        ep_num      = metadata.get('index')
+                        if series_name and season is not None and ep_num is not None:
+                            ep_key = _ep_key(series_name, season, ep_num)
+                            if not _was_episode_processed(ep_key):
+                                from media_processor import is_held_activation_episode
+                                is_activation, _ = is_held_activation_episode(
+                                    series_name, int(season), int(ep_num)
+                                )
+                                if is_activation:
+                                    logger.info(
+                                        f"[Plex] Held activation: {series_name} S{season}E{ep_num} "
+                                        "— releasing hold on play start"
+                                    )
+                                    _mark_episode_processed(ep_key)
+                                    threading.Thread(
+                                        target=integration.process_episode,
+                                        args=({'series_name': series_name, 'season_number': season,
+                                               'episode_number': ep_num, 'user_name': _evt_user,
+                                               'progress_percent': 0.0},),
+                                        daemon=True,
+                                        name="PlexHeldActivation",
+                                    ).start()
 
             elif event == 'media.stop':
                 with _wh_lock:
@@ -2036,20 +2084,28 @@ class PlexIntegration(ServiceIntegration):
                 elif not (series_name and season is not None and ep_num is not None):
                     logger.warning("[Plex] Scrobble event missing episode metadata")
                 elif method == 'scrobble':
-                    logger.info(f"[Plex] Scrobble: {series_name} S{season}E{ep_num} ({user})")
-                    episode_info = {
-                        'series_name':    series_name,
-                        'season_number':  season,
-                        'episode_number': ep_num,
-                        'user_name':      user,
-                        'progress_percent': 90.0,
-                    }
-                    threading.Thread(
-                        target=integration.process_episode,
-                        args=(episode_info,),
-                        daemon=True,
-                        name="PlexScrobble",
-                    ).start()
+                    ep_key = _ep_key(series_name, season, ep_num)
+                    if _was_episode_processed(ep_key):
+                        logger.info(
+                            f"[Plex] Scrobble skipped — already processed (held activation) "
+                            f"for {series_name} S{season}E{ep_num}"
+                        )
+                    else:
+                        _mark_episode_processed(ep_key)
+                        logger.info(f"[Plex] Scrobble: {series_name} S{season}E{ep_num} ({user})")
+                        episode_info = {
+                            'series_name':    series_name,
+                            'season_number':  season,
+                            'episode_number': ep_num,
+                            'user_name':      user,
+                            'progress_percent': 90.0,
+                        }
+                        threading.Thread(
+                            target=integration.process_episode,
+                            args=(episode_info,),
+                            daemon=True,
+                            name="PlexScrobble",
+                        ).start()
                 elif method == 'stop_threshold':
                     # Scrobble fires as safety net — only process if stop didn't already catch it
                     ep_key = _ep_key(series_name, season, ep_num)

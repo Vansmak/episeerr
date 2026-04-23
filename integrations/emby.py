@@ -460,10 +460,10 @@ class EmbyIntegration(ServiceIntegration):
                         
                         if all([series_name, season is not None, episode is not None, session_id]):
                             logger.info(f"📺 Emby session started: {series_name} S{season}E{episode} (User: {user_name})")
-                            
+
                             if not integration.check_user(user_name):
                                 return jsonify({'status': 'success', 'message': 'User not configured'}), 200
-                            
+
                             episode_info = {
                                 'user_name': user_name,
                                 'series_name': series_name,
@@ -472,7 +472,29 @@ class EmbyIntegration(ServiceIntegration):
                                 'progress_percent': 0.0,
                                 'is_paused': False
                             }
-                            
+
+                            # Held activation check — fire rule immediately if this is the activation ep
+                            from media_processor import is_held_activation_episode
+                            is_activation, _ = is_held_activation_episode(
+                                series_name, int(season), int(episode)
+                            )
+                            if is_activation:
+                                logger.info(
+                                    f"🔓 Held activation: {series_name} S{season}E{episode} "
+                                    "— releasing hold on play start"
+                                )
+                                tracking_key = get_episode_tracking_key(
+                                    series_name, int(season), int(episode), user_name
+                                )
+                                processed_jellyfin_episodes.add(tracking_key)
+                                threading.Thread(
+                                    target=integration.process_episode,
+                                    args=(episode_info,),
+                                    daemon=True,
+                                    name="EmbyHeldActivation"
+                                ).start()
+                                return jsonify({'status': 'success', 'message': 'Held activation triggered'}), 200
+
                             polling_started = integration.start_polling(session_id, episode_info)
                             
                             if polling_started:

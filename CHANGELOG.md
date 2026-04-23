@@ -1,5 +1,22 @@
 # Changelog
 
+## v3.6.8
+
+### ✨ Playback start activation for `+` modifier
+
+When any integration receives a **playback start** event for the activation episode of a series in held state (i.e. using the `+` modifier), the hold is released and the rule executes immediately — without waiting for the watch-completion threshold to be met.
+
+- **Plex**: fires on `media.play` for all detection methods (polling, scrobble, stop+threshold). Marks the episode as processed so later threshold/scrobble events don't double-fire.
+- **Jellyfin**: fires on `SessionStart` / `PlaybackStart` for all detection methods (polling and progress). Marks the tracking key so the stop handler and polling thread don't double-fire.
+- **Emby**: fires on `playback.start` / `SessionStart`. Same tracking-key dedup as Jellyfin.
+- **Tautulli**: fires on `Playback Start` notification type. Requires `"notification_type": "{notification_type}"` in the JSON template and a separate "Playback Start" notification agent (see setup below). Existing "Watched" webhook behaviour is completely unchanged.
+
+All other series and rules are entirely unaffected — the check is a no-op for anything not in held state with a `+` modifier.
+
+**New shared function:** `is_held_activation_episode(series_name, season, episode)` in `media_processor.py` — single source of truth for the held-activation check across all integrations.
+
+---
+
 ## v3.6.7
 
 ### 🐛 Bug Fixes
