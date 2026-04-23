@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.6.9
+
+### 🐛 Bug Fixes
+
+- Fixed cleanup job returning 401 from Sonarr `/api/v3/episodefile` for every series — `get_sonarr_latest_file_date()` was sending `X-Api` instead of `X-Api-Key` in the request header, so Sonarr never received the API key. All other Sonarr calls used the correct header name; only this function was affected. (`media_processor.py`)
+- Fixed series lookup missing localized/alternate titles — `get_series_id()` now checks each series' `alternateTitles` array from Sonarr as a fallback when the primary title match fails. Titles are normalized (lowercase, punctuation stripped, whitespace collapsed) before comparison, so names like "Es - Welcome to Derry" correctly match Sonarr's "Es Welcome To Derry" alternate title. (`media_processor.py`)
+
+---
+
 ## v3.6.8
 
 ### ✨ Playback start activation for `+` modifier
