@@ -56,6 +56,40 @@
     </div>
   </div>
 
+  <!-- Jellyfin Favorites Section (hidden until /api/integration/jellyfin/favorites confirms data) -->
+  <div class="row mb-2" id="jellyfin-favorites-section" style="display: none;">
+    <div class="col-12">
+      <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom py-2" onclick="toggleJellyfinFavorites()" style="cursor: pointer;">
+          <h6 class="mb-0" style="font-size:0.82rem;">
+            <i class="fas fa-heart me-2 text-danger"></i>Jellyfin Favorites
+            <i id="jellyfin-fav-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
+          </h6>
+        </div>
+        <div class="card-body p-2" style="overflow-x: hidden;">
+          <div id="jellyfin-favorites-container"><!-- loaded dynamically --></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Emby Favorites Section (hidden until /api/integration/emby/favorites confirms data) -->
+  <div class="row mb-2" id="emby-favorites-section" style="display: none;">
+    <div class="col-12">
+      <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom py-2" onclick="toggleEmbyFavorites()" style="cursor: pointer;">
+          <h6 class="mb-0" style="font-size:0.82rem;">
+            <i class="fas fa-heart me-2 text-info"></i>Emby Favorites
+            <i id="emby-fav-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
+          </h6>
+        </div>
+        <div class="card-body p-2" style="overflow-x: hidden;">
+          <div id="emby-favorites-container"><!-- loaded dynamically --></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Full-Width Calendar + Activity Integration -->
   <div class="row mb-2">
     <div class="col-12">
@@ -282,6 +316,8 @@ document.addEventListener('DOMContentLoaded', function() {
         loadActivitySlim();
         loadIntegrationWidgets();
         loadPlexWatchlist();
+        loadJellyfinFavorites();
+        loadEmbyFavorites();
         // Set intervals
         statsInterval = setInterval(loadDashboardStats, 60000);
         activityInterval = setInterval(loadActivitySlim, 60000);
@@ -709,6 +745,98 @@ function loadPlexWatchlist() {
         .catch(() => {}); // Watchlist unavailable — section stays hidden
 }
 
+function loadJellyfinFavorites() {
+    const container = document.getElementById('jellyfin-favorites-container');
+    const section = document.getElementById('jellyfin-favorites-section');
+    if (!container) return;
+    fetch('/api/integration/jellyfin/favorites')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                if (section) section.style.display = '';
+                if (data.html) container.innerHTML = data.html;
+            }
+        })
+        .catch(() => {});
+}
+
+function loadEmbyFavorites() {
+    const container = document.getElementById('emby-favorites-container');
+    const section = document.getElementById('emby-favorites-section');
+    if (!container) return;
+    fetch('/api/integration/emby/favorites')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                if (section) section.style.display = '';
+                if (data.html) container.innerHTML = data.html;
+            }
+        })
+        .catch(() => {});
+}
+
+function toggleJellyfinFavorites() {
+    const cardBody = document.getElementById('jellyfin-favorites-container').closest('.card-body');
+    const chevron = document.getElementById('jellyfin-fav-toggle-icon');
+    const collapsed = cardBody.style.display === 'none';
+    cardBody.style.display = collapsed ? '' : 'none';
+    chevron.style.transform = collapsed ? 'rotate(0deg)' : 'rotate(-90deg)';
+    localStorage.setItem('jellyfin_fav_collapsed', !collapsed);
+}
+
+function toggleEmbyFavorites() {
+    const cardBody = document.getElementById('emby-favorites-container').closest('.card-body');
+    const chevron = document.getElementById('emby-fav-toggle-icon');
+    const collapsed = cardBody.style.display === 'none';
+    cardBody.style.display = collapsed ? '' : 'none';
+    chevron.style.transform = collapsed ? 'rotate(0deg)' : 'rotate(-90deg)';
+    localStorage.setItem('emby_fav_collapsed', !collapsed);
+}
+
+function jellyfinUnfavorite(badge) {
+    const item = badge.closest('.watchlist-item');
+    const itemId = item.dataset.itemId;
+    badge.style.pointerEvents = 'none';
+    fetch('/api/integration/jellyfin/favorites/remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item_id: itemId})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            item.classList.add('removing');
+            setTimeout(() => item.remove(), 300);
+        } else {
+            badge.style.pointerEvents = '';
+            console.error('Jellyfin unfavorite failed:', data.message);
+        }
+    })
+    .catch(err => { badge.style.pointerEvents = ''; console.error(err); });
+}
+
+function embyUnfavorite(badge) {
+    const item = badge.closest('.watchlist-item');
+    const itemId = item.dataset.itemId;
+    badge.style.pointerEvents = 'none';
+    fetch('/api/integration/emby/favorites/remove', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({item_id: itemId})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            item.classList.add('removing');
+            setTimeout(() => item.remove(), 300);
+        } else {
+            badge.style.pointerEvents = '';
+            console.error('Emby unfavorite failed:', data.message);
+        }
+    })
+    .catch(err => { badge.style.pointerEvents = ''; console.error(err); });
+}
+
 function openWatchlistDetail(el) {
     const tmdbId = el?.dataset?.tmdbId;
     const mediaType = el?.dataset?.type || 'movie';
@@ -865,6 +993,12 @@ window.addEventListener('DOMContentLoaded', function() {
         }
         if (localStorage.getItem('watchlist_collapsed') === 'true') {
             toggleWatchlist();
+        }
+        if (localStorage.getItem('jellyfin_fav_collapsed') === 'true') {
+            toggleJellyfinFavorites();
+        }
+        if (localStorage.getItem('emby_fav_collapsed') === 'true') {
+            toggleEmbyFavorites();
         }
     }, 100);
 });

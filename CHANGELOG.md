@@ -1,5 +1,28 @@
 # Changelog
 
+## v3.7.0
+
+### ✨ Jellyfin & Emby favorites on the dashboard
+
+Jellyfin and Emby users now have a favorites section on the dashboard, sitting alongside the existing Plex Watchlist row.
+
+- Fetches favorited Series and Movies from `/Users/{id}/Items?Filters=IsFavorite` using the configured API key
+- Displays poster art, title, year, and a media-type badge — scrollable horizontal strip, same layout as the Plex Watchlist
+- **Click a poster** → opens the TMDB detail modal (overview, rating, genres) using the item's `ProviderIds.Tmdb` metadata
+- **Click the TV/film badge** (top-left of poster) → removes the item from favorites in Jellyfin/Emby (`DELETE /Users/{id}/FavoriteItems/{itemId}`) and fades it out, matching the Plex remove-from-watchlist interaction
+- Section is hidden automatically when no favorites exist; only appears when data is returned
+- Collapsible with state persisted in `localStorage`
+- No Sonarr/Radarr sync — Jellyfin/Emby favorites represent items already in the library, not a download queue, so syncing is intentionally omitted
+- Jellyfin section uses a purple heart badge; Emby uses teal to visually distinguish them
+- New routes: `GET /api/integration/jellyfin/favorites`, `POST /api/integration/jellyfin/favorites/remove` and equivalents for Emby
+
+### 🐛 Bug Fixes
+
+- Fixed `pending_deletions.json` entries being written with `episode_number: 0`, `episode_id: null`, and title `S1E0` when the dry-run deletion queue path encountered an episode file whose `episodes` array was empty. The root cause was relying on a `episodes` key that Sonarr does not reliably populate on `/api/v3/episodefile/{id}` responses. The fix reads `episodeIds` instead and resolves the real episode via `/api/v3/episode/{id}`, giving the correct season, episode number, and title. Files where `episodeIds` is empty or the lookup fails are now skipped with a warning log rather than queued with placeholder data. (`media_processor.py`)
+- Fixed `get_sonarr_latest_file_date()` returning only a timestamp and causing the Sonarr file-date fallback path in `get_activity_date_with_hierarchy()` to hardcode `season=1, episode=1` for all series. The function now resolves the actual episode for the latest file via `episodeIds` → `/api/v3/episode/{id}` and returns `(timestamp, season, episode_number, episode_id)`. The caller uses the real values, so grace-period cleanup decisions are based on the correct last-file episode rather than always treating the series as if only S1E1 had been seen. (`media_processor.py`)
+
+---
+
 ## v3.6.9
 
 ### 🐛 Bug Fixes

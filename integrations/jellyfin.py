@@ -135,10 +135,81 @@ class JellyfinIntegration(ServiceIntegration):
             }
         ]
     def get_dashboard_stats(self, url: str = None, api_key: str = None) -> Dict[str, Any]:
-        """Get stats for dashboard - Jellyfin doesn't provide stats yet"""
+        favorites = self.fetch_favorites()
         return {
-            'configured': True
+            'configured': True,
+            'favorites_count': len(favorites)
         }
+
+    def _resolve_user_id(self, config: Dict) -> Optional[str]:
+        """Resolve Jellyfin user ID from config or /Users list."""
+        jf_url = config['url']
+        headers = {'X-Emby-Token': config['api_key']}
+        try:
+            resp = http.get(f"{jf_url}/Users", headers=headers, timeout=10)
+            if not resp.ok:
+                logger.warning(f"Failed to list Jellyfin users: {resp.status_code}")
+                return None
+            users = resp.json()
+            if not users:
+                return None
+            configured = (config.get('user_id') or '').strip().lower()
+            user = next((u for u in users if u.get('Name', '').lower() == configured), users[0])
+            return user['Id']
+        except Exception as e:
+            logger.warning(f"Failed to resolve Jellyfin user ID: {e}")
+            return None
+
+    def fetch_favorites(self) -> List[Dict]:
+        """Fetch favorited Series and Movies from Jellyfin."""
+        config = self.get_config()
+        if not config:
+            return []
+        user_id = self._resolve_user_id(config)
+        if not user_id:
+            return []
+        jf_url = config['url']
+        api_key = config['api_key']
+        headers = {'X-Emby-Token': api_key}
+        try:
+            resp = http.get(
+                f"{jf_url}/Users/{user_id}/Items",
+                headers=headers,
+                params={
+                    'Filters': 'IsFavorite',
+                    'IncludeItemTypes': 'Series,Movie',
+                    'Recursive': 'true',
+                    'Fields': 'Overview,ImageTags,ProviderIds',
+                    'SortBy': 'SortName',
+                    'SortOrder': 'Ascending',
+                },
+                timeout=15
+            )
+            if not resp.ok:
+                logger.warning(f"Failed to fetch Jellyfin favorites: {resp.status_code}")
+                return []
+            items = resp.json().get('Items', [])
+            result = []
+            for item in items:
+                item_id = item.get('Id')
+                has_poster = bool(item.get('ImageTags', {}).get('Primary'))
+                poster = (
+                    f"{jf_url}/Items/{item_id}/Images/Primary?fillHeight=180&fillWidth=120&quality=90&api_key={api_key}"
+                    if has_poster else '/static/placeholder-poster.png'
+                )
+                provider_ids = item.get('ProviderIds', {})
+                result.append({
+                    'id': item_id,
+                    'title': item.get('Name', 'Unknown'),
+                    'year': item.get('ProductionYear'),
+                    'type': 'show' if item.get('Type') == 'Series' else 'movie',
+                    'poster': poster,
+                    'tmdb_id': provider_ids.get('Tmdb') or provider_ids.get('tmdb', ''),
+                })
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to fetch Jellyfin favorites: {e}")
+            return []
     # ==========================================
     # Config Loading
     # ==========================================
@@ -644,6 +715,76 @@ class JellyfinIntegration(ServiceIntegration):
                 import traceback
                 logger.error(traceback.format_exc())
                 return jsonify({'status': 'error', 'message': str(e)}), 500
+        @bp.route('/favorites')
+        def favorites():
+            """Return Jellyfin favorites section HTML."""
+            try:
+                items = integration.fetch_favorites()
+                if not items:
+                    return jsonify({'success': False, 'message': 'No favorites or Jellyfin not configured'})
+
+                items_html = ''
+                for item in items:
+                    title = item.get('title', 'Unknown')
+                    year = f" ({item['year']})" if item.get('year') else ''
+                    media_type = item.get('type', 'movie')
+                    type_icon = 'fa-tv' if media_type == 'show' else 'fa-film'
+                    poster = item.get('poster', '/static/placeholder-poster.png')
+                    item_id = item.get('id', '')
+                    tmdb_id = item.get('tmdb_id', '')
+                    items_html += f'''
+                    <div class="watchlist-item" data-type="{media_type}" data-tmdb-id="{tmdb_id}" data-item-id="{item_id}">
+                        <div class="watchlist-poster-wrap">
+                            <img src="{poster}" class="watchlist-poster" alt="{title}" loading="lazy"
+                                 style="cursor:pointer;" onclick="openWatchlistDetail(this.closest('.watchlist-item'))">
+                            <span class="watchlist-type-badge" onclick="jellyfinUnfavorite(this)"
+                                  title="Remove from favorites" style="cursor:pointer;" data-item-id="{item_id}">
+                                <i class="fas {type_icon}"></i>
+                            </span>
+                            <span class="watchlist-status-badge" style="background: #9333ea;">
+                                <i class="fas fa-heart" style="font-size: 9px;"></i> Fav
+                            </span>
+                        </div>
+                        <div class="watchlist-title">{title}{year}</div>
+                    </div>
+                    '''
+
+                html = f'''
+                <div class="watchlist-container">
+                    <div class="watchlist-scroll">{items_html}</div>
+                </div>'''
+                return jsonify({'success': True, 'html': html, 'count': len(items)})
+
+            except Exception as e:
+                logger.error(f"Error generating Jellyfin favorites: {e}")
+                return jsonify({'success': False, 'message': str(e)})
+
+        @bp.route('/favorites/remove', methods=['POST'])
+        def favorites_remove():
+            """Remove an item from Jellyfin favorites."""
+            try:
+                data = request.get_json() or {}
+                item_id = data.get('item_id')
+                if not item_id:
+                    return jsonify({'success': False, 'message': 'item_id required'})
+                config = integration.get_config()
+                if not config:
+                    return jsonify({'success': False, 'message': 'Jellyfin not configured'})
+                user_id = integration._resolve_user_id(config)
+                if not user_id:
+                    return jsonify({'success': False, 'message': 'Could not resolve user'})
+                headers = {'X-Emby-Token': config['api_key']}
+                resp = http.delete(
+                    f"{config['url']}/Users/{user_id}/FavoriteItems/{item_id}",
+                    headers=headers, timeout=10
+                )
+                if resp.ok:
+                    return jsonify({'success': True})
+                return jsonify({'success': False, 'message': f"Jellyfin returned {resp.status_code}"})
+            except Exception as e:
+                logger.error(f"Error removing Jellyfin favorite: {e}")
+                return jsonify({'success': False, 'message': str(e)})
+
         @bp.route('/polling-status')
         def polling_status():
             """Get current Jellyfin polling status for debugging"""

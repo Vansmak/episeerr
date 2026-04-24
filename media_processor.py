@@ -451,11 +451,12 @@ def get_activity_date_with_hierarchy(series_id, series_title=None, return_comple
         # Jellyfin integration moved - not needed in core anymore
     # Step 3: Check Sonarr episode file dates (FINAL FALLBACK)
     logger.info(f"🔍 Checking Sonarr file dates for series {series_id}")
-    sonarr_date = get_sonarr_latest_file_date(series_id)
-    if sonarr_date:
+    sonarr_result = get_sonarr_latest_file_date(series_id)
+    if sonarr_result:
+        sonarr_date, sonarr_season, sonarr_episode, sonarr_episode_id = sonarr_result
         if return_complete:
-            logger.info(f"✅ Using Sonarr file date with S1E1 fallback for series {series_id}: {datetime.fromtimestamp(sonarr_date)}")
-            return sonarr_date, 1, 1
+            logger.info(f"✅ Using Sonarr file date for series {series_id}: S{sonarr_season}E{sonarr_episode} at {datetime.fromtimestamp(sonarr_date)}")
+            return sonarr_date, sonarr_season, sonarr_episode
         else:
             logger.info(f"✅ Using Sonarr file date for series {series_id}: {datetime.fromtimestamp(sonarr_date)}")
             return sonarr_date
@@ -949,62 +950,66 @@ def get_tautulli_last_watched(series_title, return_complete=False):
 
 
 def get_sonarr_latest_file_date(series_id):
-    """Get the most recent episode file date from Sonarr - FIXED VERSION."""
+    """Get the most recent episode file date from Sonarr, resolved to real episode info.
+
+    Returns (timestamp, season, episode_number, episode_id) or None.
+    """
     try:
         headers = {'X-Api-Key': SONARR_API_KEY}
         logger.info(f"Getting episode file dates for series {series_id}")
-        
-        # Use the correct endpoint for episode files
+
         response = http.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", headers=headers, timeout=10)
-        
+
         if not response.ok:
             logger.error(f"Failed to get episode files for series {series_id}: {response.status_code}")
             return None
-        
+
         episode_files = response.json()
         logger.debug(f"Sonarr found {len(episode_files)} episode files")
-        
+
         if not episode_files:
             logger.warning(f"No episode files found for series {series_id}")
             return None
-        
+
         latest_file_date = None
-        latest_episode_info = None
-        
+        latest_file = None
+
         for file_data in episode_files:
-            season = file_data.get('seasonNumber')
-            
-            # Get episode numbers from the episodes array
-            episodes = file_data.get('episodes', [])
-            if episodes:
-                episode_numbers = [ep.get('episodeNumber') for ep in episodes]
-                ep_display = f"E{min(episode_numbers)}" if episode_numbers else "E?"
-            else:
-                ep_display = "E?"
-            
             date_added_str = file_data.get('dateAdded')
-            logger.debug(f"S{season}{ep_display}: dateAdded = '{date_added_str}'")
-            
             if not date_added_str:
-                logger.warning(f"Missing dateAdded for S{season}{ep_display}")
+                logger.warning(f"Missing dateAdded for file {file_data.get('id')}")
                 continue
-            
-            timestamp = parse_date_fixed(date_added_str, f"S{season}{ep_display}")
-            
-            if timestamp:
-                if not latest_file_date or timestamp > latest_file_date:
-                    latest_file_date = timestamp
-                    latest_episode_info = f"S{season}{ep_display}"
-            else:
-                logger.error(f"Failed to parse dateAdded for S{season}{ep_display}: '{date_added_str}'")
-        
-        if latest_file_date:
-            logger.info(f"Latest file: {latest_episode_info} at {datetime.fromtimestamp(latest_file_date, tz=timezone.utc)} UTC")
-            return latest_file_date
-        else:
+
+            timestamp = parse_date_fixed(date_added_str, f"file {file_data.get('id')}")
+            if timestamp and (not latest_file_date or timestamp > latest_file_date):
+                latest_file_date = timestamp
+                latest_file = file_data
+
+        if not latest_file_date or not latest_file:
             logger.warning(f"No valid episode file dates found for series {series_id}")
             return None
-            
+
+        # Resolve episode info via episodeIds
+        episode_ids = latest_file.get('episodeIds', [])
+        if not episode_ids:
+            logger.warning(f"Latest file {latest_file.get('id')} for series {series_id} has no episodeIds, cannot resolve episode info")
+            return None
+
+        try:
+            ep_response = http.get(f"{SONARR_URL}/api/v3/episode/{episode_ids[0]}", headers=headers, timeout=10)
+            if not ep_response.ok:
+                logger.warning(f"Failed to look up episode {episode_ids[0]} for series {series_id}: {ep_response.status_code}")
+                return None
+            ep_data = ep_response.json()
+            season = ep_data.get('seasonNumber')
+            episode_number = ep_data.get('episodeNumber')
+            episode_id = ep_data.get('id')
+            logger.info(f"Latest file: S{season}E{episode_number} at {datetime.fromtimestamp(latest_file_date, tz=timezone.utc)} UTC")
+            return latest_file_date, season, episode_number, episode_id
+        except Exception as e:
+            logger.warning(f"Failed to resolve episode info for latest file of series {series_id}: {e}")
+            return None
+
     except requests.exceptions.Timeout:
         logger.error(f"Sonarr timeout for series {series_id}")
         return None
@@ -2166,18 +2171,31 @@ def delete_episodes_in_sonarr_with_logging(
                     series_title_cache[series_id] = series_response.json().get('title', series_title) if series_response.ok else series_title
                 series_title_full = series_title_cache[series_id]
                 
-                # Get episode details
-                episode_data_list = ep_data.get('episodes', [])
-                if episode_data_list:
-                    first_ep = episode_data_list[0]
-                    episode_id = first_ep.get('id')
-                    episode_num = first_ep.get('episodeNumber', 0)
-                    episode_title = first_ep.get('title', f"Episode {episode_num}")
+                # Resolve episode info via episodeIds (the episodes array is not reliably populated)
+                episode_ids_list = ep_data.get('episodeIds', [])
+                if episode_ids_list:
+                    try:
+                        ep_detail_response = http.get(
+                            f"{SONARR_URL}/api/v3/episode/{episode_ids_list[0]}",
+                            headers=headers, timeout=10
+                        )
+                        if ep_detail_response.ok:
+                            ep_detail = ep_detail_response.json()
+                            episode_id = ep_detail.get('id')
+                            episode_num = ep_detail.get('episodeNumber', 0)
+                            episode_title = ep_detail.get('title', f"S{season_num}E{episode_num}")
+                        else:
+                            cleanup_logger.warning(
+                                f"Failed to look up episode {episode_ids_list[0]} for file {episode_file_id}: "
+                                f"{ep_detail_response.status_code} — skipping"
+                            )
+                            continue
+                    except Exception as lookup_e:
+                        cleanup_logger.warning(f"Failed to resolve episode info for file {episode_file_id}: {lookup_e} — skipping")
+                        continue
                 else:
-                    # Fallback if episodes array is empty
-                    episode_id = None
-                    episode_num = 0
-                    episode_title = f"S{season_num}E{episode_num}"
+                    cleanup_logger.warning(f"Episode file {episode_file_id} has no episodeIds, cannot resolve episode info — skipping")
+                    continue
                 
                 # Queue for deletion approval with CORRECT parameters
                 queue_deletion(
