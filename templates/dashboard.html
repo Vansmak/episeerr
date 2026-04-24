@@ -394,9 +394,14 @@ function loadIntegrationWidgets() {
                     fetch(`/api/integration/${svc}/widget`)
                         .then(r => r.json())
                         .then(widgetData => {
-                            if (widgetData.success && widgetData.html) widgetDiv.innerHTML = widgetData.html;
+                            if (widgetData.success && widgetData.html) {
+                                widgetDiv.innerHTML = widgetData.html;
+                                widgetDiv.style.display = '';
+                            } else {
+                                widgetDiv.style.display = 'none';
+                            }
                         })
-                        .catch(() => {});
+                        .catch(() => { widgetDiv.style.display = 'none'; });
                 }
             });
 

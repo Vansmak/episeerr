@@ -193,10 +193,12 @@ class JellyfinIntegration(ServiceIntegration):
             for item in items:
                 item_id = item.get('Id')
                 has_poster = bool(item.get('ImageTags', {}).get('Primary'))
-                poster = (
-                    f"{jf_url}/Items/{item_id}/Images/Primary?fillHeight=180&fillWidth=120&quality=90&api_key={api_key}"
-                    if has_poster else '/static/placeholder-poster.png'
-                )
+                if has_poster:
+                    from urllib.parse import quote as _quote
+                    raw_poster = f"{jf_url}/Items/{item_id}/Images/Primary?fillHeight=180&fillWidth=120&quality=90&api_key={api_key}"
+                    poster = f"/api/integration/jellyfin/art?url={_quote(raw_poster, safe='')}"
+                else:
+                    poster = '/static/placeholder-poster.png'
                 provider_ids = item.get('ProviderIds', {})
                 result.append({
                     'id': item_id,
@@ -477,8 +479,17 @@ class JellyfinIntegration(ServiceIntegration):
             logger.error(traceback.format_exc())
             return False
     def get_dashboard_widget(self) -> Optional[Dict]:
-        """Jellyfin doesn't have a dashboard widget yet"""
-        return None
+        return {
+            'enabled': True,
+            'pill': {
+                'icon': 'fas fa-heart',
+                'icon_color': 'text-info',
+                'template': '{favorites_count}',
+                'fields': ['favorites_count']
+            },
+            'has_custom_widget': True,
+            'has_dashboard_section': True
+        }
     # ==========================================
     # Flask Routes (Webhook Handler)
     # ==========================================
@@ -808,6 +819,136 @@ class JellyfinIntegration(ServiceIntegration):
                     })
             except Exception as e:
                 return jsonify({'status': 'error', 'message': str(e)}), 500
+
+        @bp.route('/widget')
+        def widget():
+            """Return Jellyfin Now Playing widget HTML."""
+            try:
+                config = integration.get_config()
+                if not config:
+                    return jsonify({'success': False, 'message': 'Jellyfin not configured'})
+
+                url     = config.get('url', '').rstrip('/')
+                api_key = config.get('api_key', '')
+                if not url or not api_key:
+                    return jsonify({'success': False, 'message': 'Jellyfin not configured'})
+
+                headers = {'X-Emby-Token': api_key}
+                now_playing_data = None
+                server_reachable = False
+
+                try:
+                    resp = http.get(f"{url}/Sessions", headers=headers, timeout=5)
+                    if resp.ok:
+                        server_reachable = True
+                        for session in resp.json():
+                            item = session.get('NowPlayingItem')
+                            if not item:
+                                continue
+                            play_state     = session.get('PlayState', {})
+                            position_ticks = play_state.get('PositionTicks', 0)
+                            runtime_ticks  = item.get('RunTimeTicks', 1)
+                            progress = int((position_ticks / runtime_ticks) * 100) if runtime_ticks else 0
+                            img_id = item.get('SeriesId') or item.get('Id')
+                            if img_id:
+                                from urllib.parse import quote as _quote
+                                raw_thumb = f"{url}/Items/{img_id}/Images/Primary?fillHeight=60&fillWidth=40&quality=90&api_key={api_key}"
+                                thumb = f"/api/integration/jellyfin/art?url={_quote(raw_thumb, safe='')}"
+                            else:
+                                thumb = None
+                            now_playing_data = {
+                                'title':         item.get('SeriesName') or item.get('Name'),
+                                'episode_title': item.get('Name') if item.get('SeriesName') else None,
+                                'season':        item.get('ParentIndexNumber'),
+                                'episode':       item.get('IndexNumber'),
+                                'user':          session.get('UserName', 'Unknown'),
+                                'state':         'paused' if play_state.get('IsPaused') else 'playing',
+                                'progress':      progress,
+                                'thumb':         thumb,
+                            }
+                            break
+                except Exception as poll_err:
+                    logger.warning(f"[Jellyfin widget] Session fetch failed: {poll_err}")
+
+                if not server_reachable:
+                    return jsonify({'success': False, 'message': 'Jellyfin unreachable'})
+
+                logo = '<span style="font-size:10px;font-weight:700;color:#00A4DC;flex-shrink:0;letter-spacing:0.5px;">JF</span>'
+
+                if not now_playing_data:
+                    html = (
+                        '<div class="d-flex align-items-center gap-2 px-2 py-1 rounded"'
+                        ' style="background:rgba(255,255,255,0.04); min-height:36px;">'
+                        f'{logo}'
+                        '<i class="fas fa-tv text-muted" style="font-size:11px;opacity:0.4;"></i>'
+                        '<span class="text-muted" style="font-size:12px;">Nothing playing</span>'
+                        '</div>'
+                    )
+                else:
+                    thumb_html = (
+                        f'<img src="{now_playing_data["thumb"]}" class="rounded"'
+                        f' style="width:36px;height:36px;object-fit:cover;flex-shrink:0;">'
+                        if now_playing_data.get('thumb') else ''
+                    )
+                    if now_playing_data.get('episode_title') and now_playing_data.get('season') and now_playing_data.get('episode'):
+                        title    = now_playing_data['title']
+                        subtitle = f"S{now_playing_data['season']}E{now_playing_data['episode']} · {now_playing_data['episode_title']}"
+                    else:
+                        title    = now_playing_data['title']
+                        subtitle = now_playing_data.get('user', 'Unknown User')
+
+                    state = now_playing_data.get('state', 'playing')
+                    if state == 'playing':
+                        state_icon, badge_class, state_label = 'play',   'bg-success',              'Playing'
+                    elif state == 'paused':
+                        state_icon, badge_class, state_label = 'pause',  'bg-warning text-dark',    'Paused'
+                    else:
+                        state_icon, badge_class, state_label = 'circle', 'bg-secondary', state.capitalize()
+
+                    html = (
+                        f'<div class="d-flex align-items-center gap-2 px-2 py-1 rounded"'
+                        f' style="background:rgba(255,255,255,0.04); min-height:36px;">'
+                        f'{logo}'
+                        f'{thumb_html}'
+                        f'<div class="flex-grow-1 overflow-hidden">'
+                        f'<div class="text-truncate fw-semibold" style="font-size:12px;line-height:1.2;">{title}</div>'
+                        f'<div class="text-truncate text-muted" style="font-size:11px;line-height:1.2;">{subtitle}</div>'
+                        f'</div>'
+                        f'<span class="badge {badge_class} flex-shrink-0" style="font-size:10px;">'
+                        f'<i class="fas fa-{state_icon} me-1"></i>{state_label}'
+                        f'</span>'
+                        f'</div>'
+                    )
+
+                return jsonify({'success': True, 'html': html})
+
+            except Exception as e:
+                logger.error(f"Error generating Jellyfin widget: {e}")
+                return jsonify({'success': False, 'message': str(e)})
+
+        @bp.route('/art')
+        def art_proxy():
+            """
+            Server-side proxy for Jellyfin poster/thumbnail art.
+            Fetches image from the Jellyfin server (raw HTTP) and streams it back
+            to the browser over HTTPS, eliminating mixed content errors.
+            Usage: /api/integration/jellyfin/art?url=<encoded_jellyfin_image_url>
+            """
+            from flask import request as freq, Response
+            from urllib.parse import unquote
+            raw_url = freq.args.get('url', '').strip()
+            if not raw_url:
+                return Response('Missing url parameter', status=400)
+            decoded = unquote(raw_url)
+            try:
+                r = http.get(decoded, timeout=8, stream=True)
+                r.raise_for_status()
+                content_type = r.headers.get('Content-Type', 'image/jpeg')
+                return Response(r.content, status=200, content_type=content_type)
+            except Exception as e:
+                logger.error(f"Jellyfin art proxy failed for {decoded}: {e}")
+                return Response('Not found', status=404)
+
         return bp
 # Auto-discovery registration
 integration = JellyfinIntegration()
