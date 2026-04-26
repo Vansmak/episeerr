@@ -375,152 +375,165 @@ def process_sonarr_webhook():
 
             # Process always_have FIRST (additive on top of get_type, runs after unmonitor)
             always_have = rule_config.get('always_have', '')
+            skip_get_count = False
             if always_have:
                 try:
                     media_processor.process_always_have(series_id, always_have)
                 except Exception as e:
                     current_app.logger.error(f"always_have processing failed for series {series_id}: {e}")
 
-            current_app.logger.info(f"Executing rule '{assigned_rule}' with get_type '{get_type}', get_count '{get_count}' starting from Season {starting_season}")
+                # If process_always_have set any season to held, suppress get_count processing
+                # (mirrors the activation gate in process_episodes_for_webhook)
+                from episeerr import load_config as _load_config
+                _fresh = _load_config()
+                _series_data = _fresh.get('rules', {}).get(assigned_rule, {}).get('series', {}).get(series_id_str, {})
+                if any(v == 'held' for v in _series_data.get('activation_seasons', {}).values()):
+                    skip_get_count = True
+                    current_app.logger.info(
+                        f"SeriesAdd: series {series_id} has held season(s) — skipping get_count processing"
+                    )
 
-            # Get all episodes for the series
-            episodes_response = http.get(
-                f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
-                headers=headers
-            )
+            if not skip_get_count:
+                current_app.logger.info(f"Executing rule '{assigned_rule}' with get_type '{get_type}', get_count '{get_count}' starting from Season {starting_season}")
 
-            if episodes_response.ok:
-                all_episodes = episodes_response.json()
-
-                # Get episodes from the requested season
-                requested_season_episodes = sorted(
-                    [ep for ep in all_episodes if ep.get('seasonNumber') == starting_season],
-                    key=lambda x: x.get('episodeNumber', 0)
+                # Get all episodes for the series
+                episodes_response = http.get(
+                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                    headers=headers
                 )
 
-                if not requested_season_episodes:
-                    current_app.logger.warning(f"No Season {starting_season} episodes found for {series_title}")
-                else:
-                    # Determine which episodes to monitor based on get settings
-                    episodes_to_monitor = []
+                if episodes_response.ok:
+                    all_episodes = episodes_response.json()
 
-                    if get_type == 'all':
-                        episodes_to_monitor = [
-                            ep['id'] for ep in all_episodes
-                            if ep.get('seasonNumber') >= starting_season
-                        ]
-                        current_app.logger.info(f"Monitoring all episodes from Season {starting_season} onward")
+                    # Get episodes from the requested season
+                    requested_season_episodes = sorted(
+                        [ep for ep in all_episodes if ep.get('seasonNumber') == starting_season],
+                        key=lambda x: x.get('episodeNumber', 0)
+                    )
 
-                    elif get_type == 'seasons':
-                        num_seasons = get_count or 1
-                        episodes_to_monitor = [
-                            ep['id'] for ep in all_episodes
-                            if starting_season <= ep.get('seasonNumber') < (starting_season + num_seasons)
-                        ]
-                        current_app.logger.info(f"Monitoring {num_seasons} season(s) starting from Season {starting_season} ({len(episodes_to_monitor)} episodes)")
-
-                    else:  # episodes
-                        try:
-                            num_episodes = get_count or 1
-                            episodes_to_monitor = [ep['id'] for ep in requested_season_episodes[:num_episodes]]
-                            current_app.logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes of Season {starting_season}")
-                        except (ValueError, TypeError):
-                            episodes_to_monitor = [requested_season_episodes[0]['id']] if requested_season_episodes else []
-                            current_app.logger.warning(f"Invalid get_count, defaulting to first episode")
-
-                    if episodes_to_monitor:
-                        # Monitor the selected episodes
-                        monitor_response = http.put(
-                            f"{SONARR_URL}/api/v3/episode/monitor",
-                            headers=headers,
-                            json={"episodeIds": episodes_to_monitor, "monitored": True}
-                        )
-
-                        if monitor_response.ok:
-                            current_app.logger.info(f"✓ Monitored {len(episodes_to_monitor)} episodes for {series_title}")
-
-                            # Search for episodes if action_option is 'search'
-                            if action_option == 'search':
-                                if get_type == 'seasons':
-                                    # Use SeasonSearch for season-based rules
-                                    first_ep_response = http.get(
-                                        f"{SONARR_URL}/api/v3/episode/{episodes_to_monitor[0]}",
-                                        headers=headers
-                                    )
-                                    if first_ep_response.ok:
-                                        first_ep = first_ep_response.json()
-                                        season_number = first_ep.get('seasonNumber')
-
-                                        current_app.logger.info(f"Searching for season pack for Season {season_number}")
-                                        search_json = {
-                                            "name": "SeasonSearch",
-                                            "seriesId": series_id,
-                                            "seasonNumber": season_number
-                                        }
-                                    else:
-                                        search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
-                                else:
-                                    # Individual episode search
-                                    search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
-
-                                search_response = http.post(
-                                    f"{SONARR_URL}/api/v3/command",
-                                    headers=headers,
-                                    json=search_json
-                                )
-
-                                if search_response.ok:
-                                    search_type = "season pack" if get_type == 'seasons' else "episodes"
-                                    current_app.logger.info(f"✓ Started search for {search_type}")
-                                else:
-                                    current_app.logger.error(f"Failed to search: {search_response.text}")
-                        else:
-                            current_app.logger.error(f"Failed to monitor episodes: {monitor_response.text}")
+                    if not requested_season_episodes:
+                        current_app.logger.warning(f"No Season {starting_season} episodes found for {series_title}")
                     else:
-                        current_app.logger.warning(f"No episodes to monitor for {series_title}")
+                        # Determine which episodes to monitor based on get settings
+                        episodes_to_monitor = []
 
-                    # ────────────────────────────────────────────────────────────────
-                    # Remove episeerr_delay tag to allow immediate downloads
-                    # ────────────────────────────────────────────────────────────────
-                    try:
-                        delay_tag_id = episeerr_utils.get_or_create_rule_tag_id('delay')
-                        if delay_tag_id:
-                            # Get fresh series data
-                            series_refresh_resp = http.get(
-                                f"{SONARR_URL}/api/v3/series/{series_id}",
-                                headers=headers
+                        if get_type == 'all':
+                            episodes_to_monitor = [
+                                ep['id'] for ep in all_episodes
+                                if ep.get('seasonNumber') >= starting_season
+                            ]
+                            current_app.logger.info(f"Monitoring all episodes from Season {starting_season} onward")
+
+                        elif get_type == 'seasons':
+                            num_seasons = get_count or 1
+                            episodes_to_monitor = [
+                                ep['id'] for ep in all_episodes
+                                if starting_season <= ep.get('seasonNumber') < (starting_season + num_seasons)
+                            ]
+                            current_app.logger.info(f"Monitoring {num_seasons} season(s) starting from Season {starting_season} ({len(episodes_to_monitor)} episodes)")
+
+                        else:  # episodes
+                            try:
+                                num_episodes = get_count or 1
+                                episodes_to_monitor = [ep['id'] for ep in requested_season_episodes[:num_episodes]]
+                                current_app.logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes of Season {starting_season}")
+                            except (ValueError, TypeError):
+                                episodes_to_monitor = [requested_season_episodes[0]['id']] if requested_season_episodes else []
+                                current_app.logger.warning(f"Invalid get_count, defaulting to first episode")
+
+                        if episodes_to_monitor:
+                            # Monitor the selected episodes
+                            monitor_response = http.put(
+                                f"{SONARR_URL}/api/v3/episode/monitor",
+                                headers=headers,
+                                json={"episodeIds": episodes_to_monitor, "monitored": True}
                             )
 
-                            if series_refresh_resp.ok:
-                                fresh_series = series_refresh_resp.json()
-                                current_tags = fresh_series.get('tags', [])
+                            if monitor_response.ok:
+                                current_app.logger.info(f"✓ Monitored {len(episodes_to_monitor)} episodes for {series_title}")
 
-                                if delay_tag_id in current_tags:
-                                    # Remove delay tag
-                                    current_tags.remove(delay_tag_id)
-                                    fresh_series['tags'] = current_tags
+                                # Search for episodes if action_option is 'search'
+                                if action_option == 'search':
+                                    if get_type == 'seasons':
+                                        # Use SeasonSearch for season-based rules
+                                        first_ep_response = http.get(
+                                            f"{SONARR_URL}/api/v3/episode/{episodes_to_monitor[0]}",
+                                            headers=headers
+                                        )
+                                        if first_ep_response.ok:
+                                            first_ep = first_ep_response.json()
+                                            season_number = first_ep.get('seasonNumber')
 
-                                    update_resp = http.put(
-                                        f"{SONARR_URL}/api/v3/series",
+                                            current_app.logger.info(f"Searching for season pack for Season {season_number}")
+                                            search_json = {
+                                                "name": "SeasonSearch",
+                                                "seriesId": series_id,
+                                                "seasonNumber": season_number
+                                            }
+                                        else:
+                                            search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
+                                    else:
+                                        # Individual episode search
+                                        search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
+
+                                    search_response = http.post(
+                                        f"{SONARR_URL}/api/v3/command",
                                         headers=headers,
-                                        json=fresh_series
+                                        json=search_json
                                     )
 
-                                    if update_resp.ok:
-                                        current_app.logger.info(f"✓ Removed episeerr_delay tag - downloads can proceed immediately")
+                                    if search_response.ok:
+                                        search_type = "season pack" if get_type == 'seasons' else "episodes"
+                                        current_app.logger.info(f"✓ Started search for {search_type}")
                                     else:
-                                        current_app.logger.error(f"Failed to remove delay tag: {update_resp.text}")
-                                else:
-                                    current_app.logger.debug("episeerr_delay tag not present (already removed or never added)")
+                                        current_app.logger.error(f"Failed to search: {search_response.text}")
                             else:
-                                current_app.logger.error(f"Failed to refresh series data: {series_refresh_resp.status_code}")
+                                current_app.logger.error(f"Failed to monitor episodes: {monitor_response.text}")
                         else:
-                            current_app.logger.warning("Could not get delay tag ID")
+                            current_app.logger.warning(f"No episodes to monitor for {series_title}")
 
-                    except Exception as e:
-                        current_app.logger.error(f"Error removing delay tag: {str(e)}")
-            else:
-                current_app.logger.error(f"Failed to get episodes: {episodes_response.text}")
+                        # ────────────────────────────────────────────────────────────────
+                        # Remove episeerr_delay tag to allow immediate downloads
+                        # ────────────────────────────────────────────────────────────────
+                        try:
+                            delay_tag_id = episeerr_utils.get_or_create_rule_tag_id('delay')
+                            if delay_tag_id:
+                                # Get fresh series data
+                                series_refresh_resp = http.get(
+                                    f"{SONARR_URL}/api/v3/series/{series_id}",
+                                    headers=headers
+                                )
+
+                                if series_refresh_resp.ok:
+                                    fresh_series = series_refresh_resp.json()
+                                    current_tags = fresh_series.get('tags', [])
+
+                                    if delay_tag_id in current_tags:
+                                        # Remove delay tag
+                                        current_tags.remove(delay_tag_id)
+                                        fresh_series['tags'] = current_tags
+
+                                        update_resp = http.put(
+                                            f"{SONARR_URL}/api/v3/series",
+                                            headers=headers,
+                                            json=fresh_series
+                                        )
+
+                                        if update_resp.ok:
+                                            current_app.logger.info(f"✓ Removed episeerr_delay tag - downloads can proceed immediately")
+                                        else:
+                                            current_app.logger.error(f"Failed to remove delay tag: {update_resp.text}")
+                                    else:
+                                        current_app.logger.debug("episeerr_delay tag not present (already removed or never added)")
+                                else:
+                                    current_app.logger.error(f"Failed to refresh series data: {series_refresh_resp.status_code}")
+                            else:
+                                current_app.logger.warning("Could not get delay tag ID")
+
+                        except Exception as e:
+                            current_app.logger.error(f"Error removing delay tag: {str(e)}")
+                else:
+                    current_app.logger.error(f"Failed to get episodes: {episodes_response.text}")
         except Exception as e:
             current_app.logger.error(f"Error executing rule: {str(e)}", exc_info=True)
 

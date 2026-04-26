@@ -1,5 +1,23 @@
 # Changelog
 
+## v3.7.1
+
+### ✨ Emby & Jellyfin Now Playing widget
+
+Both Emby and Jellyfin now show a **Now Playing** widget on the dashboard alongside the existing Plex widget.
+
+- Pulls active sessions via `/Sessions`; shows poster thumbnail, series/episode title, progress bar, and player name
+- Widget is hidden automatically when no session is active or the server is unreachable
+- Favorites count pill displayed in the dashboard header pill row
+- Poster art is proxied through Episeerr (`/api/integration/{emby,jellyfin}/art`) to avoid mixed-content/HTTPS errors when Episeerr is served over HTTPS but media servers are on HTTP (`emby.py`, `jellyfin.py`)
+
+### 🐛 Bug Fixes
+
+- **SeriesAdd webhook does not respect held state from `+` modifier** — when a new series was added under a rule with an `always_have` `+` modifier (e.g. `e1+`), `process_always_have` correctly grabbed E1 and wrote `activation_seasons[1] = 'held'`, but the SeriesAdd handler continued into normal get-count processing (fetching E2, etc.) before the held gate was checked. Fixed by reloading config after `process_always_have` runs and skipping the entire episode-fetch/monitor/search block when any season is in held state — matching the activation gate that already existed in `process_episodes_for_webhook`. (`webhooks.py`)
+- Dashboard widget containers are now hidden (`display: none`) when an integration returns no data or the fetch fails, instead of leaving a blank box. (`templates/dashboard.html`)
+
+---
+
 ## v3.7.0
 
 ### ✨ Jellyfin & Emby favorites on the dashboard
