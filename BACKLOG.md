@@ -18,4 +18,6 @@
 
 - **Standardize API error responses** — currently inconsistent across routes (some use `{"status": "error"}`, others use `{"success": false}`, etc.). Pick one format and apply it everywhere.
 
+- **Movie watch history via webhooks** — current approach builds a watch cache from media server APIs at cleanup time; better to stamp movies in real time when watched (same as series). Add movie event handling to the Plex/Jellyfin/Emby/Tautulli webhook integrations so last-watched timestamp is recorded on playback, giving more accurate grace-period tracking without relying on a full library scan.
+
 - ~~**Bulk Sonarr API operations**~~ — done in v3.5.6. Replaced O(n) linear series lookups in all three cleanup loops with dict lookups; added series title cache in dry-run delete loop; eliminated duplicate episode fetch in `trigger_episode_search_in_sonarr`.

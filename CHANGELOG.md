@@ -1,6 +1,6 @@
 # Changelog
 
-## dev
+## v3.7.5
 
 ### ✨ Movie Rules
 
