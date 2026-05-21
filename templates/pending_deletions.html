@@ -174,11 +174,103 @@
     </div>
 
     {% else %}
-    <!-- No Pending Deletions -->
-    <div class="alert alert-success text-center py-5">
-        <i class="fas fa-check-circle fa-3x mb-3"></i>
-        <h4>No Pending Deletions</h4>
-        <p class="mb-0">All cleanup operations are up to date. New pending deletions will appear here after the next cleanup run.</p>
+    <!-- No Pending Episode Deletions -->
+    <div class="alert alert-success text-center py-4">
+        <i class="fas fa-check-circle fa-2x mb-2"></i>
+        <h5>No Pending Episode Deletions</h5>
+        <p class="mb-0 small">New pending deletions will appear here after the next cleanup run.</p>
+    </div>
+    {% endif %}
+
+    <!-- ── MOVIE PENDING DELETIONS ───────────────────────────────────────── -->
+    <hr class="my-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4><i class="fas fa-film me-2 text-info"></i>Pending Movie Deletions</h4>
+        {% if movie_summary and movie_summary.total_movies > 0 %}
+        <span class="text-muted small">{{ movie_summary.total_movies }} movie(s) — {{ movie_summary.total_size_gb }} GB</span>
+        {% endif %}
+    </div>
+
+    {% if movie_summary and movie_summary.total_movies > 0 %}
+    <div class="mb-3">
+        <button class="btn btn-success btn-sm" onclick="approveAllMovies()">
+            <i class="fas fa-check"></i> Approve All Movies
+        </button>
+        <button class="btn btn-secondary btn-sm ms-2" onclick="rejectAllMovies()">
+            <i class="fas fa-times"></i> Reject All Movies
+        </button>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-dark table-hover table-sm">
+            <thead>
+                <tr>
+                    <th style="width:40px;">
+                        <input type="checkbox" id="select-all-movies" onchange="toggleAllMovies(this)">
+                    </th>
+                    <th>Movie</th>
+                    <th>Reason</th>
+                    <th>Rule</th>
+                    <th>Date Source</th>
+                    <th>Delete</th>
+                    <th>Size</th>
+                    <th style="width:120px;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for movie in movie_summary.movies %}
+                <tr>
+                    <td>
+                        <input type="checkbox" class="movie-checkbox"
+                               data-movie-id="{{ movie.movie_id }}"
+                               onchange="updateMovieSelectedCount()">
+                    </td>
+                    <td><strong>{{ movie.movie_title }}</strong></td>
+                    <td>
+                        <span class="badge
+                            {% if 'Watched' in movie.reason %}bg-warning
+                            {% elif 'Unwatched' in movie.reason %}bg-secondary
+                            {% else %}bg-primary{% endif %}">
+                            {{ movie.reason }}
+                        </span>
+                        <span class="badge bg-info ms-1">Movie</span>
+                    </td>
+                    <td><code>{{ movie.rule_name }}</code></td>
+                    <td>
+                        <small>
+                            {% if movie.date_source == 'Tautulli' %}
+                            <i class="fas fa-chart-line text-success" title="Tautulli"></i>
+                            {% else %}
+                            <i class="fas fa-calendar text-muted" title="Radarr"></i>
+                            {% endif %}
+                            {{ movie.date_source }}: {{ movie.date_value }}
+                        </small>
+                    </td>
+                    <td><small>{{ 'Remove from Radarr' if movie.delete_option == 'remove_from_radarr' else 'File only' }}</small></td>
+                    <td><small>{{ movie.file_size_mb }} MB</small></td>
+                    <td>
+                        <button class="btn btn-xs btn-success me-1"
+                                onclick="approveMovie({{ movie.movie_id }})"
+                                title="Approve deletion">
+                            <i class="fas fa-check"></i>
+                        </button>
+                        <button class="btn btn-xs btn-secondary"
+                                onclick="rejectMovie({{ movie.movie_id }})"
+                                title="Reject deletion">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% else %}
+    <div class="alert alert-success text-center py-4">
+        <i class="fas fa-check-circle fa-2x mb-2"></i>
+        <h5>No Pending Movie Deletions</h5>
+        <p class="mb-0 small">All movie cleanup operations are up to date.</p>
     </div>
     {% endif %}
 </div>
@@ -336,6 +428,88 @@ function rejectEpisodes(episodeIds) {
         console.error('Reject error:', err);
         alert('Error rejecting deletions: ' + err.message);
     });
+}
+
+// ── Movie deletion helpers ────────────────────────────────────────────────
+
+function updateMovieSelectedCount() {
+    // no dedicated counter yet, just keep select-all in sync
+    const total = document.querySelectorAll('.movie-checkbox').length;
+    const checked = document.querySelectorAll('.movie-checkbox:checked').length;
+    const all = document.getElementById('select-all-movies');
+    if (all) all.indeterminate = checked > 0 && checked < total;
+}
+
+function toggleAllMovies(checkbox) {
+    document.querySelectorAll('.movie-checkbox').forEach(cb => cb.checked = checkbox.checked);
+    updateMovieSelectedCount();
+}
+
+function getSelectedMovieIds() {
+    return Array.from(document.querySelectorAll('.movie-checkbox:checked'))
+        .map(cb => parseInt(cb.dataset.movieId));
+}
+
+function approveMovie(movieId) {
+    if (confirm('Approve deletion of this movie? This will permanently delete it.')) {
+        doApproveMovies([movieId]);
+    }
+}
+
+function rejectMovie(movieId) {
+    if (confirm("Reject this movie deletion? It won't be flagged again for 30 days.")) {
+        doRejectMovies([movieId]);
+    }
+}
+
+function approveAllMovies() {
+    const ids = Array.from(document.querySelectorAll('.movie-checkbox'))
+        .map(cb => parseInt(cb.dataset.movieId));
+    if (!ids.length) return alert('No movies to approve.');
+    if (confirm(`Approve deletion of all ${ids.length} movie(s)?`)) doApproveMovies(ids);
+}
+
+function rejectAllMovies() {
+    const ids = Array.from(document.querySelectorAll('.movie-checkbox'))
+        .map(cb => parseInt(cb.dataset.movieId));
+    if (!ids.length) return alert('No movies to reject.');
+    if (confirm(`Reject deletion of all ${ids.length} movie(s)?`)) doRejectMovies(ids);
+}
+
+function doApproveMovies(movieIds) {
+    fetch('/pending-deletions/movies/approve', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({movie_ids: movieIds})
+    })
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }))
+    .then(data => {
+        if (data.success) {
+            alert(`Deleted ${data.deleted_count} movie(s).`);
+            location.reload();
+        } else {
+            alert('Error: ' + (data.errors || data.error || 'Unknown'));
+        }
+    })
+    .catch(err => alert('Error approving movies: ' + err.message));
+}
+
+function doRejectMovies(movieIds) {
+    fetch('/pending-deletions/movies/reject', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({movie_ids: movieIds})
+    })
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }))
+    .then(data => {
+        if (data.success) {
+            alert(`Rejected ${data.rejected_count} movie(s).`);
+            location.reload();
+        } else {
+            alert('Error: ' + (data.error || 'Unknown'));
+        }
+    })
+    .catch(err => alert('Error rejecting movies: ' + err.message));
 }
 </script>
 

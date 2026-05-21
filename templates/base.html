@@ -457,6 +457,16 @@
             <span class="brand-text">Episeerr</span>
         </div>
 
+        <!-- Universal Search Bar -->
+        <div class="sidebar-search-wrapper" id="sidebarSearchWrapper">
+            <div class="sidebar-search-bar" onclick="document.getElementById('sidebarSearchInput').focus()">
+                <i class="fas fa-search sidebar-search-icon"></i>
+                <input type="text" id="sidebarSearchInput" class="sidebar-search-input"
+                       placeholder="Search…" autocomplete="off" aria-label="Search" spellcheck="false">
+                <span class="sidebar-search-hint">Ctrl+K</span>
+            </div>
+        </div>
+
         <!-- Navigation -->
         <nav class="sidebar-nav">
             <!-- Dashboard -->
@@ -470,10 +480,16 @@
                 <span>Library</span>
             </a>
 
-            <!-- Rules -->
+            <!-- Series Rules -->
             <a href="{{ url_for('rules_page') }}" class="sidebar-nav-item {% if request.endpoint == 'rules_page' %}active{% endif %}">
                 <i class="fas fa-list"></i>
-                <span>Rules</span>
+                <span>Series Rules</span>
+            </a>
+
+            <!-- Movie Rules -->
+            <a href="{{ url_for('movie_rules_page') }}" class="sidebar-nav-item {% if request.endpoint == 'movie_rules_page' %}active{% endif %}">
+                <i class="fas fa-film"></i>
+                <span>Movie Rules</span>
             </a>
 
             <div class="sidebar-divider"></div>
@@ -1324,6 +1340,56 @@ document.addEventListener('DOMContentLoaded', checkForNewRequests);
   // Expose helpers globally so pages can use them
   window.escHtml  = window.escHtml  || _esc;
   window.escAttr  = window.escAttr  || _escAttr;
+
+  // Called by sidebar search for "Add Movie" results
+  window.sidebarOpenAddMovie = function(data) {
+    _tmdbPendingId   = data.tmdb_id;
+    _tmdbPendingType = 'movie';
+    _prefetchProfiles();
+    document.getElementById('addMovieTitle').textContent    = data.title   || '';
+    document.getElementById('addMovieYear').textContent     = data.year    || '';
+    document.getElementById('addMoviePoster').src           = data.poster  || '/static/placeholder.png';
+    document.getElementById('addMovieOverview').textContent = data.overview|| '';
+    document.getElementById('addMovieError').style.display  = 'none';
+    const btn = document.getElementById('addMovieBtn');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-plus me-1"></i>Add to Radarr';
+    _populateSelect('addMovieQuality', _radarrProfiles, 'id',   'name', '/api/radarr/quality-profiles', 'profiles');
+    _populateSelect('addMovieFolder',  _radarrFolders,  'path', 'path', '/api/radarr/root-folders',     'folders');
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('addMovieModal')).show();
+  };
+})();
+</script>
+
+<script>
+// ── Sidebar Search — navigates to full /search page ──────────────────────
+(function() {
+  const input = document.getElementById('sidebarSearchInput');
+  if (!input) return;
+
+  // Ctrl+K or / to focus
+  document.addEventListener('keydown', function(e) {
+    const tag = document.activeElement ? document.activeElement.tagName : '';
+    const inInput = (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT');
+    if ((e.ctrlKey && e.key === 'k') || (e.key === '/' && !inInput)) {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      input.value = '';
+      input.blur();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (q.length >= 2) {
+        window.location.href = '/search?q=' + encodeURIComponent(q);
+      }
+    }
+  });
 })();
 </script>
 </body>

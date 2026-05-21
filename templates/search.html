@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+
+  <!-- Page header + search input -->
+  <div class="d-flex align-items-center gap-3 mb-4">
+    <h4 class="mb-0"><i class="fas fa-search me-2 text-muted"></i>Search</h4>
+    <div class="flex-grow-1" style="max-width:480px;">
+      <div class="input-group input-group-sm">
+        <span class="input-group-text bg-dark border-secondary"><i class="fas fa-search text-muted"></i></span>
+        <input type="text" id="searchPageInput" class="form-control bg-dark text-light border-secondary"
+               placeholder="Search everything…" autocomplete="off" value="{{ q | e }}">
+      </div>
+    </div>
+    <span class="text-muted small" id="searchResultCount"></span>
+  </div>
+
+  <!-- Results container -->
+  <div id="searchResults">
+    {% if q %}
+    <div class="text-center py-5 text-muted">
+      <i class="fas fa-spinner fa-spin fa-2x mb-3"></i>
+      <div>Searching…</div>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="fas fa-search fa-2x mb-3 opacity-50"></i>
+      <div>Type to search across your entire media stack</div>
+      <div class="small mt-1 opacity-75">Library · Rules · Services · Watchlist · History</div>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<style>
+/* ── Search page result cards ───────────────────────────────── */
+.sp-section { margin-bottom: 1.5rem; }
+
+.sp-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-card, #1a1a2e);
+  border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary, #aaa);
+}
+
+.sp-header i { opacity: 0.7; font-size: 0.85em; }
+.sp-count {
+  margin-left: auto;
+  background: rgba(255,255,255,0.08);
+  border-radius: 20px;
+  padding: 1px 8px;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.sp-body {
+  background: var(--bg-card, #1a1a2e);
+  border: 1px solid var(--border-color, rgba(255,255,255,0.1));
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+
+.sp-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.sp-row:last-child { border-bottom: none; }
+.sp-row:hover { background: var(--nav-hover-bg, rgba(255,255,255,0.05)); }
+
+.sp-icon {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.07);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary, #aaa);
+}
+
+.sp-body-txt { flex: 1; min-width: 0; }
+
+.sp-title {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary, #fff);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sp-sub {
+  font-size: 0.78rem;
+  color: var(--text-secondary, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+/* Service chips */
+.sp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.sp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 0.7rem;
+  color: var(--text-secondary, #aaa);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+.sp-chip:hover {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+}
+
+.sp-chip-static {
+  cursor: default;
+  opacity: 0.6;
+}
+.sp-chip-static:hover {
+  background: rgba(255,255,255,0.07);
+  color: var(--text-secondary, #aaa);
+}
+
+/* Badges */
+.sp-badge {
+  flex-shrink: 0;
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.sp-badge-library    { background: rgba( 40,167, 69,0.2); color: #28a745; }
+.sp-badge-add        { background: rgba(  0,123,255,0.2); color: #3d8bfd; }
+.sp-badge-pending    { background: rgba(255,193,  7,0.2); color: #ffc107; }
+.sp-badge-monitored  { background: rgba( 23,162,184,0.2); color: #17a2b8; }
+.sp-badge-available  { background: rgba( 40,167, 69,0.2); color: #28a745; }
+.sp-badge-requested  { background: rgba(102, 16,242,0.2); color: #a678f5; }
+.sp-badge-processing { background: rgba(255,193,  7,0.2); color: #ffc107; }
+.sp-badge-partial    { background: rgba(253,126, 20,0.2); color: #fd7e14; }
+.sp-badge-running    { background: rgba( 40,167, 69,0.2); color: #28a745; }
+.sp-badge-stopped    { background: rgba(220, 53, 69,0.2); color: #dc3545; }
+.sp-badge-watched    { background: rgba( 23,162,184,0.2); color: #17a2b8; }
+.sp-badge-downloaded { background: rgba( 40,167, 69,0.2); color: #28a745; }
+.sp-badge-watchlist  { background: rgba(102, 16,242,0.2); color: #a678f5; }
+
+/* Category accent colors on icon box */
+.sp-section[data-cat="Library"]    .sp-icon { background: rgba( 40,167, 69,0.15); color: #28a745; }
+.sp-section[data-cat="Pending"]    .sp-icon { background: rgba(255,193,  7,0.15); color: #ffc107; }
+.sp-section[data-cat="Recent"]     .sp-icon { background: rgba( 23,162,184,0.15); color: #17a2b8; }
+.sp-section[data-cat="Watchlist"]  .sp-icon { background: rgba(102, 16,242,0.15); color: #a678f5; }
+.sp-section[data-cat="Rules"]      .sp-icon { background: rgba(253,126, 20,0.15); color: #fd7e14; }
+.sp-section[data-cat="Discover"]   .sp-icon { background: rgba(102, 16,242,0.15); color: #a678f5; }
+.sp-section[data-cat="Tautulli"]   .sp-icon { background: rgba(253,126, 20,0.15); color: #fd7e14; }
+
+/* Empty / loading states */
+.sp-empty {
+  text-align: center;
+  padding: 4rem 1rem;
+  color: var(--text-secondary, #aaa);
+}
+.sp-empty i { font-size: 2.5rem; opacity: 0.35; margin-bottom: 1rem; }
+.sp-empty-title { font-size: 1rem; margin-bottom: 0.25rem; }
+.sp-empty-sub { font-size: 0.82rem; opacity: 0.65; }
+
+.sp-loading {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--text-secondary, #aaa);
+}
+</style>
+
+<script>
+(function() {
+  'use strict';
+
+  const resultsEl   = document.getElementById('searchResults');
+  const inputEl     = document.getElementById('searchPageInput');
+  const countEl     = document.getElementById('searchResultCount');
+
+  let debTimer  = null;
+  let lastQuery = '';
+
+  // ── Category icons ────────────────────────────────────────────────────
+  const CAT_ICONS = {
+    'Library':    'fas fa-photo-video',
+    'Pending':    'fas fa-hourglass-half',
+    'Recent':     'fas fa-history',
+    'Watchlist':  'fas fa-bookmark',
+    'Rules':      'fas fa-sliders-h',
+    'Navigate':   'fas fa-compass',
+    'Quick Links':'fas fa-external-link-alt',
+    'Settings':   'fas fa-cog',
+    'Containers': 'fab fa-docker',
+    'Plex':       'fas fa-play-circle',
+    'Jellyfin':   'fas fa-play-circle',
+    'Emby':       'fas fa-play-circle',
+    'Tautulli':   'fas fa-chart-bar',
+    'Jellyseerr': 'fas fa-concierge-bell',
+    'Discover':   'fas fa-globe',
+  };
+
+  // ── Badge class map ───────────────────────────────────────────────────
+  const BADGE_CLS = {
+    'In Library':  'sp-badge-library',
+    'Add':         'sp-badge-add',
+    'Pending':     'sp-badge-pending',
+    'Monitored':   'sp-badge-monitored',
+    'Available':   'sp-badge-available',
+    'Requested':   'sp-badge-requested',
+    'Processing':  'sp-badge-processing',
+    'Partial':     'sp-badge-partial',
+    'Running':     'sp-badge-running',
+    'Stopped':     'sp-badge-stopped',
+    'Watched':     'sp-badge-watched',
+    'Downloaded':  'sp-badge-downloaded',
+    'Watchlist':   'sp-badge-watchlist',
+  };
+
+  function esc(str) {
+    if (str == null) return '';
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // ── Input handling ────────────────────────────────────────────────────
+  if (inputEl) {
+    inputEl.focus();
+    inputEl.select();
+
+    inputEl.addEventListener('input', function() {
+      const q = inputEl.value.trim();
+      clearTimeout(debTimer);
+      if (q === lastQuery) return;
+      if (q.length < 2) {
+        lastQuery = '';
+        countEl.textContent = '';
+        showEmpty();
+        history.replaceState(null, '', '/search');
+        return;
+      }
+      showLoading();
+      debTimer = setTimeout(function() { doSearch(q); }, 350);
+    });
+
+    inputEl.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') { inputEl.value = ''; inputEl.dispatchEvent(new Event('input')); }
+    });
+  }
+
+  // ── Auto-run if q was pre-filled from URL ─────────────────────────────
+  if (inputEl && inputEl.value.trim().length >= 2) {
+    doSearch(inputEl.value.trim());
+  }
+
+  // ── Search ───────────────────────────────────────────────────────────
+  function doSearch(q) {
+    lastQuery = q;
+    history.replaceState(null, '', '/search?q=' + encodeURIComponent(q));
+    fetch('/api/search?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(data) { renderResults(data.results || [], q); })
+      .catch(function() { renderResults([], q); });
+  }
+
+  function showLoading() {
+    resultsEl.innerHTML = '<div class="sp-loading"><i class="fas fa-spinner fa-spin fa-2x mb-3 d-block"></i>Searching…</div>';
+    countEl.textContent = '';
+  }
+
+  function showEmpty() {
+    resultsEl.innerHTML = [
+      '<div class="sp-empty">',
+        '<i class="fas fa-search d-block mb-3"></i>',
+        '<div class="sp-empty-title">Type to search across your entire media stack</div>',
+        '<div class="sp-empty-sub">Library · Rules · Services · Watchlist · History</div>',
+      '</div>',
+    ].join('');
+  }
+
+  // ── Rendering ─────────────────────────────────────────────────────────
+  function renderResults(results, q) {
+    if (!results.length) {
+      countEl.textContent = '0 results';
+      resultsEl.innerHTML = [
+        '<div class="sp-empty">',
+          '<i class="fas fa-search-minus d-block mb-3"></i>',
+          '<div class="sp-empty-title">No results for "' + esc(q) + '"</div>',
+          '<div class="sp-empty-sub">Try a different spelling or a broader term</div>',
+        '</div>',
+      ].join('');
+      return;
+    }
+
+    // Group by category, preserving order
+    const bycat = {};
+    const catOrder = [];
+    results.forEach(function(r) {
+      if (!bycat[r.category]) { bycat[r.category] = []; catOrder.push(r.category); }
+      bycat[r.category].push(r);
+    });
+
+    const total = results.length;
+    countEl.textContent = total + (total === 1 ? ' result' : ' results');
+
+    let html = '';
+    const seen = new Set();
+    catOrder.forEach(function(cat) {
+      if (seen.has(cat)) return;
+      seen.add(cat);
+      const items = bycat[cat];
+      const catIcon = CAT_ICONS[cat] || 'fas fa-circle';
+      html += '<div class="sp-section" data-cat="' + esc(cat) + '">';
+      html += '<div class="sp-header">';
+      html += '<i class="' + esc(catIcon) + '"></i>';
+      html += esc(cat);
+      html += '<span class="sp-count">' + items.length + '</span>';
+      html += '</div>';
+      html += '<div class="sp-body">';
+      items.forEach(function(r, i) {
+        html += buildRow(r, r._idx !== undefined ? r._idx : i, results);
+      });
+      html += '</div></div>';
+    });
+
+    resultsEl.innerHTML = html;
+
+    // Attach event handlers
+    resultsEl.querySelectorAll('.sp-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        const idx = parseInt(row.dataset.idx, 10);
+        handleClick(results[idx]);
+      });
+    });
+    resultsEl.querySelectorAll('.sp-chip').forEach(function(chip) {
+      chip.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (chip.classList.contains('sp-chip-static')) return;
+        const idx = parseInt(chip.dataset.idx, 10);
+        const li  = parseInt(chip.dataset.li,  10);
+        const link = (results[idx].links || [])[li];
+        if (!link || !link.url) return;
+        if (link.action === 'navigate') {
+          window.location.href = link.url;
+        } else if (link.action === 'add_series' || link.action === 'add_movie') {
+          handleClick({action: link.action, data: link.data, url: link.url});
+        } else {
+          window.open(link.url, '_blank');
+        }
+      });
+    });
+  }
+
+  function buildRow(r, idx, allResults) {
+    const badgeCls = BADGE_CLS[r.badge] || '';
+    const badgeHtml = r.badge
+      ? '<span class="sp-badge ' + badgeCls + '">' + esc(r.badge) + '</span>'
+      : '';
+    const subHtml = r.subtitle
+      ? '<div class="sp-sub">' + esc(r.subtitle) + '</div>'
+      : '';
+
+    let chipsHtml = '';
+    if (r.links && r.links.length) {
+      chipsHtml = '<div class="sp-chips">'
+        + r.links.map(function(l, li) {
+            const cls = l.static ? 'sp-chip sp-chip-static' : 'sp-chip';
+            return '<span class="' + cls + '" data-idx="' + idx + '" data-li="' + li + '" title="' + esc(l.label) + '">'
+              + '<i class="' + esc(l.icon || 'fas fa-external-link-alt') + '"></i>'
+              + '<span>' + esc(l.label) + '</span>'
+              + '</span>';
+          }).join('')
+        + '</div>';
+    }
+
+    return '<div class="sp-row" data-idx="' + idx + '">'
+      + '<div class="sp-icon"><i class="' + esc(r.icon || 'fas fa-circle') + '"></i></div>'
+      + '<div class="sp-body-txt">'
+      +   '<div class="sp-title">' + esc(r.title) + '</div>'
+      +   subHtml
+      +   chipsHtml
+      + '</div>'
+      + badgeHtml
+      + '</div>';
+  }
+
+  // ── Action handling ───────────────────────────────────────────────────
+  function handleClick(result) {
+    if (result.action === 'navigate' && result.url) {
+      window.location.href = result.url;
+    } else if (result.action === 'open_tab' && result.url) {
+      window.open(result.url, '_blank');
+    } else if (result.action === 'add_series' && result.data) {
+      doAddSeries(result.data);
+    } else if (result.action === 'add_movie' && result.data) {
+      if (window.sidebarOpenAddMovie) window.sidebarOpenAddMovie(result.data);
+    }
+  }
+
+  function doAddSeries(data) {
+    fetch('/api/sonarr/prepare-series', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tmdb_id: data.tmdb_id})
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(resp) {
+      if (resp.success) {
+        window.location.href = resp.redirect_url || ('/select-seasons/' + data.tmdb_id);
+      } else {
+        alert(resp.error || 'Failed to prepare series for addition.');
+      }
+    })
+    .catch(function() { alert('Network error adding series.'); });
+  }
+
+})();
+</script>
+{% endblock %}

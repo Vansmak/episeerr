@@ -1,0 +1,596 @@
+{% extends "base.html" %}
+
+{% block title %}Movie Rules{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+
+    <!-- Header -->
+    <div class="mb-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
+        <h2 class="mb-0"><i class="fas fa-film me-2"></i>Movie Rules</h2>
+        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createRuleModal">
+            <i class="fas fa-plus-circle me-1"></i>Create Movie Rule
+        </button>
+    </div>
+
+    <!-- Radarr connection status -->
+    <div class="alert {% if radarr_ok %}alert-success{% else %}alert-warning{% endif %} py-2 mb-4" role="alert">
+        <i class="fas {% if radarr_ok %}fa-check-circle{% else %}fa-exclamation-triangle{% endif %} me-2"></i>
+        {{ radarr_msg }}
+        {% if not radarr_ok %}
+        — <a href="{{ url_for('setup') }}" class="alert-link">Configure Radarr</a>
+        {% endif %}
+    </div>
+
+    <!-- Info card -->
+    <div class="card mb-4" style="background:var(--bg-secondary,#1a1f24);border-color:var(--border-color,#2d3142);">
+        <div class="card-body py-2">
+            <small class="text-muted">
+                <i class="fas fa-info-circle me-1"></i>
+                Tag movies in Radarr with <code>episeerr-&lt;rule_name&gt;</code> to include them in a rule.
+                Tags are created automatically when you save a rule.
+                Movies with no Episeerr tag are never touched.
+                Set a <strong>Default rule</strong> and add the Radarr webhook
+                (<code>{{ request.host_url.rstrip('/') }}/radarr-webhook</code>) to auto-tag movies on addition.
+            </small>
+        </div>
+    </div>
+
+    <!-- Rules table (desktop) -->
+    <div class="table-responsive d-none d-md-block">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>Rule Name</th>
+                    <th>Description</th>
+                    <th>Radarr Tag</th>
+                    <th>Grace Watched</th>
+                    <th>Dormant</th>
+                    <th>Approval</th>
+                    <th>Delete</th>
+                    <th>Default</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% if movie_rules %}
+                    {% for rule_name, rule in movie_rules.items() %}
+                    {% set tag_label = 'episeerr-' + rule_name.lower().replace(' ', '-') %}
+                    <tr>
+                        <td><strong>{{ rule_name }}</strong></td>
+                        <td>{{ rule.description or '' }}</td>
+                        <td><code>{{ tag_label }}</code></td>
+                        <td>
+                            {% if rule.grace_watched %}
+                                {{ rule.grace_watched }}d
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if rule.dormant_days %}
+                                {{ rule.dormant_days }}d
+                            {% elif rule.grace_unwatched %}
+                                {{ rule.grace_unwatched }}d
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if rule.require_approval %}
+                                <span class="badge bg-warning text-dark">Manual</span>
+                            {% else %}
+                                <span class="badge bg-danger">Auto</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <small>{{ 'Remove from Radarr' if rule.delete_option == 'remove_from_radarr' else 'File only' }}</small>
+                        </td>
+                        <td>
+                            {% if rule_name == default_movie_rule %}
+                                <span class="badge bg-primary"><i class="fas fa-star me-1"></i>Default</span>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary"
+                                        onclick='openEditModal({{ rule_name | tojson }}, {{ rule | tojson }})'>
+                                    <i class="fas fa-edit"></i> Edit
+                                </button>
+                                <form method="POST" action="{{ url_for('delete_movie_rule', rule_name=rule_name) }}"
+                                      style="display:inline;" onsubmit="return confirm('Delete movie rule {{ rule_name }}?');">
+                                    <button type="submit" class="btn btn-outline-danger">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center py-5 text-muted">
+                            No movie rules configured.
+                            <a href="#" data-bs-toggle="modal" data-bs-target="#createRuleModal">Create one</a> to get started.
+                        </td>
+                    </tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Rules cards (mobile) -->
+    <div class="d-md-none">
+        {% if movie_rules %}
+            {% for rule_name, rule in movie_rules.items() %}
+            {% set tag_label = 'episeerr-' + rule_name.lower().replace(' ', '-') %}
+            <div class="card mb-3" style="background:var(--bg-secondary,#1a1f24);border-color:var(--border-color,#2d3142);">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <h5 class="card-title mb-0">{{ rule_name }}</h5>
+                        {% if rule.require_approval %}
+                            <span class="badge bg-warning text-dark">Manual</span>
+                        {% else %}
+                            <span class="badge bg-danger">Auto</span>
+                        {% endif %}
+                    </div>
+                    {% if rule.description %}
+                    <p class="card-text text-muted small mb-2">{{ rule.description }}</p>
+                    {% endif %}
+                    <div class="small mb-3">
+                        <div>Tag: <code>{{ tag_label }}</code></div>
+                        <div>Grace watched: {{ rule.grace_watched ~ 'd' if rule.grace_watched else '—' }}</div>
+                        <div>Dormant: {{ (rule.dormant_days or rule.grace_unwatched) ~ 'd' if (rule.dormant_days or rule.grace_unwatched) else '—' }}</div>
+                        <div>Delete: {{ 'Remove from Radarr' if rule.delete_option == 'remove_from_radarr' else 'File only' }}</div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-outline-primary btn-sm flex-fill"
+                                onclick='openEditModal({{ rule_name | tojson }}, {{ rule | tojson }})'>
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <form method="POST" action="{{ url_for('delete_movie_rule', rule_name=rule_name) }}"
+                              class="flex-fill" onsubmit="return confirm('Delete {{ rule_name }}?');">
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="text-center py-5">
+                <i class="fas fa-film fa-3x text-muted mb-3"></i>
+                <h4>No Movie Rules</h4>
+                <p class="text-muted">Create a movie rule to start automated Radarr cleanup.</p>
+                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createRuleModal">
+                    <i class="fas fa-plus-circle me-1"></i>Create Movie Rule
+                </button>
+            </div>
+        {% endif %}
+    </div>
+
+    <!-- ── Manage Movie Assignments ──────────────────────────────────────── -->
+    {% if movie_rules %}
+    <div class="mt-5">
+        <h4 class="mb-3"><i class="fas fa-film me-2"></i>Manage Movie Assignments</h4>
+        <p class="text-muted small mb-3">
+            Assign Radarr movies to a rule directly from here. Each movie can only belong to one rule at a time.
+        </p>
+
+        <!-- Filters row -->
+        <div class="row g-2 mb-3">
+            <div class="col-md-4">
+                <input type="text" id="movieAssignSearch" class="form-control form-control-sm bg-dark text-light border-secondary"
+                       placeholder="Search movies…" oninput="filterMovieAssignTable()">
+            </div>
+            <div class="col-md-3">
+                <select id="movieAssignRuleFilter" class="form-select form-select-sm bg-dark text-light border-secondary"
+                        onchange="filterMovieAssignTable()">
+                    <option value="">All Rules</option>
+                    <option value="Unassigned">Unassigned</option>
+                    {% for rn in movie_rules.keys() | sort %}
+                    <option value="{{ rn }}">{{ rn }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-auto ms-auto d-flex gap-2 align-items-center">
+                <select id="bulkRuleSelect" class="form-select form-select-sm bg-dark text-light border-secondary" style="min-width:160px;">
+                    <option value="">Assign rule…</option>
+                    {% for rn in movie_rules.keys() | sort %}
+                    <option value="{{ rn }}">{{ rn }}</option>
+                    {% endfor %}
+                </select>
+                <button class="btn btn-sm btn-outline-primary" onclick="bulkAssignMovieRule()">
+                    <i class="fas fa-tags me-1"></i>Bulk Assign
+                </button>
+                <button class="btn btn-sm btn-outline-secondary" onclick="bulkUnassignMovieRule()">
+                    <i class="fas fa-times me-1"></i>Unassign
+                </button>
+            </div>
+        </div>
+
+        <!-- Loading / error states -->
+        <div id="movieAssignLoading" class="text-center py-4 text-muted">
+            <i class="fas fa-spinner fa-spin me-2"></i>Loading movies from Radarr…
+        </div>
+        <div id="movieAssignError" class="alert alert-warning" style="display:none;"></div>
+
+        <!-- Assignment table -->
+        <div class="table-responsive" id="movieAssignTableWrap" style="display:none;">
+            <table class="table table-hover table-sm">
+                <thead>
+                    <tr>
+                        <th style="width:36px;"><input type="checkbox" id="selectAllMovies" onchange="toggleSelectAllMovies(this)"></th>
+                        <th>Movie</th>
+                        <th>Year</th>
+                        <th>Current Rule</th>
+                        <th style="width:220px;">Assign Rule</th>
+                    </tr>
+                </thead>
+                <tbody id="movieAssignTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+<!-- ── Create Rule Modal ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="createRuleModal" tabindex="-1" aria-labelledby="createRuleModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" style="background:var(--bg-secondary,#1a1f24);border-color:var(--border-color,#2d3142);">
+            <form method="POST" action="{{ url_for('create_movie_rule') }}">
+                <div class="modal-header" style="border-color:var(--border-color,#2d3142);">
+                    <h5 class="modal-title" id="createRuleModalLabel"><i class="fas fa-plus-circle me-2"></i>Create Movie Rule</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Rule Name <span class="text-danger">*</span></label>
+                            <input type="text" name="rule_name" class="form-control bg-dark text-light border-secondary"
+                                   placeholder="e.g. Watched Movies" required>
+                            <div class="form-text">Creates Radarr tag <code>episeerr-&lt;name&gt;</code></div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Description</label>
+                            <input type="text" name="description" class="form-control bg-dark text-light border-secondary"
+                                   placeholder="Optional label">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Grace Period — Watched (days)</label>
+                            <input type="number" name="grace_watched" class="form-control bg-dark text-light border-secondary"
+                                   min="1" placeholder="e.g. 7 — leave blank to never delete watched">
+                            <div class="form-text">Delete watched movies after this many days since last watch.</div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Dormant — Never Watched (days)</label>
+                            <input type="number" name="dormant_days" class="form-control bg-dark text-light border-secondary"
+                                   min="1" placeholder="e.g. 90 — leave blank to keep unwatched movies">
+                            <div class="form-text">Delete movies with no watch history after this many days since added to Radarr.</div>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Delete Behaviour</label>
+                            <select name="delete_option" class="form-select bg-dark text-light border-secondary">
+                                <option value="file_only">File only (keep in Radarr)</option>
+                                <option value="remove_from_radarr">Remove from Radarr entirely</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Require Approval</label>
+                            <select name="require_approval" class="form-select bg-dark text-light border-secondary">
+                                <option value="true" selected>Yes — queue for manual review</option>
+                                <option value="false">No — delete automatically</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Dry Run</label>
+                            <select name="dry_run" class="form-select bg-dark text-light border-secondary">
+                                <option value="false" selected>Off — apply real changes</option>
+                                <option value="true">On — log only, no deletions</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="set_as_default" value="true" id="create_set_as_default">
+                                <label class="form-check-label" for="create_set_as_default">
+                                    Set as default rule
+                                    <small class="text-muted">— auto-tag movies added via the Radarr webhook</small>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border-color:var(--border-color,#2d3142);">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Create Rule
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ── Edit Rule Modal ───────────────────────────────────────────────────── -->
+<div class="modal fade" id="editRuleModal" tabindex="-1" aria-labelledby="editRuleModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content" style="background:var(--bg-secondary,#1a1f24);border-color:var(--border-color,#2d3142);">
+            <form method="POST" id="editRuleForm" action="">
+                <div class="modal-header" style="border-color:var(--border-color,#2d3142);">
+                    <h5 class="modal-title" id="editRuleModalLabel"><i class="fas fa-edit me-2"></i>Edit Movie Rule</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Rule Name <span class="text-danger">*</span></label>
+                            <input type="text" name="rule_name" id="edit_rule_name"
+                                   class="form-control bg-dark text-light border-secondary" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Description</label>
+                            <input type="text" name="description" id="edit_description"
+                                   class="form-control bg-dark text-light border-secondary">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Grace Period — Watched (days)</label>
+                            <input type="number" name="grace_watched" id="edit_grace_watched"
+                                   class="form-control bg-dark text-light border-secondary" min="1">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Dormant — Never Watched (days)</label>
+                            <input type="number" name="dormant_days" id="edit_dormant_days"
+                                   class="form-control bg-dark text-light border-secondary" min="1">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Delete Behaviour</label>
+                            <select name="delete_option" id="edit_delete_option"
+                                    class="form-select bg-dark text-light border-secondary">
+                                <option value="file_only">File only (keep in Radarr)</option>
+                                <option value="remove_from_radarr">Remove from Radarr entirely</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Require Approval</label>
+                            <select name="require_approval" id="edit_require_approval"
+                                    class="form-select bg-dark text-light border-secondary">
+                                <option value="true">Yes — queue for manual review</option>
+                                <option value="false">No — delete automatically</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Dry Run</label>
+                            <select name="dry_run" id="edit_dry_run"
+                                    class="form-select bg-dark text-light border-secondary">
+                                <option value="false">Off — apply real changes</option>
+                                <option value="true">On — log only, no deletions</option>
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" name="set_as_default" value="true" id="edit_set_as_default">
+                                <label class="form-check-label" for="edit_set_as_default">
+                                    Set as default rule
+                                    <small class="text-muted">— auto-tag movies added via the Radarr webhook</small>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer" style="border-color:var(--border-color,#2d3142);">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-1"></i>Save Changes
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ── Edit modal ──────────────────────────────────────────────────────────────
+function openEditModal(ruleName, rule) {
+    const form = document.getElementById('editRuleForm');
+    form.action = '/movie-rules/' + encodeURIComponent(ruleName) + '/edit';
+
+    document.getElementById('edit_rule_name').value = ruleName;
+    document.getElementById('edit_description').value = rule.description || '';
+    document.getElementById('edit_grace_watched').value = rule.grace_watched || '';
+    document.getElementById('edit_dormant_days').value = rule.dormant_days || '';
+    document.getElementById('edit_set_as_default').checked = (ruleName === {{ default_movie_rule | tojson }});
+
+    const delOpt = document.getElementById('edit_delete_option');
+    delOpt.value = rule.delete_option || 'file_only';
+
+    const reqAppr = document.getElementById('edit_require_approval');
+    reqAppr.value = rule.require_approval ? 'true' : 'false';
+
+    const dryRun = document.getElementById('edit_dry_run');
+    dryRun.value = rule.dry_run ? 'true' : 'false';
+
+    const modal = new bootstrap.Modal(document.getElementById('editRuleModal'));
+    modal.show();
+}
+
+// ── Movie assignment table ──────────────────────────────────────────────────
+const MOVIE_RULES_NAMES = {{ movie_rules.keys() | list | tojson | safe }};
+let allMoviesAssign = [];
+
+function escHtml(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function ruleLabel(rn) {
+    return rn ? rn.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase()) : '—';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    const wrap = document.getElementById('movieAssignTableWrap');
+    if (!wrap) return; // no movie rules yet
+    fetch('/api/radarr/movies')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('movieAssignLoading').style.display = 'none';
+            if (!data.success) {
+                const err = document.getElementById('movieAssignError');
+                err.textContent = data.error || 'Could not load movies';
+                err.style.display = '';
+                return;
+            }
+            allMoviesAssign = data.movies;
+            renderMovieAssignTable(allMoviesAssign);
+            wrap.style.display = '';
+        })
+        .catch(() => {
+            document.getElementById('movieAssignLoading').style.display = 'none';
+            const err = document.getElementById('movieAssignError');
+            err.textContent = 'Network error loading movies';
+            err.style.display = '';
+        });
+});
+
+function renderMovieAssignTable(movies) {
+    const ruleOpts = ['<option value="">— Unassigned —</option>',
+        ...MOVIE_RULES_NAMES.map(rn => `<option value="${escHtml(rn)}">${escHtml(ruleLabel(rn))}</option>`)
+    ].join('');
+
+    document.getElementById('movieAssignTableBody').innerHTML = movies.map(m => {
+        const currentBadge = m.assigned_rule
+            ? `<span class="badge bg-primary">${escHtml(ruleLabel(m.assigned_rule))}</span>`
+            : `<span class="badge bg-secondary">Unassigned</span>`;
+        const selected = (rn) => m.assigned_rule === rn ? 'selected' : '';
+        const opts = ['<option value="">— Unassigned —</option>',
+            ...MOVIE_RULES_NAMES.map(rn => `<option value="${escHtml(rn)}" ${selected(rn)}>${escHtml(ruleLabel(rn))}</option>`)
+        ].join('');
+        return `<tr data-movie-id="${m.id}" data-title="${escHtml(m.title.toLowerCase())}" data-rule="${escHtml(m.assigned_rule || '')}">
+            <td><input type="checkbox" class="movie-assign-cb" value="${m.id}"></td>
+            <td>${escHtml(m.title)}</td>
+            <td class="text-muted">${m.year || ''}</td>
+            <td id="ruleBadge_${m.id}">${currentBadge}</td>
+            <td>
+                <div class="d-flex gap-1">
+                    <select class="form-select form-select-sm bg-dark text-light border-secondary" id="ruleSelect_${m.id}"
+                            style="font-size:0.8rem;">
+                        ${opts}
+                    </select>
+                    <button class="btn btn-sm btn-primary" onclick="assignMovieRule(${m.id})" title="Save">
+                        <i class="fas fa-save"></i>
+                    </button>
+                </div>
+            </td>
+        </tr>`;
+    }).join('') || '<tr><td colspan="5" class="text-center text-muted py-3">No movies found in Radarr</td></tr>';
+}
+
+function filterMovieAssignTable() {
+    const search = (document.getElementById('movieAssignSearch')?.value || '').toLowerCase().trim();
+    const ruleF  = document.getElementById('movieAssignRuleFilter')?.value || '';
+    let data = allMoviesAssign;
+    if (search) data = data.filter(m => m.title.toLowerCase().includes(search));
+    if (ruleF) {
+        data = ruleF === 'Unassigned'
+            ? data.filter(m => !m.assigned_rule)
+            : data.filter(m => m.assigned_rule === ruleF);
+    }
+    renderMovieAssignTable(data);
+}
+
+function assignMovieRule(movieId) {
+    const sel = document.getElementById(`ruleSelect_${movieId}`);
+    if (!sel) return;
+    const rule_name = sel.value;
+    fetch('/api/movie-rules/assign', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({movie_id: movieId, rule_name})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (!data.success) { alert('Error: ' + (data.error || 'Unknown')); return; }
+        const m = allMoviesAssign.find(x => x.id === movieId);
+        if (m) m.assigned_rule = data.assigned_rule || null;
+        const badge = document.getElementById(`ruleBadge_${movieId}`);
+        if (badge) badge.innerHTML = data.assigned_rule
+            ? `<span class="badge bg-primary">${escHtml(ruleLabel(data.assigned_rule))}</span>`
+            : `<span class="badge bg-secondary">Unassigned</span>`;
+        const row = document.querySelector(`tr[data-movie-id="${movieId}"]`);
+        if (row) row.dataset.rule = data.assigned_rule || '';
+    })
+    .catch(() => alert('Network error assigning rule'));
+}
+
+function getCheckedMovieIds() {
+    return [...document.querySelectorAll('.movie-assign-cb:checked')].map(cb => parseInt(cb.value));
+}
+
+function toggleSelectAllMovies(cb) {
+    document.querySelectorAll('.movie-assign-cb').forEach(c => c.checked = cb.checked);
+}
+
+function bulkAssignMovieRule() {
+    const ids = getCheckedMovieIds();
+    const rule_name = document.getElementById('bulkRuleSelect')?.value || '';
+    if (!ids.length) { alert('Select at least one movie first.'); return; }
+    if (!rule_name) { alert('Choose a rule to assign.'); return; }
+    Promise.all(ids.map(id => fetch('/api/movie-rules/assign', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({movie_id: id, rule_name})
+    }).then(r => r.json())))
+    .then(results => {
+        results.forEach((data, i) => {
+            if (data.success) {
+                const m = allMoviesAssign.find(x => x.id === ids[i]);
+                if (m) m.assigned_rule = data.assigned_rule || null;
+                const badge = document.getElementById(`ruleBadge_${ids[i]}`);
+                if (badge) badge.innerHTML = data.assigned_rule
+                    ? `<span class="badge bg-primary">${escHtml(ruleLabel(data.assigned_rule))}</span>`
+                    : `<span class="badge bg-secondary">Unassigned</span>`;
+                const row = document.querySelector(`tr[data-movie-id="${ids[i]}"]`);
+                if (row) row.dataset.rule = data.assigned_rule || '';
+                const sel = document.getElementById(`ruleSelect_${ids[i]}`);
+                if (sel) sel.value = data.assigned_rule || '';
+            }
+        });
+        document.getElementById('selectAllMovies').checked = false;
+        document.querySelectorAll('.movie-assign-cb').forEach(c => c.checked = false);
+    })
+    .catch(() => alert('Network error during bulk assign'));
+}
+
+function bulkUnassignMovieRule() {
+    const ids = getCheckedMovieIds();
+    if (!ids.length) { alert('Select at least one movie first.'); return; }
+    Promise.all(ids.map(id => fetch('/api/movie-rules/assign', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({movie_id: id, rule_name: ''})
+    }).then(r => r.json())))
+    .then(results => {
+        results.forEach((data, i) => {
+            if (data.success) {
+                const m = allMoviesAssign.find(x => x.id === ids[i]);
+                if (m) m.assigned_rule = null;
+                const badge = document.getElementById(`ruleBadge_${ids[i]}`);
+                if (badge) badge.innerHTML = `<span class="badge bg-secondary">Unassigned</span>`;
+                const row = document.querySelector(`tr[data-movie-id="${ids[i]}"]`);
+                if (row) row.dataset.rule = '';
+                const sel = document.getElementById(`ruleSelect_${ids[i]}`);
+                if (sel) sel.value = '';
+            }
+        });
+        document.getElementById('selectAllMovies').checked = false;
+        document.querySelectorAll('.movie-assign-cb').forEach(c => c.checked = false);
+    })
+    .catch(() => alert('Network error during bulk unassign'));
+}
+</script>
+{% endblock %}

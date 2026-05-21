@@ -50,6 +50,13 @@
 
       <!-- Movies-only filters -->
       <div id="movieFilters" class="col-md-6 d-flex gap-2" style="display: none !important;">
+        <select id="movieRuleFilter" class="form-select form-select-sm bg-dark text-light border-secondary">
+          <option value="">All Rules</option>
+          <option value="Unassigned">Unassigned</option>
+          {% for rule_name in config.get('movie_rules', {}).keys() | sort %}
+          <option value="{{ rule_name }}">{{ rule_name.replace('_', ' ').title() }}</option>
+          {% endfor %}
+        </select>
         <select id="movieStatusFilter" class="form-select form-select-sm bg-dark text-light border-secondary">
           <option value="">All Movies</option>
           <option value="downloaded">Downloaded</option>
@@ -215,6 +222,7 @@
 const allSeriesData = {{ all_series|tojson|safe }} || [];
 const SONARR_URL    = '{{ SONARR_URL }}';
 const RADARR_URL    = '{{ RADARR_URL }}';
+const MOVIE_RULES   = {{ config.get('movie_rules', {})|tojson|safe }};
 let   allMoviesData = [];
 let   moviesLoaded  = false;
 let   currentTab    = localStorage.getItem('episeerr-library-tab') || 'series';
@@ -266,14 +274,11 @@ function switchTab(tab, save = true) {
   document.getElementById('tabMoviesBtn').classList.toggle('active', tab === 'movies');
   document.getElementById('seriesTabContent').style.display = tab === 'series' ? '' : 'none';
   document.getElementById('moviesTabContent').style.display = tab === 'movies' ? '' : 'none';
-  document.getElementById('seriesFilters').style.display    = tab === 'series' ? '' : 'none';
-  // movieFilters has !important override — toggle class instead
+  // Both filter bars use d-flex (Bootstrap adds !important), so we need !important to hide them
+  const sf = document.getElementById('seriesFilters');
+  sf.style.cssText = tab === 'series' ? 'display: flex !important;' : 'display: none !important;';
   const mf = document.getElementById('movieFilters');
-  if (tab === 'movies') {
-    mf.style.cssText = 'display: flex !important;';
-  } else {
-    mf.style.cssText = 'display: none !important;';
-  }
+  mf.style.cssText = tab === 'movies' ? 'display: flex !important;' : 'display: none !important;';
 
   if (tab === 'series') {
     renderSeriesGrid(getFilteredSeries());
@@ -285,7 +290,7 @@ function switchTab(tab, save = true) {
 
 // ── Event listeners ────────────────────────────────────────────────────
 function setupEventListeners() {
-  ['librarySearchInput','ruleFilterSelect','statusFilterSelect','movieStatusFilter'].forEach(id => {
+  ['librarySearchInput','ruleFilterSelect','statusFilterSelect','movieStatusFilter','movieRuleFilter'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener(el.tagName === 'INPUT' ? 'input' : 'change', () => {
@@ -377,6 +382,12 @@ function getFilteredMovies() {
   let data = [...allMoviesData];
   const search = (document.getElementById('librarySearchInput')?.value || '').toLowerCase().trim();
   if (search) data = data.filter(m => m.title.toLowerCase().includes(search));
+  const rule = document.getElementById('movieRuleFilter')?.value;
+  if (rule) {
+    data = rule === 'Unassigned'
+      ? data.filter(m => !m.assigned_rule)
+      : data.filter(m => m.assigned_rule === rule);
+  }
   const status = document.getElementById('movieStatusFilter')?.value;
   if (status === 'downloaded') data = data.filter(m => m.hasFile);
   else if (status === 'missing') data = data.filter(m => !m.hasFile);
@@ -395,16 +406,24 @@ function renderMoviesGrid(movies) {
     const poster  = m.poster || '/static/placeholder.png';
     const statusBadge = m.hasFile ? 'badge-downloaded' : m.monitored ? 'badge-monitored' : 'badge-missing';
     const statusLabel = m.hasFile ? 'Downloaded' : m.monitored ? 'Monitored' : 'Missing';
+    const rule    = m.assigned_rule || null;
+    const ruleCls = rule ? 'badge-rule' : 'badge-unassigned';
+    const ruleLabel = rule ? rule.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase()) : 'Unassigned';
     return `
       <div class="col series-grid-col">
         <div class="card series-grid-card" onclick="openMovieDrawer(${m.id})">
           <div class="series-poster-container">
             <img src="${poster}" class="series-poster" alt="${escHtml(m.title)}" loading="lazy"
                  onerror="this.src='/static/placeholder.png'">
+            <a href="#" class="series-select-btn" title="Assign movie rule"
+               onclick="event.stopPropagation(); openMovieRuleModal(${m.id})">
+              <i class="fas fa-tag"></i>
+            </a>
           </div>
           <div class="series-info">
             <div class="series-title">${escHtml(m.title)}${m.year ? ` <span class="text-muted" style="font-weight:400;">(${m.year})</span>` : ''}</div>
             <div class="series-badges">
+              <span class="badge series-badge ${ruleCls}">${escHtml(ruleLabel)}</span>
               <span class="badge series-badge ${statusBadge}">${statusLabel}</span>
             </div>
           </div>
@@ -493,6 +512,10 @@ function openMovieDrawer(movieId) {
 
   const radarrLink = m.tmdbId ? `${RADARR_URL}/movie/${m.tmdbId}` : RADARR_URL;
 
+  const ruleOptions = Object.keys(MOVIE_RULES).map(rn =>
+    `<option value="${escHtml(rn)}" ${m.assigned_rule === rn ? 'selected' : ''}>${escHtml(rn.replace(/_/g,' ').replace(/\b\w/g, l => l.toUpperCase()))}</option>`
+  ).join('');
+
   document.getElementById('drawerTitle').textContent = m.title;
   document.getElementById('drawerBody').innerHTML = `
     <img src="${poster}" class="drawer-poster" alt="${escHtml(m.title)}" onerror="this.src='/static/placeholder.png'">
@@ -501,6 +524,18 @@ function openMovieDrawer(movieId) {
       <div class="drawer-meta">${m.year || ''} · <span class="badge ${statusBadge}">${statusLabel}</span></div>
       <p class="drawer-overview">${escHtml(m.overview || 'No overview available.')}</p>
 
+      <div class="drawer-section">
+        <div class="drawer-label">Movie Rule</div>
+        <div class="d-flex gap-2 mt-1">
+          <select id="drawerMovieRuleSelect" class="form-select form-select-sm bg-dark text-light border-secondary flex-grow-1">
+            <option value="">— Unassigned —</option>
+            ${ruleOptions}
+          </select>
+          <button class="btn btn-sm btn-primary" onclick="assignMovieRuleFromDrawer(${m.id})">
+            <i class="fas fa-save"></i>
+          </button>
+        </div>
+      </div>
       <div class="drawer-section">
         <div class="drawer-label">Quality Profile</div>
         <div class="drawer-value">${escHtml(m.qualityProfileName || '—')}</div>
@@ -524,6 +559,29 @@ function openMovieDrawer(movieId) {
     </div>`;
 
   bootstrap.Offcanvas.getOrCreateInstance(document.getElementById('detailDrawer')).show();
+}
+
+function assignMovieRuleFromDrawer(movieId) {
+  const sel = document.getElementById('drawerMovieRuleSelect');
+  if (!sel) return;
+  const rule_name = sel.value;
+  fetch('/api/movie-rules/assign', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({movie_id: movieId, rule_name})
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.success) { alert('Error: ' + (data.error || 'Unknown')); return; }
+    const m = allMoviesData.find(x => x.id === movieId);
+    if (m) m.assigned_rule = data.assigned_rule || null;
+    renderMoviesGrid(getFilteredMovies());
+  })
+  .catch(() => alert('Network error assigning rule'));
+}
+
+function openMovieRuleModal(movieId) {
+  openMovieDrawer(movieId);
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────

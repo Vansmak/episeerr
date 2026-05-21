@@ -1,4 +1,4 @@
-__version__ = "3.6.9"
+__version__ = "3.7.2"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -22,7 +22,7 @@ import episeerr_utils
 from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url, http
 import pending_deletions
 from dashboard import dashboard_bp
-from webhooks import sonarr_webhooks_bp
+from webhooks import sonarr_webhooks_bp, radarr_webhooks_bp
 import media_processor
 from settings_db import (
     save_service, get_service, delete_service,
@@ -41,6 +41,7 @@ app = Flask(__name__)
 register_integration_blueprints(app)
 app.register_blueprint(dashboard_bp)
 app.register_blueprint(sonarr_webhooks_bp)
+app.register_blueprint(radarr_webhooks_bp)
 
 # Session / Auth configuration
 _secret = os.getenv('SECRET_KEY')
@@ -99,6 +100,8 @@ _AUTH_EXEMPT_ENDPOINTS = {
     # Sonarr + legacy Tautulli webhooks (Blueprint endpoints)
     'sonarr_webhooks.process_sonarr_webhook',
     'sonarr_webhooks.handle_server_webhook',
+    # Radarr webhook
+    'radarr_webhooks.process_radarr_webhook',
     # Integration webhooks (Blueprint endpoints — external services can't authenticate)
     'jellyfin_integration.jellyfin_webhook',
     'emby_integration.emby_webhook',
@@ -1365,10 +1368,11 @@ def api_sidebar_stats():
 
 @app.route('/pending-deletions')
 def view_pending_deletions():
-    """View all pending deletions"""
+    """View all pending deletions (episodes + movies)"""
     import pending_deletions
     summary = pending_deletions.get_pending_deletions_summary()
-    return render_template('pending_deletions.html', summary=summary)
+    movie_summary = pending_deletions.get_pending_movies_summary()
+    return render_template('pending_deletions.html', summary=summary, movie_summary=movie_summary)
 
 
 @app.route('/pending-deletions/approve', methods=['POST'])
@@ -1452,12 +1456,208 @@ def clear_pending_deletions():
 def get_pending_deletions_count():
     """API endpoint to get count of pending deletions for notifications"""
     import pending_deletions
-    summary = pending_deletions.get_pending_deletions_summary()
+    ep_summary = pending_deletions.get_pending_deletions_summary()
+    movie_summary = pending_deletions.get_pending_movies_summary()
     return jsonify({
-        'count': summary['total_episodes'],
-        'series_count': summary['total_series'],
-        'size_gb': summary['total_size_gb']
+        'count': ep_summary['total_episodes'] + movie_summary['total_movies'],
+        'series_count': ep_summary['total_series'],
+        'size_gb': round(ep_summary['total_size_gb'] + movie_summary['total_size_gb'], 2)
     })
+
+
+# ============================================================================
+# MOVIE RULES ROUTES
+# ============================================================================
+
+@app.route('/movie-rules')
+def movie_rules_page():
+    """Movie rules management page."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+
+    radarr_cfg = None
+    radarr_ok = False
+    radarr_msg = ''
+    try:
+        from settings_db import get_radarr_config
+        radarr_cfg = get_radarr_config()
+        if radarr_cfg and radarr_cfg.get('url') and radarr_cfg.get('api_key'):
+            resp = http.get(
+                f"{normalize_url(radarr_cfg['url'])}/api/v3/system/status",
+                headers={'X-Api-Key': radarr_cfg['api_key']},
+                timeout=5
+            )
+            radarr_ok = resp.ok
+            radarr_msg = f"Connected to Radarr v{resp.json().get('version','?')}" if resp.ok else f"Radarr error {resp.status_code}"
+        else:
+            radarr_msg = 'Radarr not configured'
+    except Exception as e:
+        radarr_msg = f'Radarr unreachable: {e}'
+
+    return render_template(
+        'movie_rules.html',
+        movie_rules=movie_rules,
+        default_movie_rule=config.get('default_movie_rule', ''),
+        radarr_ok=radarr_ok,
+        radarr_msg=radarr_msg,
+    )
+
+
+@app.route('/movie-rules/create', methods=['POST'])
+def create_movie_rule():
+    """Create a new movie rule."""
+    config = load_config()
+    if 'movie_rules' not in config:
+        config['movie_rules'] = {}
+
+    rule_name = request.form.get('rule_name', '').strip()
+    if not rule_name:
+        return redirect(url_for('movie_rules_page'))
+
+    grace_watched_raw = request.form.get('grace_watched', '').strip()
+    dormant_days_raw = request.form.get('dormant_days', '').strip()
+
+    rule = {
+        'grace_watched': int(grace_watched_raw) if grace_watched_raw else None,
+        'dormant_days': int(dormant_days_raw) if dormant_days_raw else None,
+        'require_approval': request.form.get('require_approval') == 'true',
+        'dry_run': request.form.get('dry_run') == 'true',
+        'delete_option': request.form.get('delete_option', 'file_only'),
+        'description': request.form.get('description', '').strip(),
+    }
+
+    config['movie_rules'][rule_name] = rule
+
+    if request.form.get('set_as_default') == 'true':
+        config['default_movie_rule'] = rule_name
+    elif config.get('default_movie_rule') == rule_name and request.form.get('set_as_default') != 'true':
+        config.pop('default_movie_rule', None)
+
+    save_config(config)
+
+    # Create Radarr tag
+    try:
+        from movie_processor import get_or_create_radarr_tag, get_radarr_settings
+        radarr_url, api_key = get_radarr_settings()
+        if radarr_url and api_key:
+            get_or_create_radarr_tag(rule_name, radarr_url, api_key)
+    except Exception as e:
+        app.logger.warning(f"Could not create Radarr tag for movie rule '{rule_name}': {e}")
+
+    return redirect(url_for('movie_rules_page'))
+
+
+@app.route('/movie-rules/<rule_name>/edit', methods=['GET', 'POST'])
+def edit_movie_rule(rule_name):
+    """Edit an existing movie rule."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+
+    if rule_name not in movie_rules:
+        return redirect(url_for('movie_rules_page'))
+
+    if request.method == 'POST':
+        grace_watched_raw = request.form.get('grace_watched', '').strip()
+        dormant_days_raw = request.form.get('dormant_days', '').strip()
+
+        new_name = request.form.get('rule_name', '').strip() or rule_name
+
+        movie_rules[rule_name].update({
+            'grace_watched': int(grace_watched_raw) if grace_watched_raw else None,
+            'dormant_days': int(dormant_days_raw) if dormant_days_raw else None,
+            'require_approval': request.form.get('require_approval') == 'true',
+            'dry_run': request.form.get('dry_run') == 'true',
+            'delete_option': request.form.get('delete_option', 'file_only'),
+            'description': request.form.get('description', '').strip(),
+        })
+
+        if request.form.get('set_as_default') == 'true':
+            config['default_movie_rule'] = new_name
+        elif config.get('default_movie_rule') == rule_name:
+            config.pop('default_movie_rule', None)
+
+        if new_name and new_name != rule_name:
+            movie_rules[new_name] = movie_rules.pop(rule_name)
+            if config.get('default_movie_rule') == rule_name:
+                config['default_movie_rule'] = new_name
+            config['movie_rules'] = movie_rules
+            save_config(config)
+            try:
+                from movie_processor import get_or_create_radarr_tag, get_radarr_settings
+                radarr_url, api_key = get_radarr_settings()
+                if radarr_url and api_key:
+                    get_or_create_radarr_tag(new_name, radarr_url, api_key)
+            except Exception:
+                pass
+        else:
+            save_config(config)
+
+        return redirect(url_for('movie_rules_page'))
+
+    return render_template('movie_rules.html',
+                           movie_rules=movie_rules,
+                           edit_rule_name=rule_name,
+                           edit_rule=movie_rules[rule_name],
+                           radarr_ok=True, radarr_msg='')
+
+
+@app.route('/movie-rules/<rule_name>/delete', methods=['POST'])
+def delete_movie_rule(rule_name):
+    """Delete a movie rule."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+    movie_rules.pop(rule_name, None)
+    save_config(config)
+    return redirect(url_for('movie_rules_page'))
+
+
+@app.route('/api/movie-rules/ensure-tags', methods=['POST'])
+def ensure_movie_tags():
+    """Create Radarr tags for all movie rules (called on startup or demand)."""
+    try:
+        from movie_processor import ensure_movie_rule_tags
+        config = load_config()
+        movie_rules = config.get('movie_rules', {})
+        tag_ids = ensure_movie_rule_tags(movie_rules)
+        return jsonify({'success': True, 'created': len(tag_ids), 'tags': tag_ids})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ── Movie pending deletions ───────────────────────────────────────────────────
+
+@app.route('/pending-deletions/movies/approve', methods=['POST'])
+def approve_pending_movie_deletions():
+    """Approve and execute movie deletions."""
+    import pending_deletions
+    try:
+        data = request.get_json()
+        movie_ids = data.get('movie_ids', [])
+        if not movie_ids:
+            return jsonify({'success': False, 'error': 'No movies specified'}), 400
+        result = pending_deletions.approve_movie_deletions(movie_ids)
+        return jsonify({'success': True, **result})
+    except Exception as e:
+        app.logger.error(f"Error approving movie deletions: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/pending-deletions/movies/reject', methods=['POST'])
+def reject_pending_movie_deletions():
+    """Reject movie deletions."""
+    import pending_deletions
+    try:
+        data = request.get_json()
+        movie_ids = data.get('movie_ids', [])
+        if not movie_ids:
+            return jsonify({'success': False, 'error': 'No movies specified'}), 400
+        rejected_count = pending_deletions.reject_movie_deletions(movie_ids)
+        return jsonify({'success': True, 'rejected_count': rejected_count})
+    except Exception as e:
+        app.logger.error(f"Error rejecting movie deletions: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # Add these routes to episeerr.py
 @app.route('/api/recent-cleanup-activity')
 def recent_cleanup_activity():
@@ -1962,7 +2162,7 @@ def _radarr_headers():
 
 @app.route('/api/radarr/movies')
 def radarr_movies():
-    """Fetch all movies from Radarr with quality profile names mapped."""
+    """Fetch all movies from Radarr with quality profile names and assigned movie rule."""
     cfg, headers = _radarr_headers()
     if not cfg:
         return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
@@ -1978,12 +2178,28 @@ def radarr_movies():
         if qp_resp.ok:
             qp_map = {p['id']: p['name'] for p in qp_resp.json()}
 
+        # Fetch tags to resolve assigned movie rule per movie
+        tags_resp = http.get(f"{base}/api/v3/tag", headers=headers, timeout=10)
+        tag_id_to_label = {}
+        if tags_resp.ok:
+            tag_id_to_label = {t['id']: t['label'] for t in tags_resp.json()}
+
+        from movie_processor import _rule_to_tag_label
+        movie_rules = load_config().get('movie_rules', {})
+        slug_to_rule = {_rule_to_tag_label(rn): rn for rn in movie_rules}
+
         result = []
         for m in movies:
             poster = next(
                 (img['remoteUrl'] for img in m.get('images', []) if img.get('coverType') == 'poster'),
                 None
             )
+            assigned_rule = None
+            for tid in m.get('tags', []):
+                lbl = tag_id_to_label.get(tid, '')
+                if lbl.startswith('episeerr_') and lbl in slug_to_rule:
+                    assigned_rule = slug_to_rule[lbl]
+                    break
             result.append({
                 'id': m['id'],
                 'title': m.get('title', ''),
@@ -2000,11 +2216,61 @@ def radarr_movies():
                 'tmdbId': m.get('tmdbId'),
                 'poster': poster,
                 'titleSlug': m.get('titleSlug', ''),
+                'assigned_rule': assigned_rule,
             })
         result.sort(key=lambda x: x['title'].lower())
         return jsonify({'success': True, 'movies': result})
     except Exception as e:
         app.logger.error(f"Error fetching Radarr movies: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/movie-rules/assign', methods=['POST'])
+def api_assign_movie_rule():
+    """Assign or unassign a movie rule to a Radarr movie via episeerr_ tags."""
+    data = request.get_json(silent=True) or {}
+    movie_id = data.get('movie_id')
+    rule_name = (data.get('rule_name') or '').strip()
+
+    if not movie_id:
+        return jsonify({'success': False, 'error': 'movie_id required'}), 400
+
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+
+    try:
+        base = cfg['url'].rstrip('/')
+
+        movie_resp = http.get(f"{base}/api/v3/movie/{movie_id}", headers=headers, timeout=10)
+        if not movie_resp.ok:
+            return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        movie = movie_resp.json()
+
+        tags_resp = http.get(f"{base}/api/v3/tag", headers=headers, timeout=10)
+        all_tags = tags_resp.json() if tags_resp.ok else []
+        tag_label_to_id = {t['label']: t['id'] for t in all_tags}
+        tag_id_to_label = {t['id']: t['label'] for t in all_tags}
+
+        # Strip existing episeerr_ tags, keep all others
+        new_tags = [tid for tid in movie.get('tags', [])
+                    if not tag_id_to_label.get(tid, '').startswith('episeerr_')]
+
+        if rule_name:
+            from movie_processor import _rule_to_tag_label, get_or_create_radarr_tag
+            tag_label = _rule_to_tag_label(rule_name)
+            tag_id = tag_label_to_id.get(tag_label) or get_or_create_radarr_tag(rule_name, base, cfg['api_key'])
+            if tag_id and tag_id not in new_tags:
+                new_tags.append(tag_id)
+
+        movie['tags'] = new_tags
+        put_resp = http.put(f"{base}/api/v3/movie/{movie_id}", headers=headers, json=movie, timeout=15)
+        if not put_resp.ok:
+            return jsonify({'success': False, 'error': f'Radarr update failed: {put_resp.status_code}'}), 500
+
+        return jsonify({'success': True, 'assigned_rule': rule_name or None})
+    except Exception as e:
+        app.logger.error(f"Error assigning movie rule: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -2360,6 +2626,769 @@ def discover_search():
     except Exception as e:
         app.logger.error(f"Discover search error: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ============================================================================
+# UNIVERSAL SIDEBAR SEARCH
+# ============================================================================
+
+_SEARCH_SETTINGS_INDEX = [
+    {'keywords': {'sonarr'}, 'title': 'Sonarr', 'subtitle': 'Service configuration', 'url': '/setup#sonarr-config', 'icon': 'fas fa-satellite-dish'},
+    {'keywords': {'radarr'}, 'title': 'Radarr', 'subtitle': 'Service configuration', 'url': '/setup#radarr-config', 'icon': 'fas fa-film'},
+    {'keywords': {'plex'}, 'title': 'Plex', 'subtitle': 'Service configuration', 'url': '/setup#plex-config', 'icon': 'fas fa-server'},
+    {'keywords': {'jellyfin'}, 'title': 'Jellyfin', 'subtitle': 'Service configuration', 'url': '/setup#jellyfin-config', 'icon': 'fas fa-server'},
+    {'keywords': {'emby'}, 'title': 'Emby', 'subtitle': 'Service configuration', 'url': '/setup#emby-config', 'icon': 'fas fa-server'},
+    {'keywords': {'tautulli', 'stats'}, 'title': 'Tautulli', 'subtitle': 'Service configuration', 'url': '/setup#tautulli-config', 'icon': 'fas fa-chart-bar'},
+    {'keywords': {'tmdb', 'database'}, 'title': 'TMDB', 'subtitle': 'Service configuration', 'url': '/setup#tmdb-config', 'icon': 'fas fa-database'},
+    {'keywords': {'jellyseerr', 'overseerr', 'requests'}, 'title': 'Jellyseerr', 'subtitle': 'Service configuration', 'url': '/setup#jellyseerr-config', 'icon': 'fas fa-question-circle'},
+    {'keywords': {'docker', 'containers', 'container'}, 'title': 'Docker', 'subtitle': 'Container management', 'url': '/setup#docker-config', 'icon': 'fas fa-cube'},
+    {'keywords': {'webhook', 'webhooks', 'notification', 'notifications'}, 'title': 'Webhooks', 'subtitle': 'Notification settings', 'url': '/scheduler', 'icon': 'fas fa-bell'},
+    {'keywords': {'grace', 'grace period'}, 'title': 'Grace Period', 'subtitle': 'Cleanup settings', 'url': '/scheduler', 'icon': 'fas fa-clock'},
+    {'keywords': {'cleanup', 'schedule', 'scheduler', 'automation'}, 'title': 'Cleanup Scheduler', 'subtitle': 'Automation settings', 'url': '/scheduler', 'icon': 'fas fa-broom'},
+    {'keywords': {'logs', 'log', 'history', 'activity', 'debug', 'troubleshoot', 'troubleshooting'}, 'title': 'View Logs', 'subtitle': 'App & cleanup logs (episeerr.log)', 'url': '/logs', 'icon': 'fas fa-terminal'},
+    {'keywords': {'cleanup logs', 'cleanuplogs'}, 'title': 'Cleanup Logs', 'subtitle': 'Scheduled cleanup history', 'url': '/cleanup-logs', 'icon': 'fas fa-file-alt'},
+    {'keywords': {'auth', 'authentication', 'login', 'password', 'security'}, 'title': 'Authentication', 'subtitle': 'Security settings', 'url': '/scheduler', 'icon': 'fas fa-lock'},
+]
+
+_SEARCH_NAV_INDEX = [
+    {'keywords': {'dashboard', 'home', 'overview'}, 'title': 'Dashboard', 'subtitle': 'Main overview & stats', 'url': '/dashboard', 'icon': 'fas fa-chart-line'},
+    {'keywords': {'library', 'series', 'shows', 'tv'}, 'title': 'Library', 'subtitle': 'Series & rules management', 'url': '/series', 'icon': 'fas fa-photo-video'},
+    {'keywords': {'rules', 'rule'}, 'title': 'Rules', 'subtitle': 'Manage episode rules', 'url': '/series', 'icon': 'fas fa-list'},
+    {'keywords': {'pending', 'queue', 'items', 'selections'}, 'title': 'Pending Items', 'subtitle': 'Pending episode selections', 'url': '/episeerr', 'icon': 'fas fa-bell'},
+    {'keywords': {'services', 'setup', 'connect', 'integrations'}, 'title': 'Services', 'subtitle': 'Configure external services', 'url': '/setup', 'icon': 'fas fa-plug'},
+    {'keywords': {'settings', 'admin', 'scheduler', 'preferences', 'configuration', 'configure'}, 'title': 'Settings', 'subtitle': 'App settings & scheduler', 'url': '/scheduler', 'icon': 'fas fa-sliders-h'},
+    {'keywords': {'docs', 'documentation', 'help', 'guide', 'troubleshooting'}, 'title': 'Documentation', 'subtitle': 'Guides & help', 'url': '/documentation', 'icon': 'fas fa-book'},
+    {'keywords': {'logs', 'log', 'episeerr.log', 'debug', 'activity', 'troubleshooting'}, 'title': 'View Logs', 'subtitle': 'App logs & debug output', 'url': '/logs', 'icon': 'fas fa-terminal'},
+    {'keywords': {'theme', 'appearance', 'color', 'dark', 'light'}, 'title': 'Theme', 'subtitle': 'Change color theme', 'url': '/dashboard', 'icon': 'fas fa-palette'},
+]
+
+
+@app.route('/api/search')
+def unified_search():
+    """Universal search — Tier 1 internal data instantly, Tier 2/3 external services in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from collections import defaultdict
+    from settings_db import get_all_quick_links, get_service as _get_svc
+    from settings_db import get_jellyfin_config, get_emby_config, get_plex_config
+
+    q_orig = request.args.get('q', '').strip()
+    q = q_orig.lower()
+    if len(q) < 2:
+        return jsonify({'results': []}), 400
+
+    results = []
+
+    # ── Tier 1: Internal data ────────────────────────────────────────────
+
+    # Pre-load watch history — most recent event per series title
+    _watches_by_title = {}
+    try:
+        import json as _json_lib
+        from activity_storage import WATCHES_FILE
+        if os.path.exists(WATCHES_FILE):
+            with open(WATCHES_FILE) as _wf:
+                for _we in _json_lib.load(_wf):
+                    _wt = (_we.get('series_title') or '').lower()
+                    if not _wt:
+                        continue
+                    ts = _we.get('timestamp', 0)
+                    if _wt not in _watches_by_title or ts > _watches_by_title[_wt].get('timestamp', 0):
+                        _watches_by_title[_wt] = _we
+    except Exception:
+        pass
+
+    # Resolve Tautulli URL once — used to make Watched chips clickable
+    _tautulli_url = None
+    try:
+        from settings_db import get_tautulli_config as _get_tau_cfg
+        _tau = _get_tau_cfg()
+        if _tau and _tau.get('url') and _tau.get('api_key'):
+            _tautulli_url = _tau['url'].rstrip('/')
+    except Exception:
+        pass
+
+    # Library: Series from Sonarr
+    try:
+        config = load_config()
+        rules_mapping = {}
+        for rule_name, details in config.get('rules', {}).items():
+            for sid in details.get('series', {}).keys():
+                rules_mapping[str(sid)] = rule_name
+        prefs = sonarr_utils.load_preferences()
+        s_url = prefs.get('SONARR_URL', '')
+        s_key = prefs.get('SONARR_API_KEY', '')
+        if s_url and s_key:
+            resp = http.get(f"{s_url}/api/v3/series",
+                            headers={'X-Api-Key': s_key}, timeout=5)
+            if resp.ok:
+                for s in resp.json():
+                    title = s.get('title', '')
+                    if q not in title.lower():
+                        continue
+                    rule = rules_mapping.get(str(s['id']))
+                    links = []
+                    slug = s.get('titleSlug', '')
+                    if slug:
+                        links.append({
+                            'label': 'Sonarr',
+                            'url': f"{s_url.rstrip('/')}/series/{slug}",
+                            'icon': 'fas fa-satellite-dish',
+                            'action': 'open_tab',
+                        })
+                    if rule:
+                        links.append({
+                            'label': f'Rule: {rule}',
+                            'url': f'/rules?highlight={rule}',
+                            'icon': 'fas fa-list',
+                            'action': 'navigate',
+                        })
+                    # Single Watched chip — always from watched.json (most recent).
+                    # Clickable → Tautulli when configured; static badge otherwise.
+                    # Cross-service grouping skips adding a second chip (dedup below).
+                    _lw = _watches_by_title.get(title.lower())
+                    if _lw:
+                        if _tautulli_url:
+                            links.append({
+                                'label': 'Watched',
+                                'url': _tautulli_url,
+                                'icon': 'fas fa-eye',
+                                'action': 'open_tab',
+                            })
+                        else:
+                            links.append({
+                                'label': f"Watched {time_ago(_lw.get('timestamp', 0))}",
+                                'url': None,
+                                'icon': 'fas fa-eye',
+                                'action': None,
+                                'static': True,
+                            })
+                    results.append({
+                        'category': 'Library',
+                        'title': title,
+                        'subtitle': s.get('status', '').title(),
+                        'action': 'navigate',
+                        'url': f"/series?highlight={s['id']}",
+                        'icon': 'fas fa-tv',
+                        'badge': None,
+                        'data': None,
+                        'links': links,
+                    })
+    except Exception:
+        pass
+
+    # Library: Movies from Radarr
+    try:
+        r_cfg, r_hdrs = _radarr_headers()
+        if r_cfg:
+            resp = http.get(f"{r_cfg['url'].rstrip('/')}/api/v3/movie",
+                            headers=r_hdrs, timeout=5)
+            if resp.ok:
+                for m in resp.json():
+                    title = m.get('title', '')
+                    if q not in title.lower():
+                        continue
+                    links = []
+                    slug = m.get('titleSlug', '')
+                    if slug:
+                        links.append({
+                            'label': 'Radarr',
+                            'url': f"{r_cfg['url'].rstrip('/')}/movie/{slug}",
+                            'icon': 'fas fa-film',
+                            'action': 'open_tab',
+                        })
+                    results.append({
+                        'category': 'Library',
+                        'title': title,
+                        'subtitle': f"Movie · {m.get('year', '')}",
+                        'action': 'navigate',
+                        'url': '/series',
+                        'icon': 'fas fa-film',
+                        'badge': None,
+                        'data': None,
+                        'links': links,
+                    })
+    except Exception:
+        pass
+
+    # Rules
+    try:
+        config = load_config()
+        for rule_name, details in config.get('rules', {}).items():
+            if q in rule_name.lower():
+                get_c = details.get('get_count') or 'all'
+                keep_c = details.get('keep_count') or 'all'
+                results.append({
+                    'category': 'Rules',
+                    'title': rule_name,
+                    'subtitle': f"Get {get_c} {details.get('get_type', 'episodes')} · Keep {keep_c}",
+                    'action': 'navigate',
+                    'url': f"/series?rule={rule_name}",
+                    'icon': 'fas fa-list',
+                    'badge': None,
+                    'data': None,
+                })
+    except Exception:
+        pass
+
+    # Settings sections (keyword match)
+    for entry in _SEARCH_SETTINGS_INDEX:
+        if any(q in kw or kw.startswith(q) for kw in entry['keywords']):
+            results.append({
+                'category': 'Settings',
+                'title': entry['title'],
+                'subtitle': entry['subtitle'],
+                'action': 'navigate',
+                'url': entry['url'],
+                'icon': entry['icon'],
+                'badge': None,
+                'data': None,
+            })
+
+    # Nav items (keyword match)
+    for entry in _SEARCH_NAV_INDEX:
+        if any(q in kw or kw.startswith(q) for kw in entry['keywords']):
+            results.append({
+                'category': 'Navigate',
+                'title': entry['title'],
+                'subtitle': entry['subtitle'],
+                'action': 'navigate',
+                'url': entry['url'],
+                'icon': entry['icon'],
+                'badge': None,
+                'data': None,
+            })
+
+    # Quick links — only user-added (custom=True); auto-generated service links
+    # (custom=False) are already covered by the Settings index with /setup URLs
+    try:
+        for link in get_all_quick_links():
+            if not link.get('custom'):
+                continue
+            if q in link.get('name', '').lower():
+                results.append({
+                    'category': 'Quick Links',
+                    'title': link['name'],
+                    'subtitle': (link.get('url') or '')[:60],
+                    'action': 'open_tab',
+                    'url': link.get('alternate_url') or link.get('url', ''),
+                    'icon': link.get('icon') or 'fas fa-link',
+                    'badge': None,
+                    'data': None,
+                })
+    except Exception:
+        pass
+
+    # Pending selections (awaiting episode choice)
+    try:
+        for pr in get_all_pending_requests():
+            title = pr.get('title', '')
+            if title and q in title.lower():
+                results.append({
+                    'category': 'Pending',
+                    'title': title,
+                    'subtitle': 'Awaiting episode selection',
+                    'action': 'navigate',
+                    'url': '/episeerr',
+                    'icon': 'fas fa-clock',
+                    'badge': 'Pending',
+                    'data': None,
+                })
+    except Exception:
+        pass
+
+    # Recent activity (watches + episode downloads from activity_storage files)
+    try:
+        import json as _json
+        from activity_storage import WATCHES_FILE, SEARCHES_FILE
+        _activity_events = []
+        for _filepath, _badge in [(WATCHES_FILE, 'Watched'), (SEARCHES_FILE, 'Downloaded')]:
+            if os.path.exists(_filepath):
+                with open(_filepath) as _f:
+                    for _e in _json.load(_f):
+                        _title = _e.get('series_title', '')
+                        if _title and q in _title.lower():
+                            _activity_events.append((_e.get('timestamp', 0), _e, _badge))
+        _activity_events.sort(key=lambda x: x[0], reverse=True)
+        _seen_act = set()
+        for _ts, _e, _badge in _activity_events[:6]:
+            _t = _e.get('series_title', '')
+            if _t.lower() in _seen_act:
+                continue
+            _seen_act.add(_t.lower())
+            _s, _ep = _e.get('season', 0), _e.get('episode', 0)
+            _ago = time_ago(_ts)
+            results.append({
+                'category': 'Recent',
+                'title': _t,
+                'subtitle': f"S{_s:02d}E{_ep:02d} · {_badge} {_ago}",
+                'action': 'navigate',
+                'url': f"/series?highlight={_e.get('series_id', '')}",
+                'icon': 'fas fa-history',
+                'badge': _badge,
+                'data': None,
+            })
+    except Exception:
+        pass
+
+    # ── Tier 2 & 3: External services (parallel) ────────────────────────
+
+    def _search_plex(query):
+        try:
+            plex_cfg = get_plex_config()
+            if not plex_cfg:
+                return []
+            p_url = plex_cfg['url'].rstrip('/')
+            p_key = plex_cfg['api_key']
+            if not p_url or not p_key:
+                return []
+            resp = http.get(f"{p_url}/search",
+                            params={'query': query, 'X-Plex-Token': p_key, 'limit': 4},
+                            headers={'Accept': 'application/json'}, timeout=3)
+            if not resp.ok:
+                return []
+            metadata = resp.json().get('MediaContainer', {}).get('Metadata') or []
+            out = []
+            for item in metadata:
+                plex_type = item.get('type', '')
+                if plex_type not in ('show', 'movie'):
+                    continue  # skip episodes, seasons, tracks, etc.
+                type_label = 'Series' if plex_type == 'show' else 'Movie'
+                out.append({
+                    'category': 'Plex',
+                    'title': item.get('title', ''),
+                    'subtitle': f"{type_label} · {item.get('year', '')}",
+                    'action': 'open_tab',
+                    'url': p_url,
+                    'icon': 'fas fa-server',
+                    'badge': None,
+                    'data': None,
+                })
+                if len(out) >= 4:
+                    break
+            return out
+        except Exception:
+            return []
+
+    def _search_jellyfin(query):
+        try:
+            jf_cfg = get_jellyfin_config()
+            if not jf_cfg:
+                return []
+            j_url = jf_cfg['url'].rstrip('/')
+            j_key = jf_cfg['api_key']
+            if not j_url or not j_key:
+                return []
+            user_id = jf_cfg.get('user_id', '')
+            endpoint = f"{j_url}/Users/{user_id}/Items" if user_id else f"{j_url}/Items"
+            resp = http.get(endpoint, params={
+                'searchTerm': query,
+                'IncludeItemTypes': 'Series,Movie',
+                'Limit': 4,
+                'api_key': j_key,
+            }, timeout=3)
+            if not resp.ok:
+                return []
+            out = []
+            for item in (resp.json().get('Items') or [])[:4]:
+                out.append({
+                    'category': 'Jellyfin',
+                    'title': item.get('Name', ''),
+                    'subtitle': item.get('Type', '').title(),
+                    'action': 'open_tab',
+                    'url': j_url,
+                    'icon': 'fas fa-server',
+                    'badge': None,
+                    'data': None,
+                })
+            return out
+        except Exception:
+            return []
+
+    def _search_emby(query):
+        try:
+            emby_cfg = get_emby_config()
+            if not emby_cfg:
+                return []
+            e_url = emby_cfg['url'].rstrip('/')
+            e_key = emby_cfg['api_key']
+            if not e_url or not e_key:
+                return []
+            user_id = emby_cfg.get('user_id', '')
+            endpoint = f"{e_url}/Users/{user_id}/Items" if user_id else f"{e_url}/Items"
+            resp = http.get(endpoint, params={
+                'searchTerm': query,
+                'IncludeItemTypes': 'Series,Movie',
+                'Limit': 4,
+                'api_key': e_key,
+            }, timeout=3)
+            if not resp.ok:
+                return []
+            out = []
+            for item in (resp.json().get('Items') or [])[:4]:
+                out.append({
+                    'category': 'Emby',
+                    'title': item.get('Name', ''),
+                    'subtitle': item.get('Type', '').title(),
+                    'action': 'open_tab',
+                    'url': e_url,
+                    'icon': 'fas fa-server',
+                    'badge': None,
+                    'data': None,
+                })
+            return out
+        except Exception:
+            return []
+
+    def _search_tmdb(query):
+        try:
+            if not TMDB_API_KEY:
+                return []
+            data = get_tmdb_endpoint('search/multi', params={'query': query})
+            if not data:
+                return []
+            enriched = _enrich_tmdb_results(data.get('results', []))
+            out = []
+            for item in enriched[:5]:
+                media_type = item.get('media_type', 'tv')
+                in_library = item.get('in_library', False)
+                is_pending = item.get('pending', False)
+                if in_library:
+                    badge = 'In Library'
+                    if media_type == 'tv' and item.get('library_id'):
+                        action, url = 'navigate', f"/series?highlight={item['library_id']}"
+                    else:
+                        r_cfg = get_radarr_config()
+                        action, url = 'open_tab', (r_cfg['url'] if r_cfg else '#')
+                elif is_pending:
+                    badge, action, url = 'Pending', 'navigate', '/episeerr'
+                else:
+                    badge = 'Add'
+                    action = 'add_series' if media_type == 'tv' else 'add_movie'
+                    url = None
+                out.append({
+                    'category': 'Discover',
+                    'title': item.get('title', ''),
+                    'subtitle': f"{'Series' if media_type == 'tv' else 'Movie'} · {item.get('year', '')}",
+                    'action': action,
+                    'url': url,
+                    'icon': 'fas fa-tv' if media_type == 'tv' else 'fas fa-film',
+                    'badge': badge,
+                    'data': {
+                        'tmdb_id': item.get('tmdb_id'),
+                        'media_type': media_type,
+                        'title': item.get('title', ''),
+                        'year': item.get('year', ''),
+                        'poster': item.get('poster'),
+                        'overview': item.get('overview', ''),
+                    },
+                })
+            return out
+        except Exception:
+            return []
+
+    def _search_jellyseerr(query):
+        try:
+            svc = _get_svc('jellyseerr', 'default') or {}
+            js_url = (svc.get('url') or '').rstrip('/')
+            js_key = svc.get('api_key', '')
+            if not js_url or not js_key:
+                return []
+            resp = http.get(f"{js_url}/api/v1/search",
+                            headers={'X-Api-Key': js_key},
+                            params={'query': query, 'take': 4}, timeout=3)
+            if not resp.ok:
+                return []
+            STATUS_MAP = {1: 'Unknown', 2: 'Pending', 3: 'Processing',
+                          4: 'Partial', 5: 'Available'}
+            out = []
+            for result in (resp.json().get('results') or [])[:4]:
+                media_info = result.get('mediaInfo') or {}
+                badge = STATUS_MAP.get(media_info.get('status'))
+                title = result.get('title') or result.get('name', '')
+                out.append({
+                    'category': 'Jellyseerr',
+                    'title': title,
+                    'subtitle': result.get('mediaType', '').title(),
+                    'action': 'open_tab',
+                    'url': js_url,
+                    'icon': 'fas fa-question-circle',
+                    'badge': badge,
+                    'data': None,
+                })
+            return out
+        except Exception:
+            return []
+
+    def _search_tautulli(query):
+        try:
+            from settings_db import get_tautulli_config
+            cfg = get_tautulli_config()
+            if not cfg:
+                return []
+            t_url = cfg['url'].rstrip('/')
+            t_key = cfg['api_key']
+            if not t_url or not t_key:
+                return []
+            resp = http.get(f"{t_url}/api/v2", params={
+                'apikey': t_key, 'cmd': 'get_history',
+                'search': query, 'length': 10,
+            }, timeout=3)
+            if not resp.ok:
+                return []
+            entries = (resp.json().get('response', {})
+                       .get('data', {}).get('data', []))
+            if not isinstance(entries, list):
+                return []
+            # Group by show/movie title, keep most recent play per title
+            seen = {}
+            for e in entries:
+                if e.get('media_type') == 'episode':
+                    title = e.get('grandparent_title') or e.get('full_title', '')
+                else:
+                    title = e.get('full_title') or e.get('title', '')
+                if not title:
+                    continue
+                # Tautulli searches full_title (show + episode), but we display the
+                # show title — skip if the query isn't actually in the show title
+                if query.lower() not in title.lower():
+                    continue
+                ts = e.get('date') or e.get('stopped') or 0
+                user = e.get('user', '')
+                if title not in seen or ts > seen[title]['ts']:
+                    seen[title] = {'ts': ts, 'user': user}
+            out = []
+            for title, info in list(seen.items())[:4]:
+                ago = time_ago(info['ts']) if info['ts'] else 'recently'
+                user_str = f" by {info['user']}" if info['user'] else ''
+                out.append({
+                    'category': 'Tautulli',
+                    'title': title,
+                    'subtitle': f"Watched{user_str} {ago}",
+                    'action': 'open_tab',
+                    'url': t_url,
+                    'icon': 'fas fa-chart-bar',
+                    'badge': None,
+                    'data': None,
+                    'links': [],
+                })
+            return out
+        except Exception:
+            return []
+
+    def _search_containers(query):
+        try:
+            from integrations.docker import _docker_get
+            from settings_db import get_service as _gs
+            docker_svc = _gs('docker', 'default')
+            if not docker_svc:
+                return []
+            cfg = docker_svc.get('config') or {}
+            host = cfg.get('docker_host') or docker_svc.get('url') or 'unix:///var/run/docker.sock'
+            raw = _docker_get(host, '/containers/json', {'all': 'true'})
+            out = []
+            for c in raw:
+                name = (c.get('Names') or [''])[0].lstrip('/')
+                if not name or query.lower() not in name.lower():
+                    continue
+                status = c.get('State', 'unknown')
+                is_running = status == 'running'
+                out.append({
+                    'category': 'Containers',
+                    'title': name,
+                    'subtitle': c.get('Image', ''),
+                    'action': 'navigate',
+                    'url': '/dashboard',
+                    'icon': 'fas fa-cube',
+                    'badge': 'Running' if is_running else 'Stopped',
+                    'data': {'id': c.get('Id', '')[:12], 'status': status},
+                })
+                if len(out) >= 4:
+                    break
+            return out
+        except Exception:
+            return []
+
+    def _search_plex_watchlist(query):
+        try:
+            from settings_db import get_plex_config
+            from integrations.plex import PlexIntegration
+            plex_cfg = get_plex_config()
+            if not plex_cfg or not plex_cfg.get('api_key'):
+                return []
+            items = PlexIntegration().fetch_watchlist(plex_cfg['api_key'])
+            out = []
+            for item in items:
+                title = item.get('title', '')
+                if not title or query.lower() not in title.lower():
+                    continue
+                plex_type = item.get('type', 'movie')
+                type_label = 'Series' if plex_type == 'show' else 'Movie'
+                out.append({
+                    'category': 'Watchlist',
+                    'title': title,
+                    'subtitle': f"{type_label} · {item.get('year', '')}",
+                    'action': 'navigate',
+                    'url': '/dashboard',
+                    'icon': 'fas fa-bookmark',
+                    'badge': 'Watchlist',
+                    'data': {
+                        'tmdb_id': item.get('tmdb_id'),
+                        'media_type': 'tv' if plex_type == 'show' else 'movie',
+                        'title': title,
+                        'year': item.get('year', ''),
+                    },
+                })
+                if len(out) >= 4:
+                    break
+            return out
+        except Exception:
+            return []
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures_map = {}
+        futures_map[executor.submit(_search_plex, q_orig)] = 'plex'
+        futures_map[executor.submit(_search_jellyfin, q_orig)] = 'jellyfin'
+        futures_map[executor.submit(_search_emby, q_orig)] = 'emby'
+        futures_map[executor.submit(_search_tmdb, q_orig)] = 'tmdb'
+        futures_map[executor.submit(_search_jellyseerr, q_orig)] = 'jellyseerr'
+        futures_map[executor.submit(_search_containers, q_orig)] = 'containers'
+        futures_map[executor.submit(_search_plex_watchlist, q_orig)] = 'watchlist'
+        futures_map[executor.submit(_search_tautulli, q_orig)] = 'tautulli'
+        try:
+            for future in as_completed(futures_map, timeout=4):
+                try:
+                    results.extend(future.result())
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    import re as _re
+
+    def _norm(t):
+        return _re.sub(r'[^a-z0-9]', '', (t or '').lower())
+
+    # ── Step 1: Container merge ───────────────────────────────────────────
+    # When a container name matches a quick link/service result, collapse
+    # them into one entry — service URL is kept, badge shows live status.
+    _CTR_MERGE_INTO = {'Quick Links', 'Navigate', 'Settings',
+                       'Plex', 'Jellyfin', 'Emby', 'Jellyseerr'}
+    _ctr_absorbed = set()
+    _svc_by_norm = {_norm(r['title']): r for r in results
+                    if r['category'] in _CTR_MERGE_INTO}
+    for cr in results:
+        if cr['category'] != 'Containers':
+            continue
+        match = _svc_by_norm.get(_norm(cr['title']))
+        if match:
+            match['badge'] = cr['badge']
+            match['subtitle'] = f"{cr['badge']} · {match.get('subtitle', '')}".strip(' ·')
+            _ctr_absorbed.add(id(cr))
+    results = [r for r in results if id(r) not in _ctr_absorbed]
+
+    # Ensure every result has a links list
+    for r in results:
+        r.setdefault('links', [])
+
+    # ── Step 2: Cross-service grouping ───────────────────────────────────
+    # Same content in multiple services → one result with extra service chips.
+    _GROUPABLE = {'Library',
+                  'Plex', 'Jellyfin', 'Emby',
+                  'Tautulli', 'Discover', 'Watchlist', 'Jellyseerr'}
+    _GROUP_PRIORITY = {
+        'Library': 0,
+        'Plex': 1, 'Jellyfin': 1, 'Emby': 1,
+        'Discover': 2,
+        'Watchlist': 3, 'Tautulli': 4,
+        'Jellyseerr': 4,
+    }
+    _SVC_ICONS = {
+        'Plex': 'fas fa-server', 'Jellyfin': 'fas fa-server', 'Emby': 'fas fa-server',
+        'Tautulli': 'fas fa-chart-bar', 'Discover': 'fas fa-globe',
+        'Watchlist': 'fas fa-bookmark', 'Jellyseerr': 'fas fa-concierge-bell',
+    }
+
+    _groups = {}   # norm_title → list[result]
+    _non_groupable = []
+    for r in results:
+        if r['category'] not in _GROUPABLE:
+            _non_groupable.append(r)
+            continue
+        key = _norm(r.get('title', ''))
+        if not key:
+            _non_groupable.append(r)
+            continue
+        _groups.setdefault(key, []).append(r)
+
+    _merged = []
+    for key, group in _groups.items():
+        if len(group) == 1:
+            _merged.append(group[0])
+            continue
+        group.sort(key=lambda r: (_GROUP_PRIORITY.get(r['category'], 99),))
+        primary = group[0]
+        for sec in group[1:]:
+            cat = sec['category']
+            if cat == 'Tautulli':
+                # Skip if a Watched chip was already added in Tier 1 (from watched.json)
+                if not any(l.get('label', '').startswith('Watched') for l in primary['links']):
+                    primary['links'].append({
+                        'label': 'Watched',
+                        'url': sec['url'],
+                        'icon': 'fas fa-eye',
+                        'action': sec['action'],
+                    })
+            elif cat == 'Discover' and sec.get('badge') in ('In Library', 'Pending'):
+                pass  # already represented by the Library primary
+            elif cat == 'Discover' and sec.get('badge') == 'Add' and primary['category'] != 'Library':
+                primary['links'].append({
+                    'label': 'Add',
+                    'url': sec['url'],
+                    'icon': 'fas fa-plus',
+                    'action': sec['action'],
+                    'data': sec.get('data'),
+                })
+            elif cat == 'Jellyseerr':
+                status_part = f" · {sec['badge']}" if sec.get('badge') else ''
+                primary['links'].append({
+                    'label': f"Jellyseerr{status_part}",
+                    'url': sec['url'],
+                    'icon': 'fas fa-concierge-bell',
+                    'action': sec['action'],
+                })
+            else:
+                primary['links'].append({
+                    'label': cat,
+                    'url': sec['url'],
+                    'icon': _SVC_ICONS.get(cat, 'fas fa-external-link-alt'),
+                    'action': sec['action'],
+                })
+        _merged.append(primary)
+
+    results = _merged + _non_groupable
+
+    # ── Step 3: Rank and cap ──────────────────────────────────────────────
+    _ORDER = [
+        'Library', 'Pending', 'Recent', 'Rules',
+        'Navigate', 'Quick Links', 'Settings',
+        'Containers', 'Watchlist',
+        'Discover', 'Tautulli',
+        'Plex', 'Jellyfin', 'Emby', 'Jellyseerr',
+    ]
+    by_cat = defaultdict(list)
+    for r in results:
+        by_cat[r['category']].append(r)
+
+    final = []
+    for cat in _ORDER:
+        for item in by_cat.pop(cat, [])[:4]:
+            final.append(item)
+            if len(final) >= 15:
+                break
+        if len(final) >= 15:
+            break
+
+    return jsonify({'results': final})
 
 
 @app.route('/api/plex/debug-search')
@@ -3342,21 +4371,27 @@ def scheduler_status_global():
                     "status": "Disabled - Cleanup always runs on schedule"
                 }
         
-        # Add configuration summary
+        # Add configuration summary (series + movie rules)
         config = load_config()
         rule_summary = {
-            "total_rules": len(config['rules']),
+            "total_rules": len(config.get('rules', {})),
             "cleanup_rules": 0,
-            "protected_rules": 0
+            "protected_rules": 0,
+            "movie_rules": len(config.get('movie_rules', {})),
+            "movie_cleanup_rules": 0,
         }
-        
-        for rule_name, rule in config['rules'].items():
+
+        for rule_name, rule in config.get('rules', {}).items():
             has_cleanup = rule.get('grace_watched') or rule.get('grace_unwatched') or rule.get('dormant_days')
             if has_cleanup:
                 rule_summary["cleanup_rules"] += 1
             else:
                 rule_summary["protected_rules"] += 1
-        
+
+        for rule_name, rule in config.get('movie_rules', {}).items():
+            if rule.get('grace_watched') or rule.get('grace_unwatched'):
+                rule_summary["movie_cleanup_rules"] += 1
+
         status["rule_summary"] = rule_summary
         return jsonify(status)
         
@@ -3587,6 +4622,12 @@ def episeerr_index():
     deletion_summary = pending_deletions.get_pending_deletions_summary()
     
     return render_template('episeerr_index.html', deletions=deletion_summary)
+
+@app.route('/search')
+def search_page():
+    q = request.args.get('q', '').strip()
+    return render_template('search.html', q=q)
+
 
 @app.route('/api/send-to-selection/<int:series_id>')
 def send_to_selection(series_id):
@@ -4551,6 +5592,19 @@ def initialize_episeerr():
         app.logger.warning("Sonarr not ready yet - will retry delay profile sync later")
     except Exception as e:
         app.logger.error(f"Error updating delay profile with control tags: {str(e)}")
+
+    # NEW: Create Radarr tags for movie rules
+    try:
+        from movie_processor import ensure_movie_rule_tags
+        config = load_config()
+        movie_rules = config.get('movie_rules', {})
+        if movie_rules:
+            tag_ids = ensure_movie_rule_tags(movie_rules)
+            app.logger.info(f"✓ Movie rule tags ensured in Radarr: {len(tag_ids)} tags")
+    except requests.exceptions.ConnectionError:
+        app.logger.warning("Radarr not ready — movie rule tags will be created when available")
+    except Exception as e:
+        app.logger.warning(f"Could not ensure movie rule tags: {e}")
     
     
 

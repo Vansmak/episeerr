@@ -1,6 +1,43 @@
 # Changelog
 
-## v3.7.1
+## dev
+
+### ✨ Movie Rules
+
+Episeerr now manages Radarr movies via a dedicated **Movie Rules** system, separate from series rules.
+
+- **Movie Rules page** (`/movie-rules`): create rules that associate a Radarr tag (`episeerr-<rule>`) with cleanup behaviour
+- **Grace Watched**: delete a movie N days after it was last watched (source: Plex, Jellyfin, Emby, or Tautulli)
+- **Dormant**: delete a movie N days after it was added to Radarr when no watch history is found at all
+- **Watch history cache** built once per cleanup run using a priority chain — Plex / Jellyfin / Emby (TMDB ID exact match) → Tautulli (title-normalized fallback); Radarr added-date is only used as the fallback for truly unwatched (dormant) movies
+- **Radarr webhook** (`/radarr-webhook`): connect in Radarr Settings → Connect → Webhook; when a movie is added with no episeerr tag, Episeerr auto-applies the configured default movie rule tag
+- **Default movie rule**: mark any rule as the default in the Movie Rules UI; auto-tagging on addition only fires when a default is set
+- **Library movies tab**: movies tab in the library shows all Radarr movies with their assigned rule; rule can be assigned/changed from the drawer
+- **Pending Deletions integration**: movies flagged by cleanup appear in Pending Deletions with approve/reject support; `require_approval` and `dry_run` flags work identically to series rules
+- **Rules Summary** on the admin scheduler page now shows series and movie rule counts separately
+
+### 🐛 Bug Fixes
+
+- Fixed Radarr tag validation — tags now use hyphens (`episeerr-rule-name`) instead of underscores; Radarr enforces `^[a-z0-9-]+`
+- Fixed gunicorn two-worker race condition on tag creation: tag-create now retries a GET on `UNIQUE constraint` failure and returns the existing tag
+- Fixed series rule/status filter bars remaining visible when switching to the Movies tab (Bootstrap 5 `!important` specificity — now uses `style.cssText`)
+- Fixed `/scheduler` page 500 — wrong `url_for('pending_deletions')` → `url_for('view_pending_deletions')`
+- Fixed `loadRecentActivity` null guard — referenced `#recent-activity` div that was removed in a prior refactor
+- Fixed movie rule Edit button — `tojson` in double-quoted HTML attribute terminated the attribute early; changed to single-quoted `onclick='...'`
+
+---
+
+## v3.7.2
+
+### ✨ Universal Sidebar Search
+
+A persistent search bar now lives in the sidebar, accessible from any page via the input or `Ctrl+K`.
+
+- **Tier 1 (instant):** settings index, nav index, quick links, and watch history — resolved from local data with no network calls
+- **Tier 2/3 (parallel):** fans out concurrently via `ThreadPoolExecutor` to Sonarr, Radarr, Plex, Jellyfin, Emby, TMDB, Jellyseerr, Tautulli, and Docker containers
+- Results grouped by source with poster art, media-type badges, and direct action links
+- Modal TMDB search (Ctrl+K / search icon) is now TMDB-only via `/api/discover/search`; full library/history search is handled by the new `/api/search` and `/search` page route
+- `Ctrl+K` keyboard shortcut focuses the sidebar search input from anywhere (`episeerr.py`, `templates/base.html`)
 
 ### ✨ Emby & Jellyfin Now Playing widget
 
@@ -13,6 +50,7 @@ Both Emby and Jellyfin now show a **Now Playing** widget on the dashboard alongs
 
 ### 🐛 Bug Fixes
 
+- **`process_always_have` ignores requested season for `e1+` rules** — in sequential mode, the function always started from the lowest-numbered season regardless of the season specified in the SeriesAdd webhook. Added `starting_season` parameter; sequential mode now uses the requested season and falls back to the lowest-numbered season only if the requested one isn't present. (`media_processor.py`, `webhooks.py`)
 - **SeriesAdd webhook does not respect held state from `+` modifier** — when a new series was added under a rule with an `always_have` `+` modifier (e.g. `e1+`), `process_always_have` correctly grabbed E1 and wrote `activation_seasons[1] = 'held'`, but the SeriesAdd handler continued into normal get-count processing (fetching E2, etc.) before the held gate was checked. Fixed by reloading config after `process_always_have` runs and skipping the entire episode-fetch/monitor/search block when any season is in held state — matching the activation gate that already existed in `process_episodes_for_webhook`. (`webhooks.py`)
 - Dashboard widget containers are now hidden (`display: none`) when an integration returns no data or the fetch fails, instead of leaving a blank box. (`templates/dashboard.html`)
 

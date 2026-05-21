@@ -23,6 +23,7 @@ from settings_db import add_pending_request
 REQUESTS_DIR = os.path.join(os.getcwd(), 'data', 'pending_requests')
 
 sonarr_webhooks_bp = Blueprint('sonarr_webhooks', __name__)
+radarr_webhooks_bp = Blueprint('radarr_webhooks', __name__)
 
 
 # ============================================================================
@@ -378,7 +379,7 @@ def process_sonarr_webhook():
             skip_get_count = False
             if always_have:
                 try:
-                    media_processor.process_always_have(series_id, always_have)
+                    media_processor.process_always_have(series_id, always_have, starting_season=starting_season)
                 except Exception as e:
                     current_app.logger.error(f"always_have processing failed for series {series_id}: {e}")
 
@@ -757,4 +758,110 @@ def handle_server_webhook():
 
     except Exception as e:
         current_app.logger.error(f"Failed to process Tautulli webhook: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+# ============================================================================
+# RADARR WEBHOOK
+# ============================================================================
+
+@radarr_webhooks_bp.route('/radarr-webhook', methods=['POST'])
+def process_radarr_webhook():
+    """Handle Radarr webhooks — auto-tag newly-added movies with the default movie rule."""
+    data = request.get_json(silent=True) or {}
+    event_type = data.get('eventType', '')
+    current_app.logger.info(f"Radarr webhook: {event_type}")
+
+    if event_type == 'Test':
+        return jsonify({'status': 'success', 'message': 'Radarr webhook connected to Episeerr'}), 200
+
+    if event_type == 'MovieAdded':
+        return _handle_movie_added(data)
+
+    return jsonify({'status': 'success', 'message': f'Event {event_type} acknowledged'}), 200
+
+
+def _handle_movie_added(data):
+    """
+    Auto-tag a newly-added Radarr movie with the default movie rule when:
+      - the movie has no episeerr- tag already, and
+      - a default_movie_rule is configured in config.json
+    """
+    try:
+        from movie_processor import get_radarr_settings, get_or_create_radarr_tag, _rule_to_tag_label
+
+        movie = data.get('movie', {})
+        movie_id = movie.get('id')
+        movie_title = movie.get('title', f'movie_{movie_id}')
+
+        if not movie_id:
+            return jsonify({'status': 'error', 'message': 'No movie ID in payload'}), 400
+
+        radarr_url, api_key = get_radarr_settings()
+        if not radarr_url or not api_key:
+            current_app.logger.warning("Radarr not configured — cannot process MovieAdded webhook")
+            return jsonify({'status': 'error', 'message': 'Radarr not configured'}), 500
+
+        headers = {'X-Api-Key': api_key}
+
+        # Fetch full movie object from Radarr (payload tags may be stale on add)
+        movie_resp = http.get(f"{radarr_url}/api/v3/movie/{movie_id}", headers=headers, timeout=10)
+        if not movie_resp.ok:
+            current_app.logger.error(f"Failed to fetch movie {movie_id}: {movie_resp.status_code}")
+            return jsonify({'status': 'error', 'message': 'Failed to fetch movie from Radarr'}), 500
+        movie_data = movie_resp.json()
+        current_tag_ids = movie_data.get('tags', [])
+
+        # Build tag label map
+        tags_resp = http.get(f"{radarr_url}/api/v3/tag", headers=headers, timeout=10)
+        tag_map = {t['id']: t['label'] for t in (tags_resp.json() if tags_resp.ok else [])}
+
+        # Already has an episeerr rule tag — nothing to do
+        existing_episeerr = [tag_map.get(tid, '') for tid in current_tag_ids
+                             if tag_map.get(tid, '').startswith('episeerr-')]
+        if existing_episeerr:
+            current_app.logger.info(f"🎬 '{movie_title}' already tagged: {existing_episeerr}")
+            return jsonify({'status': 'success', 'message': 'Movie already tagged'}), 200
+
+        # Look up default movie rule
+        from episeerr import load_config
+        config = load_config()
+        default_movie_rule = config.get('default_movie_rule')
+        movie_rules = config.get('movie_rules', {})
+
+        if not default_movie_rule or default_movie_rule not in movie_rules:
+            current_app.logger.info(
+                f"🎬 '{movie_title}' added with no episeerr tag — "
+                f"no default movie rule configured, skipping"
+            )
+            return jsonify({'status': 'success', 'message': 'No default movie rule configured'}), 200
+
+        # Get or create the rule tag and apply it
+        tag_id = get_or_create_radarr_tag(default_movie_rule, radarr_url, api_key)
+        if not tag_id:
+            return jsonify({'status': 'error', 'message': 'Failed to get/create rule tag'}), 500
+
+        if tag_id not in current_tag_ids:
+            movie_data['tags'] = current_tag_ids + [tag_id]
+            update_resp = http.put(
+                f"{radarr_url}/api/v3/movie/{movie_id}",
+                headers=headers,
+                json=movie_data,
+                timeout=10
+            )
+            if update_resp.ok:
+                tag_label = _rule_to_tag_label(default_movie_rule)
+                current_app.logger.info(
+                    f"🎬 Auto-tagged '{movie_title}' → '{tag_label}' (rule: {default_movie_rule})"
+                )
+            else:
+                current_app.logger.error(
+                    f"Failed to tag '{movie_title}': {update_resp.status_code} {update_resp.text[:200]}"
+                )
+                return jsonify({'status': 'error', 'message': 'Failed to update movie tags'}), 500
+
+        return jsonify({'status': 'success', 'message': f'Tagged with {default_movie_rule}'}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error in MovieAdded handler: {e}", exc_info=True)
         return jsonify({'status': 'error', 'message': str(e)}), 500

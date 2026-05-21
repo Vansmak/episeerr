@@ -214,12 +214,16 @@
                         <div class="col-md-6">
                             <div class="d-grid gap-2">
                                 <button type="button" class="btn btn-primary" onclick="forceCleanup()">
-                                    <i class="fas fa-play me-1"></i>Clean Shows Now
+                                    <i class="fas fa-play me-1"></i>Run Cleanup Now
                                 </button>
                                 <button type="button" class="btn btn-secondary" onclick="refreshStatus()">
                                     <i class="fas fa-refresh me-1"></i>Refresh Status
                                 </button>
                             </div>
+                            <small class="text-muted d-block mt-2">
+                                Runs all cleanup phases: series grace periods, dormant rules, and movie rules.
+                                Items requiring approval land in <a href="{{ url_for('view_pending_deletions') }}">Pending Deletions</a>.
+                            </small>
                         </div>
                         <div class="col-md-6">
                             <div class="d-grid gap-2">
@@ -555,30 +559,45 @@ function loadRulesSummary() {
 
 function updateRulesSummary(summary) {
     const container = document.getElementById('rules-summary');
-    
+
     let html = `
-        <div class="row text-center">
-            <div class="col-4">
-                <h6 class="text-primary">${summary.total_rules}</h6>
-                <small class="text-muted">Total</small>
-            </div>
-            <div class="col-4">
-                <h6 class="text-warning">${summary.cleanup_rules}</h6>
-                <small class="text-muted">Cleanup</small>
-            </div>
-            <div class="col-4">
-                <h6 class="text-success">${summary.protected_rules}</h6>
-                <small class="text-muted">Protected</small>
+        <div class="mb-2">
+            <small class="text-uppercase text-muted" style="font-size:0.7rem;letter-spacing:.05em;">
+                <i class="fas fa-tv me-1"></i>Series Rules
+            </small>
+            <div class="row text-center mt-1">
+                <div class="col-4">
+                    <h6 class="mb-0 text-primary">${summary.total_rules}</h6>
+                    <small class="text-muted">Total</small>
+                </div>
+                <div class="col-4">
+                    <h6 class="mb-0 text-warning">${summary.cleanup_rules}</h6>
+                    <small class="text-muted">Cleanup</small>
+                </div>
+                <div class="col-4">
+                    <h6 class="mb-0 text-success">${summary.protected_rules}</h6>
+                    <small class="text-muted">Protected</small>
+                </div>
             </div>
         </div>
         <hr class="my-2">
-        <div class="text-center">
-            <small class="text-muted">
-                Only rules with grace/dormant settings participate in cleanup
+        <div>
+            <small class="text-uppercase text-muted" style="font-size:0.7rem;letter-spacing:.05em;">
+                <i class="fas fa-film me-1"></i>Movie Rules
             </small>
+            <div class="row text-center mt-1">
+                <div class="col-6">
+                    <h6 class="mb-0 text-primary">${summary.movie_rules || 0}</h6>
+                    <small class="text-muted">Total</small>
+                </div>
+                <div class="col-6">
+                    <h6 class="mb-0 text-warning">${summary.movie_cleanup_rules || 0}</h6>
+                    <small class="text-muted">With Grace</small>
+                </div>
+            </div>
         </div>
     `;
-    
+
     container.innerHTML = html;
 }
 
@@ -625,10 +644,11 @@ function refreshStatus() {
 }
 
 function loadRecentActivity() {
+    const activityDiv = document.getElementById('recent-activity');
+    if (!activityDiv) return;
     fetch('/api/recent-cleanup-activity')
         .then(response => response.json())
         .then(data => {
-            const activityDiv = document.getElementById('recent-activity');
             if (data.recentCleanups && data.recentCleanups.length > 0) {
                 let html = '<ul class="list-unstyled">';
                 data.recentCleanups.slice(0, 5).forEach(activity => {
@@ -641,9 +661,8 @@ function loadRecentActivity() {
                 activityDiv.innerHTML = '<small class="text-muted">No recent cleanup activity</small>';
             }
         })
-        .catch(error => {
-            document.getElementById('recent-activity').innerHTML = 
-                '<small class="text-muted">Unable to load recent activity</small>';
+        .catch(() => {
+            activityDiv.innerHTML = '<small class="text-muted">Unable to load recent activity</small>';
         });
 }
 

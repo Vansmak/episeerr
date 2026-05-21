@@ -728,7 +728,7 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
                 episode_number = episode_details['episodeNumber']
                 
                 # Send notification using the notifications module
-                message_id = send_notification(
+                send_notification(
                     "episode_search_pending",
                     series=series_title,
                     season=season_number,
@@ -736,10 +736,6 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
                     air_date=episode_details.get('airDateUtc'),
                     series_id=series_id
                 )
-                
-                if message_id:
-                    store_pending_search(series_id, episode_ids, message_id)
-                    logger.info(f"Stored pending search notification: {message_id}")
         except Exception as e:
             logger.debug(f"Could not send pending notification: {str(e)}")
             import traceback
@@ -1042,7 +1038,7 @@ def parse_date_fixed(date_str, context):
         
         # Method 3: Strip milliseconds and try again
         if '.' in date_str:
-            clean_date = re.sub(r'\\.\\d+', '', date_str)
+            clean_date = re.sub(r'\.\d+', '', date_str)
             if clean_date.endswith('Z'):
                 clean_date = clean_date.replace('Z', '+00:00')
             try:
@@ -1864,7 +1860,7 @@ def is_protected_by_expression(season_num, episode_num, expression, total_season
     return False
 
 
-def process_always_have(series_id, expression):
+def process_always_have(series_id, expression, starting_season=None):
     """
     Monitor any episodes matching the always_have expression and trigger a search.
     Only ever adds monitoring — never unmonitors or deletes anything.
@@ -1872,7 +1868,8 @@ def process_always_have(series_id, expression):
     Handles +/- modifier suffixes:
       +  activation modifier — sets per-season held state; skips if series already watched
       -  removable modifier  — no special grab logic, only affects anchor protection
-    Sequential mode (eN without s prefix): grabs only the first season's EN.
+    Sequential mode (eN without s prefix): grabs only the requested starting season's EN,
+    falling back to the lowest-numbered season if starting_season is not in the series.
     """
     if not expression or not expression.strip():
         return
@@ -1904,16 +1901,16 @@ def process_always_have(series_id, expression):
         grabbed_seasons = set()
 
         if is_sequential and activation_ep is not None:
-            # Sequential mode: grab only the first (lowest-numbered) season's activation ep
+            # Sequential mode: grab the requested season's activation ep (fallback to lowest)
             season_nums = sorted(set(
                 ep['seasonNumber'] for ep in all_episodes
                 if ep['seasonNumber'] > 0
             ))
             if season_nums:
-                first_season = season_nums[0]
+                target_season = starting_season if starting_season and starting_season in season_nums else season_nums[0]
                 for ep in all_episodes:
-                    if ep['seasonNumber'] == first_season and ep['episodeNumber'] == activation_ep:
-                        grabbed_seasons.add(first_season)
+                    if ep['seasonNumber'] == target_season and ep['episodeNumber'] == activation_ep:
+                        grabbed_seasons.add(target_season)
                         if not ep.get('monitored', False):
                             to_monitor.append(ep['id'])
                         break
@@ -2259,24 +2256,25 @@ def run_grace_watched_cleanup():
     """
     try:
         cleanup_logger.info("🟡 GRACE WATCHED CLEANUP: Checking inactive series")
-        
+
         config = load_config()
-        
+        global_settings = load_global_settings()
+
         # MASTER SAFETY SWITCH
-        global_dry_run_config = config.get('dry_run_mode', False)
+        global_dry_run_config = global_settings.get('dry_run_mode', False)
         global_dry_run_env = os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true'
         global_dry_run = global_dry_run_config or global_dry_run_env
-        
+
         if global_dry_run:
             cleanup_logger.info("🛡️ Global dry run mode ENABLED - all deletions will be queued for approval")
-        
+
         total_deleted = 0
         headers = {'X-Api-Key': SONARR_API_KEY}
         response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
         series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
-        
+
         for rule_name, rule in config['rules'].items():
             grace_watched_days = rule.get('grace_watched')
             if not grace_watched_days:
@@ -2409,24 +2407,25 @@ def run_grace_unwatched_cleanup():
     """
     try:
         cleanup_logger.info("⏰ GRACE UNWATCHED CLEANUP: Checking inactive series")
-        
+
         config = load_config()
-        
+        global_settings = load_global_settings()
+
         # MASTER SAFETY SWITCH
-        global_dry_run_config = config.get('dry_run_mode', False)
+        global_dry_run_config = global_settings.get('dry_run_mode', False)
         global_dry_run_env = os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true'
         global_dry_run = global_dry_run_config or global_dry_run_env
-        
+
         if global_dry_run:
             cleanup_logger.info("🛡️ Global dry run mode ENABLED - all deletions will be queued for approval")
-        
+
         total_deleted = 0
         headers = {'X-Api-Key': SONARR_API_KEY}
         response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
         all_series = response.json() if response.ok else []
         series_lookup = {s['id']: s for s in all_series}
         current_time = int(time.time())
-        
+
         for rule_name, rule in config['rules'].items():
             grace_unwatched_days = rule.get('grace_unwatched')
             if not grace_unwatched_days:
@@ -3049,6 +3048,17 @@ def run_unified_cleanup():
         total_processed += unwatched_count
         cleanup_logger.info(f"⏰ Grace unwatched result: {unwatched_count} operations")
         
+        # PRIORITY 4: MOVIE CLEANUP
+        cleanup_logger.info("🎬 Phase 4: Movie cleanup (Radarr movie rules)")
+        try:
+            from movie_processor import run_movie_cleanup
+            movie_count = run_movie_cleanup()
+        except Exception as e:
+            cleanup_logger.error(f"❌ Error in movie cleanup: {str(e)}")
+            movie_count = 0
+        total_processed += movie_count
+        cleanup_logger.info(f"🎬 Movie cleanup result: {movie_count} operations")
+
         # Final status
         final_disk = get_sonarr_disk_space()
         cleanup_logger.info("=" * 80)
@@ -3057,6 +3067,7 @@ def run_unified_cleanup():
         cleanup_logger.info(f"   🔴 Dormant: {dormant_count}")
         cleanup_logger.info(f"   🟡 Grace watched: {watched_count}")
         cleanup_logger.info(f"   ⏰ Grace unwatched: {unwatched_count}")
+        cleanup_logger.info(f"   🎬 Movie: {movie_count}")
         
         if final_disk:
             cleanup_logger.info(f"💾 Final free space: {final_disk['free_space_gb']:.1f}GB")

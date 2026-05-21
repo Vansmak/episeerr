@@ -1,6 +1,10 @@
 """
-Pending Deletions Management System - v2.9.0
-Handles queuing, approval, and rejection of episode deletions
+Pending Deletions Management System - v3.0.0
+Handles queuing, approval, and rejection of episode and movie deletions.
+
+Changes in v3.0.0:
+- Added movie pending deletions (queue_movie_deletion, approve_movie_deletions, etc.)
+- File format migrated from bare list to {"episodes": [...], "movies": [...]}
 
 Changes in v2.9.0:
 - Added queue_deletion() wrapper for simpler API
@@ -18,35 +22,51 @@ logger = logging.getLogger(__name__)
 # File paths
 PENDING_DELETIONS_FILE = os.path.join(os.getcwd(), 'data', 'pending_deletions.json')
 REJECTION_CACHE_FILE = os.path.join(os.getcwd(), 'data', 'deletion_rejections.json')
+MOVIE_REJECTION_CACHE_FILE = os.path.join(os.getcwd(), 'data', 'movie_deletion_rejections.json')
 os.makedirs(os.path.dirname(PENDING_DELETIONS_FILE), exist_ok=True)
 
 # Thread safety
 pending_lock = Lock()
 rejection_lock = Lock()
+movie_rejection_lock = Lock()
 
 # Rejection cache duration (days)
 REJECTION_CACHE_DAYS = 30
 
 
-def load_pending_deletions():
-    """Load pending deletions from file"""
+def _load_raw():
+    """Load raw file content, migrate list→dict format if needed."""
     try:
         if os.path.exists(PENDING_DELETIONS_FILE):
             with open(PENDING_DELETIONS_FILE, 'r') as f:
-                return json.load(f)
-        return []
+                raw = json.load(f)
+            # Migrate old bare-list format
+            if isinstance(raw, list):
+                return {"episodes": raw, "movies": []}
+            return raw
     except Exception as e:
         logger.error(f"Error loading pending deletions: {e}")
-        return []
+    return {"episodes": [], "movies": []}
+
+
+def _save_raw(data):
+    try:
+        with open(PENDING_DELETIONS_FILE, 'w') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving pending deletions: {e}")
+
+
+def load_pending_deletions():
+    """Load episode pending deletions list (backwards-compatible)."""
+    return _load_raw().get("episodes", [])
 
 
 def save_pending_deletions(pending_list):
-    """Save pending deletions to file"""
-    try:
-        with open(PENDING_DELETIONS_FILE, 'w') as f:
-            json.dump(pending_list, f, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving pending deletions: {e}")
+    """Save episode pending deletions list (preserves movies section)."""
+    data = _load_raw()
+    data["episodes"] = pending_list
+    _save_raw(data)
 
 
 def load_rejection_cache():
@@ -378,3 +398,155 @@ def get_episode_ids_for_season(series_id, season_num):
             return []
         
         return [ep['episode_id'] for ep in series['seasons'][season_key]['episodes']]
+
+
+# ============================================================================
+# MOVIE PENDING DELETIONS
+# ============================================================================
+
+def _load_movie_rejection_cache():
+    try:
+        if os.path.exists(MOVIE_REJECTION_CACHE_FILE):
+            with open(MOVIE_REJECTION_CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+            today = datetime.now().strftime('%Y-%m-%d')
+            return {mid: exp for mid, exp in cache.items() if exp >= today}
+        return {}
+    except Exception as e:
+        logger.error(f"Error loading movie rejection cache: {e}")
+        return {}
+
+
+def _save_movie_rejection_cache(cache):
+    try:
+        with open(MOVIE_REJECTION_CACHE_FILE, 'w') as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving movie rejection cache: {e}")
+
+
+def is_movie_rejected(movie_id):
+    with movie_rejection_lock:
+        cache = _load_movie_rejection_cache()
+        return str(movie_id) in cache
+
+
+def queue_movie_deletion(movie_id, movie_title, movie_file_id, file_size,
+                          rule_name, reason, date_source, date_value, delete_option='file_only'):
+    """Add a movie to the pending deletions queue."""
+    if is_movie_rejected(movie_id):
+        logger.debug(f"Skipping movie {movie_id} — in rejection cache")
+        return
+
+    with pending_lock:
+        data = _load_raw()
+        movies = data.get("movies", [])
+
+        if any(m['movie_id'] == movie_id for m in movies):
+            logger.debug(f"Movie {movie_id} already in pending deletions")
+            return
+
+        movies.append({
+            'movie_id': movie_id,
+            'movie_title': movie_title,
+            'movie_file_id': movie_file_id,
+            'file_size_mb': round(file_size / (1024 * 1024), 2) if file_size else 0,
+            'rule_name': rule_name,
+            'reason': reason,
+            'date_source': date_source,
+            'date_value': date_value,
+            'delete_option': delete_option,
+            'queued_at': datetime.now().isoformat(),
+        })
+
+        data["movies"] = movies
+        _save_raw(data)
+        logger.info(f"Queued movie for deletion: '{movie_title}' — {reason}")
+
+
+def load_pending_movies():
+    """Return the movies pending-deletion list."""
+    return _load_raw().get("movies", [])
+
+
+def get_pending_movies_summary():
+    movies = load_pending_movies()
+    total_size = sum(m.get('file_size_mb', 0) for m in movies)
+    return {
+        'total_movies': len(movies),
+        'total_size_mb': total_size,
+        'total_size_gb': round(total_size / 1024, 2),
+        'movies': movies,
+    }
+
+
+def approve_movie_deletions(movie_ids):
+    """Execute approved movie deletions via Radarr."""
+    from movie_processor import get_radarr_settings
+    from episeerr_utils import http, normalize_url
+
+    radarr_url, api_key = get_radarr_settings()
+    if not radarr_url or not api_key:
+        return {'deleted_count': 0, 'errors': ['Radarr not configured']}
+
+    headers = {'X-Api-Key': api_key}
+    deleted_count = 0
+    errors = []
+
+    with pending_lock:
+        data = _load_raw()
+        movies = data.get("movies", [])
+
+        to_delete = [m for m in movies if m['movie_id'] in movie_ids]
+        remaining = [m for m in movies if m['movie_id'] not in movie_ids]
+
+        for movie in to_delete:
+            try:
+                delete_option = movie.get('delete_option', 'file_only')
+                if delete_option == 'remove_from_radarr':
+                    url = f"{radarr_url}/api/v3/movie/{movie['movie_id']}?deleteFiles=true"
+                    resp = http.delete(url, headers=headers, timeout=15)
+                else:
+                    url = f"{radarr_url}/api/v3/moviefile/{movie['movie_file_id']}"
+                    resp = http.delete(url, headers=headers, timeout=15)
+
+                if resp.ok:
+                    deleted_count += 1
+                    logger.info(f"✅ Deleted movie '{movie['movie_title']}' ({delete_option})")
+                else:
+                    errors.append(f"Failed to delete '{movie['movie_title']}': {resp.status_code}")
+                    logger.error(f"Failed to delete movie {movie['movie_id']}: {resp.text[:200]}")
+            except Exception as e:
+                errors.append(f"Error deleting '{movie['movie_title']}': {str(e)}")
+                logger.error(f"Error deleting movie {movie['movie_id']}: {e}")
+
+        data["movies"] = remaining
+        _save_raw(data)
+
+    return {'deleted_count': deleted_count, 'errors': errors}
+
+
+def reject_movie_deletions(movie_ids):
+    """Reject movie deletions and cache them."""
+    with movie_rejection_lock:
+        cache = _load_movie_rejection_cache()
+        expiry = (datetime.now() + timedelta(days=REJECTION_CACHE_DAYS)).strftime('%Y-%m-%d')
+        for mid in movie_ids:
+            cache[str(mid)] = expiry
+        _save_movie_rejection_cache(cache)
+
+    with pending_lock:
+        data = _load_raw()
+        data["movies"] = [m for m in data.get("movies", []) if m['movie_id'] not in movie_ids]
+        _save_raw(data)
+
+    logger.info(f"Rejected {len(movie_ids)} movie(s) from pending deletions")
+    return len(movie_ids)
+
+
+def clear_all_pending_movies():
+    with pending_lock:
+        data = _load_raw()
+        data["movies"] = []
+        _save_raw(data)
+        logger.info("Cleared all pending movie deletions")
