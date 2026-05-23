@@ -8,9 +8,14 @@
     <!-- Header -->
     <div class="mb-4 d-flex align-items-center justify-content-between flex-wrap gap-2">
         <h2 class="mb-0"><i class="fas fa-film me-2"></i>Movie Rules</h2>
-        <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createRuleModal">
-            <i class="fas fa-plus-circle me-1"></i>Create Movie Rule
-        </button>
+        <div class="d-flex gap-2">
+            <button class="btn btn-outline-warning btn-sm" onclick="cleanOrphanedTags()" title="Remove episeerr- tags from movies with no matching rule">
+                <i class="fas fa-broom me-1"></i>Clean Orphaned Tags
+            </button>
+            <button class="btn btn-primary btn-sm" data-bs-toggle="modal" data-bs-target="#createRuleModal">
+                <i class="fas fa-plus-circle me-1"></i>Create Movie Rule
+            </button>
+        </div>
     </div>
 
     <!-- Radarr connection status -->
@@ -395,6 +400,18 @@
 
 {% block extra_js %}
 <script>
+// ── Orphaned tag cleanup ────────────────────────────────────────────────────
+function cleanOrphanedTags() {
+    if (!confirm('Remove episeerr- tags from all Radarr movies that have no matching rule?')) return;
+    fetch('/api/movie-rules/clean-orphaned-tags', {method: 'POST'})
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) alert(`Done — removed orphaned tags from ${d.cleaned} movie(s).`);
+            else alert('Error: ' + d.error);
+        })
+        .catch(() => alert('Request failed'));
+}
+
 // ── Edit modal ──────────────────────────────────────────────────────────────
 function openEditModal(ruleName, rule) {
     const form = document.getElementById('editRuleForm');
