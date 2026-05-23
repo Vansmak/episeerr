@@ -1,4 +1,4 @@
-__version__ = "3.7.2"
+__version__ = "3.7.5"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -108,6 +108,10 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'seerr_integration.seerr_webhook',
     'plex_integration.webhook',
     'tautulli_integration.tautulli_webhook',
+    'arvio_integration.arvio_webhook',
+    # Arvio settings sync — TV device can't hold a browser session
+    'arvio_integration.get_settings',
+    'arvio_integration.put_settings',
 }
 
 
@@ -345,14 +349,12 @@ def setup():
             }
         ]
         
-        # If the integration actually defines custom fields, use them instead
+        # If the integration defines custom fields, use them (empty list = intentionally no fields)
         try:
             custom = integration.get_setup_fields()
-            if isinstance(custom, list) and len(custom) > 0:
+            if isinstance(custom, list):
                 setup_fields = custom
-                print(f"Using CUSTOM fields for {integration.service_name} ({len(custom)} fields)")
-            else:
-                print(f"Using FALLBACK fields for {integration.service_name} (2 fields)")
+            # else: None or exception → keep fallback
         except Exception as e:
             print(f"Error reading custom fields for {integration.service_name}: {e} — using fallback")
         
@@ -532,6 +534,10 @@ def save_service_config(service):
                 from integrations import get_integration as _get_int
                 _int = _get_int(service)
                 normalized_data = integration_data.copy()
+                if _int and hasattr(_int, 'preprocess_save_data'):
+                    _int.preprocess_save_data(normalized_data)
+                    url = normalized_data.get('url', url)
+                    api_key = normalized_data.get('api_key', api_key)
                 save_service(
                     service_type=service,
                     name='default',
@@ -1582,13 +1588,7 @@ def edit_movie_rule(rule_name):
                 config['default_movie_rule'] = new_name
             config['movie_rules'] = movie_rules
             save_config(config)
-            try:
-                from movie_processor import get_or_create_radarr_tag, get_radarr_settings
-                radarr_url, api_key = get_radarr_settings()
-                if radarr_url and api_key:
-                    get_or_create_radarr_tag(new_name, radarr_url, api_key)
-            except Exception:
-                pass
+            _swap_movie_rule_tag_on_all(rule_name, new_rule=new_name)
         else:
             save_config(config)
 
@@ -1601,13 +1601,55 @@ def edit_movie_rule(rule_name):
                            radarr_ok=True, radarr_msg='')
 
 
+def _swap_movie_rule_tag_on_all(old_rule, new_rule=None):
+    """
+    Remove the episeerr-<old_rule> tag from every Radarr movie that has it.
+    If new_rule is given, add episeerr-<new_rule> in its place (rename path).
+    """
+    try:
+        from movie_processor import get_radarr_settings, get_or_create_radarr_tag, _rule_to_tag_label
+        radarr_url, api_key = get_radarr_settings()
+        if not radarr_url or not api_key:
+            return
+        headers = {'X-Api-Key': api_key}
+        old_label = _rule_to_tag_label(old_rule)
+
+        tags_resp = http.get(f"{radarr_url}/api/v3/tag", headers=headers, timeout=10)
+        all_tags = tags_resp.json() if tags_resp.ok else []
+        tag_id_to_label = {t['id']: t['label'] for t in all_tags}
+        old_tag_id = next((t['id'] for t in all_tags if t['label'] == old_label), None)
+        if not old_tag_id:
+            return
+
+        new_tag_id = None
+        if new_rule:
+            new_tag_id = get_or_create_radarr_tag(new_rule, radarr_url, api_key)
+
+        movies_resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=30)
+        if not movies_resp.ok:
+            return
+        for movie in movies_resp.json():
+            if old_tag_id not in movie.get('tags', []):
+                continue
+            new_tags = [tid for tid in movie['tags'] if not tag_id_to_label.get(tid, '').startswith('episeerr-')]
+            if new_tag_id:
+                new_tags.append(new_tag_id)
+            movie['tags'] = new_tags
+            http.put(f"{radarr_url}/api/v3/movie/{movie['id']}", headers=headers, json=movie, timeout=10)
+    except Exception as e:
+        app.logger.error(f"Error swapping movie rule tags ({old_rule} → {new_rule}): {e}")
+
+
 @app.route('/movie-rules/<rule_name>/delete', methods=['POST'])
 def delete_movie_rule(rule_name):
-    """Delete a movie rule."""
+    """Delete a movie rule and remove its tag from all Radarr movies."""
     config = load_config()
     movie_rules = config.get('movie_rules', {})
     movie_rules.pop(rule_name, None)
+    if config.get('default_movie_rule') == rule_name:
+        config.pop('default_movie_rule', None)
     save_config(config)
+    _swap_movie_rule_tag_on_all(rule_name, new_rule=None)
     return redirect(url_for('movie_rules_page'))
 
 
@@ -1621,6 +1663,47 @@ def ensure_movie_tags():
         tag_ids = ensure_movie_rule_tags(movie_rules)
         return jsonify({'success': True, 'created': len(tag_ids), 'tags': tag_ids})
     except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/movie-rules/clean-orphaned-tags', methods=['POST'])
+def clean_orphaned_movie_tags():
+    """Remove episeerr- tags from Radarr movies where the tag has no matching movie rule."""
+    try:
+        from movie_processor import get_radarr_settings, _rule_to_tag_label
+        config = load_config()
+        movie_rules = config.get('movie_rules', {})
+        valid_labels = {_rule_to_tag_label(rn) for rn in movie_rules}
+
+        radarr_url, api_key = get_radarr_settings()
+        if not radarr_url or not api_key:
+            return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+
+        headers = {'X-Api-Key': api_key}
+        tags_resp = http.get(f"{radarr_url}/api/v3/tag", headers=headers, timeout=10)
+        all_tags = tags_resp.json() if tags_resp.ok else []
+        tag_id_to_label = {t['id']: t['label'] for t in all_tags}
+
+        movies_resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=30)
+        if not movies_resp.ok:
+            return jsonify({'success': False, 'error': 'Failed to fetch movies from Radarr'}), 500
+
+        cleaned = 0
+        for movie in movies_resp.json():
+            current_tags = movie.get('tags', [])
+            orphaned = [tid for tid in current_tags
+                        if tag_id_to_label.get(tid, '').startswith('episeerr-')
+                        and tag_id_to_label.get(tid) not in valid_labels]
+            if not orphaned:
+                continue
+            movie['tags'] = [tid for tid in current_tags if tid not in orphaned]
+            http.put(f"{radarr_url}/api/v3/movie/{movie['id']}", headers=headers, json=movie, timeout=10)
+            cleaned += 1
+            app.logger.info(f"Removed orphaned tag(s) from '{movie.get('title')}'")
+
+        return jsonify({'success': True, 'cleaned': cleaned})
+    except Exception as e:
+        app.logger.error(f"Error cleaning orphaned movie tags: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -2252,9 +2335,9 @@ def api_assign_movie_rule():
         tag_label_to_id = {t['label']: t['id'] for t in all_tags}
         tag_id_to_label = {t['id']: t['label'] for t in all_tags}
 
-        # Strip existing episeerr_ tags, keep all others
+        # Strip existing episeerr- tags, keep all others
         new_tags = [tid for tid in movie.get('tags', [])
-                    if not tag_id_to_label.get(tid, '').startswith('episeerr_')]
+                    if not tag_id_to_label.get(tid, '').startswith('episeerr-')]
 
         if rule_name:
             from movie_processor import _rule_to_tag_label, get_or_create_radarr_tag
@@ -2648,6 +2731,8 @@ _SEARCH_SETTINGS_INDEX = [
     {'keywords': {'logs', 'log', 'history', 'activity', 'debug', 'troubleshoot', 'troubleshooting'}, 'title': 'View Logs', 'subtitle': 'App & cleanup logs (episeerr.log)', 'url': '/logs', 'icon': 'fas fa-terminal'},
     {'keywords': {'cleanup logs', 'cleanuplogs'}, 'title': 'Cleanup Logs', 'subtitle': 'Scheduled cleanup history', 'url': '/cleanup-logs', 'icon': 'fas fa-file-alt'},
     {'keywords': {'auth', 'authentication', 'login', 'password', 'security'}, 'title': 'Authentication', 'subtitle': 'Security settings', 'url': '/scheduler', 'icon': 'fas fa-lock'},
+    {'keywords': {'arvio', 'android tv', 'watchlist api', 'lan'}, 'title': 'Arvio', 'subtitle': 'Arvio Android TV integration', 'url': '/setup#arvio-config', 'icon': 'fas fa-mobile-alt'},
+    {'keywords': {'trakt', 'trakt.tv', 'watchlist'}, 'title': 'Trakt', 'subtitle': 'Trakt watchlist sync', 'url': '/setup#trakt-config', 'icon': 'fas fa-star'},
 ]
 
 _SEARCH_NAV_INDEX = [

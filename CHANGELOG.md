@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Custom Branch Created (2026-05-22)
+
+### 🔧 Personal Custom Build
+
+This branch (`custom`) is a permanent personal fork of `episeerr_dev`. It is never promoted to production. Features here are personal/private integrations on top of everything in the dev branch.
+
+**Additions over dev:**
+
+- **Arvio integration** (`integrations/arvio.py`) — Android TV app integration for direct LAN watchlist sync. Exposes `/api/integration/arvio/watchlist` and `/api/integration/arvio/sync`. Dashboard shows an Arvio Watchlist card (hidden until configured). Auth-exempt endpoints allow the TV device to sync settings without a browser session.
+- **Progress webhooks via Arvio** — Arvio pushes playback progress events which Episeerr uses to track watch state without requiring Plex/Tautulli/Jellyfin.
+- **Settings backup via Episeerr** — Arvio reads and writes Episeerr settings over the LAN API (`GET/PUT /api/integration/arvio/settings`), keeping the TV app config in sync.
+
+**Retained from dev:** Trakt watchlist sync, movie rules, expression modifiers (e1+), universal search, JF/Emby favorites, all bug fixes and community features.
+
+Released as Docker tag `vansmak/episeerr:custom` via `~/projects/release_custom.sh`.
+
+---
+
 ## v3.7.5
 
 ### ✨ Movie Rules
