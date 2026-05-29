@@ -54,20 +54,22 @@ JELLYFIN_URL, JELLYFIN_API_KEY = get_jellyfin_config()
 TAUTULLI_URL, TAUTULLI_API_KEY = get_tautulli_config()
 
 
-def get_series_banner(series_id):
-    """Get banner URL from Sonarr for series"""
+def get_series_banners_bulk():
+    """Fetch all series from Sonarr in one call and return {series_id: banner_url}."""
     try:
         headers = {'X-Api-Key': SONARR_API_KEY}
-        response = requests.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
-
+        response = requests.get(f"{SONARR_URL}/api/v3/series", headers=headers, timeout=10)
         if response.ok:
-            series_data = response.json()
-            for image in series_data.get('images', []):
-                if image.get('coverType') == 'banner':
-                    return image.get('remoteUrl')
-        return None
-    except:
-        return None
+            banner_map = {}
+            for series in response.json():
+                for image in series.get('images', []):
+                    if image.get('coverType') == 'banner':
+                        banner_map[series['id']] = image.get('remoteUrl')
+                        break
+            return banner_map
+    except Exception:
+        pass
+    return {}
 
 
 def _enrich_watched_from_jellyfin(watched_episodes: set, recent_downloads: list) -> None:
@@ -262,37 +264,40 @@ def calendar_data():
         _enrich_watched_from_jellyfin(watched_episodes, recent_downloads)
 
         # ──────────────────────────────────────────────────────
-        # 3. LOAD EPISEERR CONFIG FOR RULES
+        # 3. LOAD EPISEERR CONFIG FOR RULES + BANNER CACHE
         # ──────────────────────────────────────────────────────
         from episeerr import load_config
         config = load_config()
-        
+
         series_rules = {}
         for rule_name, rule_data in config.get('rules', {}).items():
             for series_id in rule_data.get('series', {}).keys():
                 series_rules[int(series_id)] = rule_name
-        
+
+        # One bulk Sonarr call for all banners instead of one per episode
+        banner_map = get_series_banners_bulk()
+
         # ──────────────────────────────────────────────────────
         # 4. PROCESS UPCOMING EPISODES
         # ──────────────────────────────────────────────────────
         upcoming_events = []
         now = datetime.now()
         downloaded_ids = {(dl['series_id'], dl['season'], dl['episode']) for dl in recent_downloads}
-        
+
         for ep in upcoming_episodes:
             series_id = ep.get('seriesId')
             season = ep.get('seasonNumber')
             episode = ep.get('episodeNumber')
-            
+
             # Skip if already in downloaded list
             if (series_id, season, episode) in downloaded_ids:
                 continue
-            
+
             has_rule = series_id in series_rules
             rule_name = series_rules.get(series_id)
             has_file = ep.get('hasFile', False)
             monitored = ep.get('monitored', False)
-            
+
             air_date_str = ep.get('airDateUtc', '')
             has_aired = False
             if air_date_str:
@@ -301,7 +306,7 @@ def calendar_data():
                     has_aired = air_date < now
                 except:
                     has_aired = False
-            
+
             # Determine status
             if has_file:
                 status = 'downloaded'
@@ -318,7 +323,7 @@ def calendar_data():
             else:
                 status = 'no_rule'
                 color = 'yellow'
-            
+
             upcoming_events.append({
                 'series_id': series_id,
                 'series_title': ep.get('series', {}).get('title', 'Unknown'),
@@ -330,22 +335,22 @@ def calendar_data():
                 'rule_name': rule_name,
                 'status': status,
                 'color': color,
-                'banner': get_series_banner(series_id)  # ADD THIS LINE
+                'banner': banner_map.get(series_id)
             })
-        
+
         # ──────────────────────────────────────────────────────
         # 5. FORMAT RECENT DOWNLOADS (use grab timestamp)
         # ──────────────────────────────────────────────────────
         downloaded_events = []
-        
+
         for dl in recent_downloads:
             # Skip if already watched
             dl_key = (dl['series_id'], dl['season'], dl['episode'])
             if dl_key in watched_episodes:
                 continue
-            
+
             has_rule = dl['series_id'] in series_rules
-            
+
             downloaded_events.append({
                 'series_id': dl['series_id'],
                 'series_title': dl['series_title'],
@@ -357,7 +362,7 @@ def calendar_data():
                 'rule_name': series_rules.get(dl['series_id']),
                 'status': 'ready',
                 'color': 'green',
-                'banner': get_series_banner(dl['series_id'])  # ADD THIS LINE
+                'banner': banner_map.get(dl['series_id'])
             })
         # Sort by grab time (newest first)
         downloaded_events.sort(key=lambda x: x['grabbed_date'], reverse=True)
@@ -386,11 +391,29 @@ def dashboard_integrations():
     
     integrations_data = []
     for integration in get_all_integrations():
+        widget = integration.get_dashboard_widget() or {}
+        # Only suppress this widget for services explicitly disabled in the DB
+        # (a row exists with enabled=0). Services with no DB row at all
+        # (env-var-only: Radarr, JF, Spotify, SABnzbd, Sonos …) must be
+        # left completely unaffected — their widget's own enabled value stands.
+        try:
+            import sqlite3 as _sql
+            from settings_db import DB_PATH as _DB
+            _row = _sql.connect(_DB).execute(
+                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
+                (integration.service_name,)
+            ).fetchone()
+            if _row is not None and not bool(_row[0]):
+                widget['enabled'] = False
+            # _row is None  → no DB row → leave widget['enabled'] as-is
+            # _row[0] == 1  → explicitly enabled → leave widget['enabled'] as-is
+        except Exception:
+            pass  # DB error → leave widget unchanged, fail safe
         integrations_data.append({
             'service_name': integration.service_name,
             'display_name': integration.display_name,
             'icon': integration.icon,
-            'widget': integration.get_dashboard_widget()
+            'widget': widget
         })
     
     return jsonify({
@@ -445,25 +468,29 @@ def dashboard_stats():
         
         
         
-        # Auto-collect stats from all integrations (plugins)
+        # Auto-collect stats from all integrations in parallel
         from settings_db import get_service
-        
-        for integration in get_all_integrations():
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        integrations = get_all_integrations()
+
+        def _fetch_integration_stats(integration):
             try:
-                # Get config from database
                 config = get_service(integration.service_name, 'default')
-                
                 if config:
-                    service_stats = integration.get_dashboard_stats(
-                        config.get('url', ''),
-                        config.get('api_key', '')
+                    return integration.service_name, integration.get_dashboard_stats(
+                        config.get('url', ''), config.get('api_key', '')
                     )
-                    stats[integration.service_name] = service_stats
-                else:
-                    stats[integration.service_name] = {'configured': False}
+                return integration.service_name, {'configured': False}
             except Exception as e:
                 logger.error(f"Error fetching {integration.display_name} stats: {e}")
-                stats[integration.service_name] = {'configured': True, 'error': True}
+                return integration.service_name, {'configured': True, 'error': True}
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = {executor.submit(_fetch_integration_stats, i): i for i in integrations}
+            for future in as_completed(futures):
+                name, result = future.result()
+                stats[name] = result
 
         
         # Episeerr stats
