@@ -108,17 +108,17 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'seerr_integration.seerr_webhook',
     'plex_integration.webhook',
     'tautulli_integration.tautulli_webhook',
-    'arvio_integration.arvio_webhook',
-    # Arvio — TV device can't hold a browser session
-    'arvio_integration.get_status',
-    'arvio_integration.get_settings',
-    'arvio_integration.put_settings',
-    'arvio_integration.get_watchlist',   # legacy name (kept for safety)
-    'arvio_integration.watchlist',       # actual endpoint name (GET + POST)
-    'arvio_integration.trigger_sync',
-    # Arvio settings backup/restore — new device only needs Episeerr URL to restore
-    'arvio_integration.backup_settings',
-    'arvio_integration.get_backup',
+    'xadarr_integration.xadarr_webhook',
+    # Xadarr — TV device can't hold a browser session
+    'xadarr_integration.get_status',
+    'xadarr_integration.get_settings',
+    'xadarr_integration.put_settings',
+    'xadarr_integration.get_watchlist',   # legacy name (kept for safety)
+    'xadarr_integration.watchlist',       # actual endpoint name (GET + POST)
+    'xadarr_integration.trigger_sync',
+    # Xadarr settings backup/restore — new device only needs Episeerr URL to restore
+    'xadarr_integration.backup_settings',
+    'xadarr_integration.get_backup',
 }
 
 
@@ -2820,7 +2820,7 @@ _SEARCH_SETTINGS_INDEX = [
     {'keywords': {'logs', 'log', 'history', 'activity', 'debug', 'troubleshoot', 'troubleshooting'}, 'title': 'View Logs', 'subtitle': 'App & cleanup logs (episeerr.log)', 'url': '/logs', 'icon': 'fas fa-terminal'},
     {'keywords': {'cleanup logs', 'cleanuplogs'}, 'title': 'Cleanup Logs', 'subtitle': 'Scheduled cleanup history', 'url': '/cleanup-logs', 'icon': 'fas fa-file-alt'},
     {'keywords': {'auth', 'authentication', 'login', 'password', 'security'}, 'title': 'Authentication', 'subtitle': 'Security settings', 'url': '/scheduler', 'icon': 'fas fa-lock'},
-    {'keywords': {'arvio', 'android tv', 'watchlist api', 'lan'}, 'title': 'Arvio', 'subtitle': 'Arvio Android TV integration', 'url': '/setup#arvio-config', 'icon': 'fas fa-mobile-alt'},
+    {'keywords': {'xadarr', 'android tv', 'watchlist api', 'lan'}, 'title': 'Xadarr', 'subtitle': 'Xadarr Android TV integration', 'url': '/setup#xadarr-config', 'icon': 'fas fa-mobile-alt'},
     {'keywords': {'trakt', 'trakt.tv', 'watchlist'}, 'title': 'Trakt', 'subtitle': 'Trakt watchlist sync', 'url': '/setup#trakt-config', 'icon': 'fas fa-star'},
 ]
 

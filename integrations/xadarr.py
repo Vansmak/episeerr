@@ -1,27 +1,27 @@
 """
-Arvio Integration for Episeerr
+Xadarr Integration for Episeerr
 ───────────────────────────────
 Provides:   Settings sync, playback webhooks,
-            and a web dashboard at /arvio for Arvio Android TV app.
+            and a web dashboard at /xadarr for Xadarr Android TV app.
 
-Sync API (prefix: /api/integration/arvio):
-    GET  /status      ← Arvio pings this to verify the server is reachable
-    GET  /settings    ← Arvio pulls its full settings blob on new-device setup
-    PUT  /settings    ← Arvio pushes its settings blob (profile sync, addons, etc.)
-    POST /webhook     ← Arvio posts playback events (start/pause/stop/progress)
+Sync API (prefix: /api/integration/xadarr):
+    GET  /status      ← Xadarr pings this to verify the server is reachable
+    GET  /settings    ← Xadarr pulls its full settings blob on new-device setup
+    PUT  /settings    ← Xadarr pushes its settings blob (profile sync, addons, etc.)
+    POST /webhook     ← Xadarr posts playback events (start/pause/stop/progress)
 
-Dashboard API (also under /api/integration/arvio):
+Dashboard API (also under /api/integration/xadarr):
     GET/DELETE /history              ← playback event log
     GET        /dashboard/player/state
     GET        /dashboard/player/events  ← SSE stream
 
-Dashboard UI (prefix: /arvio):
+Dashboard UI (prefix: /xadarr):
     GET /         ← SPA index.html
     GET /static/* ← JS / CSS
 
 Data files:
-    data/arvio_settings.json        ← settings blob synced from TV app
-    data/arvio_history.json         ← playback event log (last 500)
+    data/xadarr_settings.json        ← settings blob synced from TV app
+    data/xadarr_history.json         ← playback event log (last 500)
 """
 
 import os
@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 # ── File paths ────────────────────────────────────────────────────────────────
 
 _DATA_DIR      = os.path.join(os.getcwd(), "data")
-_SETTINGS_FILE = os.path.join(_DATA_DIR, "arvio_settings.json")
-_HISTORY_FILE  = os.path.join(_DATA_DIR, "arvio_history.json")
+_SETTINGS_FILE = os.path.join(_DATA_DIR, "xadarr_settings.json")
+_HISTORY_FILE  = os.path.join(_DATA_DIR, "xadarr_history.json")
 
 # ── Rule-processing dedup ─────────────────────────────────────────────────────
 # Prevents triggering Sonarr rule processing more than once per watch session.
@@ -53,7 +53,7 @@ _processed_episodes: Dict[str, float] = {}
 _processed_lock = threading.Lock()
 
 _COMPLETION_THRESHOLD_DEFAULT = 85  # fallback if service config is missing
-_STATIC_DIR = os.path.join(os.path.dirname(__file__), "arvio_static")
+_STATIC_DIR = os.path.join(os.path.dirname(__file__), "xadarr_static")
 _LOCK = threading.Lock()
 
 # ── SSE player-state broadcast ────────────────────────────────────────────────
@@ -109,7 +109,7 @@ def _load_settings() -> Optional[dict]:
             with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as exc:
-            logger.error(f"[Arvio] Failed to load settings: {exc}")
+            logger.error(f"[Xadarr] Failed to load settings: {exc}")
             return None
 
 
@@ -121,14 +121,14 @@ def _save_settings(data: dict) -> bool:
                 json.dump(data, f, ensure_ascii=False)
             return True
         except Exception as exc:
-            logger.error(f"[Arvio] Failed to save settings: {exc}")
+            logger.error(f"[Xadarr] Failed to save settings: {exc}")
             return False
 
 
 def _get_completion_threshold() -> float:
     try:
         from settings_db import get_service
-        svc = get_service('arvio', 'default')
+        svc = get_service('xadarr', 'default')
         if svc and svc.get('config'):
             return float(svc['config'].get('progress_threshold', _COMPLETION_THRESHOLD_DEFAULT))
     except Exception:
@@ -145,10 +145,10 @@ def _trigger_rule_processing(title: str, tmdb_id: str, season, episode) -> None:
         from media_processor import get_series_id
         series_id = get_series_id(title, None, tmdb_id)
         if not series_id:
-            logger.warning(f"[Arvio] Could not find Sonarr series ID for '{title}' (tmdb={tmdb_id})")
+            logger.warning(f"[Xadarr] Could not find Sonarr series ID for '{title}' (tmdb={tmdb_id})")
             return
 
-        logger.debug(f"[Arvio] Found Sonarr series_id={series_id} for '{title}'")
+        logger.debug(f"[Xadarr] Found Sonarr series_id={series_id} for '{title}'")
 
         final_rule = None
         try:
@@ -158,9 +158,9 @@ def _trigger_rule_processing(title: str, tmdb_id: str, season, episode) -> None:
             final_rule, modified = reconcile_series_drift(series_id, config)
             if modified:
                 save_config(config)
-            logger.debug(f"[Arvio] Rule for series {series_id}: {final_rule}")
+            logger.debug(f"[Xadarr] Rule for series {series_id}: {final_rule}")
         except Exception as drift_err:
-            logger.warning(f"[Arvio] Drift reconciliation skipped: {drift_err}")
+            logger.warning(f"[Xadarr] Drift reconciliation skipped: {drift_err}")
 
         temp_dir = os.path.join(os.getcwd(), "temp")
         os.makedirs(temp_dir, exist_ok=True)
@@ -181,31 +181,31 @@ def _trigger_rule_processing(title: str, tmdb_id: str, season, episode) -> None:
             capture_output=True, text=True,
         )
         if result.returncode != 0:
-            logger.error(f"[Arvio] media_processor failed (rc={result.returncode}): {result.stderr}")
+            logger.error(f"[Xadarr] media_processor failed (rc={result.returncode}): {result.stderr}")
         else:
-            logger.info(f"[Arvio] Rule processing complete for '{title}' S{season}E{episode}")
+            logger.info(f"[Xadarr] Rule processing complete for '{title}' S{season}E{episode}")
             if result.stdout:
-                logger.debug(f"[Arvio] media_processor stdout: {result.stdout[:500]}")
+                logger.debug(f"[Xadarr] media_processor stdout: {result.stdout[:500]}")
 
     except Exception as exc:
-        logger.error(f"[Arvio] _trigger_rule_processing error: {exc}", exc_info=True)
+        logger.error(f"[Xadarr] _trigger_rule_processing error: {exc}", exc_info=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Integration class
 # ══════════════════════════════════════════════════════════════════════════════
 
-class ArvioIntegration(ServiceIntegration):
+class XadarrIntegration(ServiceIntegration):
 
     # ── Metadata ──────────────────────────────────────────────────────────────
 
     @property
     def service_name(self) -> str:
-        return "arvio"
+        return "xadarr"
 
     @property
     def display_name(self) -> str:
-        return "Arvio"
+        return "Xadarr"
 
     @property
     def description(self) -> str:
@@ -221,18 +221,18 @@ class ArvioIntegration(ServiceIntegration):
 
     @property
     def default_port(self) -> int:
-        return 7979  # Arvio's LAN watchlist server port
+        return 7979  # Xadarr's LAN watchlist server port
 
     def get_setup_fields(self):
         return [
             {
                 "name":        "url",
-                "label":       "Arvio Sync-Server URL",
+                "label":       "Xadarr Sync-Server URL",
                 "type":        "url",
                 "placeholder": "http://192.168.x.x:7979",
                 "required":    False,
                 "help_text":   (
-                    "LAN URL of your arvio-server (port 7979). "
+                    "LAN URL of your xadarr-server (port 7979). "
                     "Used for the dashboard quick-link."
                 ),
             },
@@ -244,15 +244,15 @@ class ArvioIntegration(ServiceIntegration):
                 "required":    False,
                 "help_text":   (
                     "Minimum watch % before Episeerr triggers next-episode rule processing. "
-                    "Should match or be lower than the completion % configured in the Arvio app / sync-server settings."
+                    "Should match or be lower than the completion % configured in the Xadarr app / sync-server settings."
                 ),
             },
         ]
 
-    # ── Connection test (not used by Arvio; satisfies base class) ─────────────
+    # ── Connection test (not used by Xadarr; satisfies base class) ─────────────
 
     def test_connection(self, url: str, api_key: str) -> Tuple[bool, str]:
-        return True, "Arvio connects to Episeerr, not the other way around."
+        return True, "Xadarr connects to Episeerr, not the other way around."
 
     def get_dashboard_stats(self, url: str, api_key: str) -> Dict[str, Any]:
         settings = _load_settings()
@@ -283,15 +283,15 @@ class ArvioIntegration(ServiceIntegration):
 
     def create_blueprint(self) -> Blueprint:
         bp = Blueprint(
-            "arvio_integration", __name__,
-            url_prefix="/api/integration/arvio",
+            "xadarr_integration", __name__,
+            url_prefix="/api/integration/xadarr",
         )
 
         # ── GET /status ───────────────────────────────────────────────────────
         @bp.route("/status", methods=["GET"])
         def status():
             """
-            Health check — Arvio calls this to verify the server is reachable
+            Health check — Xadarr calls this to verify the server is reachable
             before saving the sync server URL or adding the Episeerr addon.
             """
             settings = _load_settings()
@@ -299,7 +299,7 @@ class ArvioIntegration(ServiceIntegration):
             return jsonify({
                 "status": "ok",
                 "service": "episeerr",
-                "arvio_profiles": profiles,
+                "xadarr_profiles": profiles,
                 "settings_present": settings is not None,
             }), 200
 
@@ -307,8 +307,8 @@ class ArvioIntegration(ServiceIntegration):
         @bp.route("/settings", methods=["GET"])
         def get_settings():
             """
-            Return the full Arvio settings blob.
-            Arvio calls this on new-device setup to restore all settings.
+            Return the full Xadarr settings blob.
+            Xadarr calls this on new-device setup to restore all settings.
             Returns 404 if no settings have been saved yet.
             """
             data = _load_settings()
@@ -320,8 +320,8 @@ class ArvioIntegration(ServiceIntegration):
         @bp.route("/settings", methods=["PUT"])
         def put_settings():
             """
-            Save the full Arvio settings blob.
-            Arvio calls this after any settings change or profile operation.
+            Save the full Xadarr settings blob.
+            Xadarr calls this after any settings change or profile operation.
             """
             body = request.get_json(silent=True, force=True)
             if not body or not isinstance(body, dict):
@@ -330,7 +330,7 @@ class ArvioIntegration(ServiceIntegration):
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500
             profiles = len(body.get("profiles") or [])
-            logger.info(f"[Arvio] Settings saved — {profiles} profile(s)")
+            logger.info(f"[Xadarr] Settings saved — {profiles} profile(s)")
             return jsonify({"status": "saved", "profiles": profiles}), 200
 
         # ── POST /webhook ─────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ class ArvioIntegration(ServiceIntegration):
 
             ep_info = f" S{season:02d}E{episode:02d}" if season and episode else ""
             logger.info(
-                f"[Arvio] {event.upper()} — {title}{ep_info} "
+                f"[Xadarr] {event.upper()} — {title}{ep_info} "
                 f"({media_type} tmdb={tmdb_id}) {progress}%"
             )
 
@@ -399,23 +399,23 @@ class ArvioIntegration(ServiceIntegration):
                     # New watch session — reset dedup so this episode can be processed again
                     with _processed_lock:
                         _processed_episodes.pop(ep_key, None)
-                    logger.debug(f"[Arvio] Reset dedup for {ep_key}")
+                    logger.debug(f"[Xadarr] Reset dedup for {ep_key}")
 
                 elif event in ("progress", "stop", "finish"):
                     with _processed_lock:
                         already_processed = ep_key in _processed_episodes
 
                     if already_processed:
-                        logger.debug(f"[Arvio] {ep_key} already processed this session — skipping")
+                        logger.debug(f"[Xadarr] {ep_key} already processed this session — skipping")
                     else:
                         threshold = _get_completion_threshold()
                         logger.debug(
-                            f"[Arvio] {event.upper()} {ep_key} at {progress}% "
+                            f"[Xadarr] {event.upper()} {ep_key} at {progress}% "
                             f"(threshold={threshold}%)"
                         )
                         if progress >= threshold:
                             logger.info(
-                                f"[Arvio] Threshold reached for {title}{ep_info} "
+                                f"[Xadarr] Threshold reached for {title}{ep_info} "
                                 f"({progress}% >= {threshold}%) — triggering rule processing"
                             )
                             _trigger_rule_processing(
@@ -428,7 +428,7 @@ class ArvioIntegration(ServiceIntegration):
                                 _processed_episodes[ep_key] = time.time()
                         else:
                             logger.debug(
-                                f"[Arvio] Below threshold ({progress}% < {threshold}%) — not processing"
+                                f"[Xadarr] Below threshold ({progress}% < {threshold}%) — not processing"
                             )
 
             return jsonify({"status": "received"}), 200
@@ -476,8 +476,8 @@ class ArvioIntegration(ServiceIntegration):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        # ── UI blueprint (served at /arvio) ───────────────────────────────────
-        ui_bp = Blueprint("arvio_ui", __name__, url_prefix="/arvio")
+        # ── UI blueprint (served at /xadarr) ───────────────────────────────────
+        ui_bp = Blueprint("xadarr_ui", __name__, url_prefix="/xadarr")
 
         @ui_bp.route("/", defaults={"path": ""})
         @ui_bp.route("/<path:path>")
@@ -491,4 +491,4 @@ class ArvioIntegration(ServiceIntegration):
 
 # ── Module-level instance (auto-discovered by integrations/__init__.py) ───────
 
-integration = ArvioIntegration()
+integration = XadarrIntegration()
