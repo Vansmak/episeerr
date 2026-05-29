@@ -14,7 +14,7 @@ import threading
 import time
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from episeerr_utils import http
 from integrations.base import ServiceIntegration
 
@@ -121,7 +121,7 @@ class TraktIntegration(ServiceIntegration):
                 'type': 'text',
                 'placeholder': 'Trakt application client_id',
                 'required': True,
-                'help_text': 'From https://trakt.tv/oauth/applications → your app → Client ID'
+                'help_text': 'From https://trakt.tv/oauth/applications -> your app -> Client ID'
             }
         ]
 
@@ -163,6 +163,43 @@ class TraktIntegration(ServiceIntegration):
         )
 
         return f'''
+        <!-- ── Device Authentication ─────────────────────────── -->
+        <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:20px;padding-top:20px;">
+            <h6 class="mb-3">
+                <i class="fas fa-plug text-warning me-2"></i>Authenticate with Trakt
+            </h6>
+            <div class="row">
+                <div class="col-md-8">
+                    <button type="button" class="btn btn-sm btn-outline-warning"
+                            id="trakt-auth-btn" onclick="startTraktDeviceAuth()">
+                        <i class="fas fa-plug me-1"></i>Get Device Code
+                    </button>
+                    <div id="trakt-device-panel" style="display:none;margin-top:12px;">
+                        <div class="alert alert-dark border border-warning p-3 mb-0">
+                            <p class="mb-1 small">Go to
+                                <a id="trakt-verify-url" href="#" target="_blank"
+                                   class="text-warning fw-bold"></a>
+                                and enter:
+                            </p>
+                            <div class="text-center my-2">
+                                <span id="trakt-user-code"
+                                      style="font-size:1.8rem;font-family:monospace;
+                                             letter-spacing:0.2em;font-weight:bold;color:#ffc107;">
+                                </span>
+                            </div>
+                            <p id="trakt-auth-status"
+                               class="mb-0 small text-muted text-center">
+                                Waiting for authorization&hellip;
+                            </p>
+                        </div>
+                    </div>
+                    <small class="text-muted d-block mt-2">
+                        Save your Client ID and Client Secret first, then click to get a code.
+                    </small>
+                </div>
+            </div>
+        </div>
+
         <!-- ── OAuth Tokens ────────────────────────────────── -->
         <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:20px;padding-top:20px;">
             <h6 class="mb-3">
@@ -181,7 +218,7 @@ class TraktIntegration(ServiceIntegration):
                     <label class="form-label">Access Token</label>
                     <input type="password" class="form-control form-control-sm"
                            name="trakt-access-token" value="{access_token}"
-                           placeholder="OAuth access token">
+                           placeholder="Populated automatically by device auth above">
                 </div>
             </div>
             <div class="row">
@@ -189,17 +226,19 @@ class TraktIntegration(ServiceIntegration):
                     <label class="form-label">Refresh Token</label>
                     <input type="password" class="form-control form-control-sm"
                            name="trakt-refresh-token" value="{refresh_token}"
-                           placeholder="OAuth refresh token">
-                    <div class="mt-1">Token status: {token_status_html}</div>
+                           placeholder="Populated automatically by device auth above">
+                    <div class="mt-1" id="trakt-token-status-wrap">
+                        Token status: {token_status_html}
+                    </div>
                 </div>
             </div>
             <small class="text-muted d-block mb-2">
-                Get tokens via the Trakt device code flow or a third-party tool.
-                Access tokens are automatically refreshed 24 hours before expiry.
+                Tokens are set automatically by device auth above, or paste manually.
+                Access tokens are refreshed 24 hours before expiry.
             </small>
         </div>
 
-        <!-- ── Watchlist Auto-Sync ───────────────────────��───── -->
+        <!-- ── Watchlist Auto-Sync ────────────────────────── -->
         <div style="border-top:1px solid rgba(255,255,255,0.1);margin-top:20px;padding-top:20px;">
             <h6 class="mb-3">
                 <i class="fas fa-sync-alt text-info me-2"></i>Watchlist Auto-Sync
@@ -212,7 +251,7 @@ class TraktIntegration(ServiceIntegration):
                         <label class="form-check-label" for="trakt-sync-enabled">Enable automatic sync</label>
                     </div>
                     <small class="text-muted">
-                        Periodically sync Trakt watchlist → Sonarr/Radarr
+                        Periodically sync Trakt watchlist &rarr; Sonarr/Radarr
                     </small>
                 </div>
                 <div class="col-md-6 mb-3">
@@ -233,11 +272,91 @@ class TraktIntegration(ServiceIntegration):
         </div>
 
         <script>
+        var _traktPollTimer = null;
+        var _traktDeviceCode = null;
+
+        function startTraktDeviceAuth() {{
+            var btn = document.getElementById('trakt-auth-btn');
+            var panel = document.getElementById('trakt-device-panel');
+            var statusEl = document.getElementById('trakt-auth-status');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Requesting…';
+
+            fetch('/api/integration/trakt/auth/device', {{method: 'POST'}})
+                .then(function(r) {{ return r.json(); }})
+                .then(function(data) {{
+                    if (data.error) {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<i class="fas fa-plug me-1"></i>Get Device Code';
+                        alert('Error: ' + data.error);
+                        return;
+                    }}
+                    _traktDeviceCode = data.device_code;
+                    var urlEl = document.getElementById('trakt-verify-url');
+                    urlEl.textContent = data.verification_url;
+                    urlEl.href = data.verification_url;
+                    document.getElementById('trakt-user-code').textContent = data.user_code;
+                    panel.style.display = '';
+                    statusEl.textContent = 'Waiting for authorization…';
+                    statusEl.className = 'mb-0 small text-muted text-center';
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Waiting…';
+                    if (_traktPollTimer) clearInterval(_traktPollTimer);
+                    var ms = (data.interval || 5) * 1000;
+                    _traktPollTimer = setInterval(function() {{ _pollTraktAuth(); }}, ms);
+                }})
+                .catch(function(e) {{
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-plug me-1"></i>Get Device Code';
+                    alert('Request failed: ' + e);
+                }});
+        }}
+
+        function _pollTraktAuth() {{
+            if (!_traktDeviceCode) return;
+            fetch('/api/integration/trakt/auth/poll', {{
+                method: 'POST',
+                headers: {{'Content-Type': 'application/json'}},
+                body: JSON.stringify({{device_code: _traktDeviceCode}})
+            }})
+            .then(function(r) {{ return r.json(); }})
+            .then(function(data) {{
+                var statusEl = document.getElementById('trakt-auth-status');
+                var btn = document.getElementById('trakt-auth-btn');
+                if (data.status === 'approved') {{
+                    clearInterval(_traktPollTimer);
+                    _traktPollTimer = null;
+                    _traktDeviceCode = null;
+                    statusEl.textContent = '✓ Authenticated! Tokens saved.';
+                    statusEl.className = 'mb-0 small text-success text-center fw-bold';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-check text-success me-1"></i>Authenticated';
+                    var wrap = document.getElementById('trakt-token-status-wrap');
+                    if (wrap) wrap.innerHTML = 'Token status: <span class="badge bg-success">Valid</span>';
+                }} else if (data.status === 'denied') {{
+                    clearInterval(_traktPollTimer);
+                    _traktPollTimer = null;
+                    statusEl.textContent = 'Authorization denied.';
+                    statusEl.className = 'mb-0 small text-danger text-center';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-plug me-1"></i>Get Device Code';
+                }} else if (data.status === 'expired' || data.status === 'error') {{
+                    clearInterval(_traktPollTimer);
+                    _traktPollTimer = null;
+                    statusEl.textContent = 'Code expired — click Get Device Code to try again.';
+                    statusEl.className = 'mb-0 small text-warning text-center';
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="fas fa-plug me-1"></i>Get Device Code';
+                }}
+                // pending / slow_down: keep polling silently
+            }})
+            .catch(function() {{}});
+        }}
+
         function triggerTraktSync() {{
             fetch('/api/integration/trakt/sync', {{method: 'POST'}})
-                .then(r => r.json())
-                .then(d => alert(d.message || 'Sync started'))
-                .catch(e => alert('Error: ' + e));
+                .then(function(r) {{ return r.json(); }})
+                .then(function(d) {{ alert(d.message || 'Sync started'); }})
+                .catch(function(e) {{ alert('Error: ' + e); }});
         }}
         </script>
         '''
@@ -249,16 +368,16 @@ class TraktIntegration(ServiceIntegration):
         normalized_data['client_secret'] = normalized_data.pop(
             'client-secret', existing_cfg.get('client_secret', '')
         )
-        normalized_data['access_token'] = normalized_data.pop(
-            'trakt-access-token', normalized_data.pop(
-                'access-token', existing_cfg.get('access_token', '')
-            )
+        submitted_access = normalized_data.pop(
+            'trakt-access-token', normalized_data.pop('access-token', '')
         )
-        normalized_data['refresh_token'] = normalized_data.pop(
-            'trakt-refresh-token', normalized_data.pop(
-                'refresh-token', existing_cfg.get('refresh_token', '')
-            )
+        normalized_data['access_token'] = submitted_access or existing_cfg.get('access_token', '')
+
+        submitted_refresh = normalized_data.pop(
+            'trakt-refresh-token', normalized_data.pop('refresh-token', '')
         )
+        normalized_data['refresh_token'] = submitted_refresh or existing_cfg.get('refresh_token', '')
+
         # Preserve programmatically-set expires_at
         normalized_data['expires_at'] = normalized_data.pop(
             'expires-at', existing_cfg.get('expires_at')
@@ -319,7 +438,7 @@ class TraktIntegration(ServiceIntegration):
             if (exp - now).total_seconds() > 86400:
                 return cfg  # more than 24h remaining — no refresh needed
 
-            logger.info("[Trakt] Refreshing access token …")
+            logger.info("[Trakt] Refreshing access token ...")
             resp = http.post(f"{TRAKT_API_BASE}/oauth/token", json={
                 'refresh_token': cfg['refresh_token'],
                 'client_id': cfg['client_id'],
@@ -381,10 +500,35 @@ class TraktIntegration(ServiceIntegration):
                             headers=self._build_headers(cfg), timeout=15)
             if resp.ok:
                 return resp.json()
-            logger.error(f"[Trakt] GET {path} → {resp.status_code}")
+            logger.error(f"[Trakt] GET {path} -> {resp.status_code}")
         except Exception as exc:
             logger.error(f"[Trakt] GET {path} error: {exc}")
         return None
+
+    def _api_delete(self, path: str, body: dict) -> bool:
+        """POST to a Trakt remove endpoint (Trakt uses POST-with-body for removes)."""
+        cfg = self._get_trakt_config()
+        if not cfg or not cfg.get('access_token'):
+            return False
+        cfg = self._maybe_refresh_token(cfg)
+        try:
+            resp = http.post(f"{TRAKT_API_BASE}{path}",
+                             headers=self._build_headers(cfg),
+                             json=body, timeout=15)
+            if resp.ok:
+                return True
+            logger.error(f"[Trakt] DELETE {path} -> {resp.status_code}: {resp.text[:200]}")
+        except Exception as exc:
+            logger.error(f"[Trakt] DELETE {path} error: {exc}")
+        return False
+
+    def remove_from_watchlist(self, tmdb_id: int, media_type: str) -> bool:
+        """Remove a show or movie from the Trakt watchlist by TMDB ID."""
+        if media_type == 'movie':
+            payload = {"movies": [{"ids": {"tmdb": tmdb_id}}]}
+        else:
+            payload = {"shows": [{"ids": {"tmdb": tmdb_id}}]}
+        return self._api_delete('/sync/watchlist/remove', payload)
 
     def fetch_watchlist_shows(self) -> List[dict]:
         data = self._api_get('/users/me/watchlist/shows')
@@ -695,7 +839,7 @@ class TraktIntegration(ServiceIntegration):
             time.sleep(30)
             while self._sync_running:
                 try:
-                    logger.info("[Trakt] Running scheduled watchlist sync …")
+                    logger.info("[Trakt] Running scheduled watchlist sync ...")
                     self.sync_watchlist()
                 except Exception as exc:
                     logger.error(f"[Trakt] Scheduled sync error: {exc}", exc_info=True)
@@ -813,69 +957,266 @@ class TraktIntegration(ServiceIntegration):
                 'stats': sync_data.get('stats', {}),
             })
 
+        @bp.route('/auth/device', methods=['POST'])
+        def auth_device():
+            cfg = integration._get_trakt_config()
+            client_id = (cfg or {}).get('client_id', '')
+            if not client_id:
+                return jsonify({'error': 'Client ID not configured — save your Client ID first'}), 400
+            resp = http.post(
+                f'{TRAKT_API_BASE}/oauth/device/code',
+                json={'client_id': client_id},
+                timeout=15,
+            )
+            if not resp.ok:
+                return jsonify({'error': f'Trakt returned {resp.status_code}'}), 502
+            data = resp.json()
+            return jsonify({
+                'device_code':      data['device_code'],
+                'user_code':        data['user_code'],
+                'verification_url': data['verification_url'],
+                'expires_in':       data.get('expires_in', 600),
+                'interval':         data.get('interval', 5),
+            }), 200
+
+        @bp.route('/auth/poll', methods=['POST'])
+        def auth_poll():
+            body = request.get_json(silent=True) or {}
+            device_code   = body.get('device_code', '')
+            cfg           = integration._get_trakt_config()
+            client_id     = (cfg or {}).get('client_id', '')
+            client_secret = (cfg or {}).get('client_secret', '')
+            if not client_id or not device_code:
+                return jsonify({'error': 'Missing client_id or device_code'}), 400
+
+            resp = http.post(
+                f'{TRAKT_API_BASE}/oauth/device/token',
+                json={
+                    'code':          device_code,
+                    'client_id':     client_id,
+                    'client_secret': client_secret,
+                },
+                timeout=15,
+            )
+
+            if resp.status_code == 200:
+                token_data    = resp.json()
+                access_token  = token_data['access_token']
+                refresh_token = token_data['refresh_token']
+                expires_in    = token_data.get('expires_in', 7776000)
+                expires_at    = datetime.fromtimestamp(
+                    datetime.now(timezone.utc).timestamp() + expires_in,
+                    tz=timezone.utc,
+                ).isoformat()
+                try:
+                    from settings_db import get_service, save_service
+                    svc = get_service('trakt', 'default') or {}
+                    existing_cfg = svc.get('config') or {}
+                    existing_cfg.update({
+                        'access_token':  access_token,
+                        'refresh_token': refresh_token,
+                        'expires_at':    expires_at,
+                    })
+                    save_service(
+                        service_type='trakt',
+                        name='default',
+                        url=svc.get('url', ''),
+                        api_key=svc.get('api_key', client_id),
+                        config=existing_cfg,
+                    )
+                    logger.info('[Trakt] Device auth tokens saved')
+                except Exception as exc:
+                    logger.error(f'[Trakt] Could not persist device auth tokens: {exc}')
+                return jsonify({'status': 'approved', 'expires_at': expires_at}), 200
+
+            # Map Trakt polling status codes to meaningful names
+            status_map = {
+                400: 'pending',    # authorization_pending
+                404: 'expired',
+                409: 'pending',    # already used
+                410: 'expired',
+                418: 'denied',     # user explicitly denied
+                429: 'slow_down',
+            }
+            return jsonify({'status': status_map.get(resp.status_code, 'error')}), 200
+
         @bp.route('/watchlist-html', methods=['GET'])
         def get_watchlist_html():
             cfg = integration._get_trakt_config()
-            sync_enabled = (cfg or {}).get('sync_enabled', False)
             client_id = (cfg or {}).get('client_id', '')
-            if not cfg or not client_id or not sync_enabled:
+            safe_cfg = {k: v for k, v in (cfg or {}).items()
+                        if k not in ('access_token', 'refresh_token', 'client_secret')}
+            safe_cfg['has_access_token'] = bool((cfg or {}).get('access_token'))
+            safe_cfg['has_refresh_token'] = bool((cfg or {}).get('refresh_token'))
+            logger.info(f"[Trakt] watchlist-html: cfg={safe_cfg}")
+            if not cfg or not client_id:
+                logger.info("[Trakt] watchlist-html: no client_id, returning 204")
                 return ('', 204)
 
             items = integration.get_watchlist_with_status()
-            status_label = {
-                'on_watchlist': '<span class="badge bg-secondary">On Watchlist</span>',
-                'pending_selection': '<span class="badge bg-warning text-dark">Pending</span>',
-                'added_to_sonarr': '<span class="badge bg-info">Added</span>',
-                'added_to_radarr': '<span class="badge bg-info">Added</span>',
-                'already_exists': '<span class="badge bg-success">Available</span>',
-                'available': '<span class="badge bg-success">Available</span>',
-                'watched': '<span class="badge bg-primary">Watched</span>',
-                'error': '<span class="badge bg-danger">Error</span>',
+            logger.info(f"[Trakt] watchlist-html: get_watchlist_with_status returned {len(items)} items")
+            for item in items:
+                logger.info(f"[Trakt]   item: {item.get('title')!r} tmdb_id={item.get('tmdb_id')} type={item.get('media_type')} status={item.get('status')}")
+            if not items:
+                return ('<p class="text-muted text-center py-4">Trakt watchlist is empty</p>', 200,
+                        {'Content-Type': 'text/html; charset=utf-8'})
+
+            # Fetch TMDB poster for each item
+            tmdb_key = ''
+            try:
+                from settings_db import get_service as _get_service
+                tmdb_svc = _get_service('tmdb', 'default')
+                tmdb_key = (tmdb_svc or {}).get('api_key', '') or os.getenv('TMDB_API_KEY', '')
+            except Exception:
+                pass
+            logger.info(f"[Trakt] watchlist-html: tmdb_key present={bool(tmdb_key)}")
+
+            def _poster_url(tmdb_id, media_type):
+                if not tmdb_key or not tmdb_id:
+                    return '/static/placeholder-poster.png'
+                endpoint = 'movie' if media_type == 'movie' else 'tv'
+                # v4 JWT (Bearer) vs v3 API key (query param)
+                if tmdb_key.startswith('eyJ'):
+                    kwargs = {'headers': {'Authorization': f'Bearer {tmdb_key}'}, 'timeout': 5}
+                else:
+                    kwargs = {'params': {'api_key': tmdb_key}, 'timeout': 5}
+                try:
+                    r = http.get(
+                        f'https://api.themoviedb.org/3/{endpoint}/{tmdb_id}', **kwargs
+                    )
+                    if r.ok:
+                        path = r.json().get('poster_path')
+                        if path:
+                            return f'https://image.tmdb.org/t/p/w342{path}'
+                except Exception:
+                    pass
+                return '/static/placeholder-poster.png'
+
+            status_colors = {
+                'on_watchlist':      '#6c757d',
+                'pending_selection': '#ffc107',
+                'added_to_sonarr':   '#17a2b8',
+                'added_to_radarr':   '#17a2b8',
+                'already_exists':    '#28a745',
+                'available':         '#28a745',
+                'watched':           '#007bff',
+                'error':             '#dc3545',
+            }
+            status_labels = {
+                'on_watchlist':      'Watchlist',
+                'pending_selection': 'Pending',
+                'added_to_sonarr':   'Added',
+                'added_to_radarr':   'Added',
+                'already_exists':    'Available',
+                'available':         'Available',
+                'watched':           'Watched',
+                'error':             'Error',
+            }
+            status_icons = {
+                'on_watchlist':      'fa-bookmark',
+                'pending_selection': 'fa-clock',
+                'added_to_sonarr':   'fa-check-circle',
+                'added_to_radarr':   'fa-check-circle',
+                'already_exists':    'fa-check-circle',
+                'available':         'fa-check-circle',
+                'watched':           'fa-eye',
+                'error':             'fa-exclamation-triangle',
             }
 
-            rows = []
+            items_html = ''
             for item in items:
-                badge = status_label.get(
-                    item['status'],
-                    f'<span class="badge bg-secondary">{item["status"]}</span>'
-                )
-                type_icon = 'fas fa-tv' if item['media_type'] == 'show' else 'fas fa-film'
-                rows.append(
-                    f'<tr>'
-                    f'<td><i class="{type_icon} me-2 text-muted"></i>{item["title"]}</td>'
-                    f'<td>{item.get("year", "")}</td>'
-                    f'<td>{badge}</td>'
-                    f'</tr>'
-                )
+                title       = item.get('title', 'Unknown')
+                media_type  = item.get('media_type', 'show')
+                tmdb_id     = item.get('tmdb_id') or ''
+                year        = item.get('year', '')
+                year_str    = f' ({year})' if year else ''
+                type_icon   = 'fa-tv' if media_type == 'show' else 'fa-film'
+                status      = item.get('status', 'on_watchlist')
+                badge_color = status_colors.get(status, '#6c757d')
+                badge_label = status_labels.get(status, status.replace('_', ' ').title())
+                badge_icon  = status_icons.get(status, 'fa-bookmark')
+                thumb       = _poster_url(tmdb_id, media_type)
 
-            if not rows:
-                rows = ['<tr><td colspan="3" class="text-center text-muted py-3">'
-                        'Trakt watchlist is empty or not authenticated</td></tr>']
+                items_html += f'''
+                <div class="watchlist-item" data-type="{media_type}" data-tmdb-id="{tmdb_id}">
+                    <div class="watchlist-poster-wrap">
+                        <img src="{thumb}" class="watchlist-poster" alt="{title}"
+                             style="cursor:pointer;" onclick="openWatchlistDetail(this.closest('.watchlist-item'))">
+                        <span class="watchlist-type-badge">
+                            <i class="fas {type_icon}"></i>
+                        </span>
+                        <span class="watchlist-status-badge" style="background:{badge_color};">
+                            <i class="fas {badge_icon}" style="font-size:9px;"></i> {badge_label}
+                        </span>
+                        <button class="watchlist-remove-btn" title="Remove from Trakt"
+                            onclick="event.stopPropagation();
+                                     var card=this.closest('.watchlist-item');
+                                     fetch('/api/integration/trakt/watchlist/{media_type}/{tmdb_id}',
+                                           {{method:'DELETE'}})
+                                     .then(function(r){{if(r.ok){{card.remove();}}}});">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                </div>'''
 
             html = f'''
-            <div id="trakt-watchlist-content">
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <small class="text-muted">{len(items)} item(s) on watchlist</small>
-                    <button class="btn btn-sm btn-outline-secondary"
-                            onclick="syncTraktWatchlist()">
-                        <i class="fas fa-sync-alt me-1"></i>Sync Now
-                    </button>
-                </div>
-                <div class="table-responsive">
-                    <table class="table table-sm table-dark table-hover mb-0">
-                        <thead>
-                            <tr>
-                                <th>Title</th>
-                                <th>Year</th>
-                                <th>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>{"".join(rows)}</tbody>
-                    </table>
+            <div class="watchlist-container">
+                <div class="watchlist-scroll">{items_html}
                 </div>
             </div>
-            '''
-            return html
+            <style>
+            .watchlist-container {{ margin-top: 0; }}
+            .watchlist-scroll {{
+                display: flex; gap: 12px; overflow-x: auto;
+                padding: 8px 0; -webkit-overflow-scrolling: touch;
+            }}
+            .watchlist-item {{ flex: 0 0 120px; text-align: center; }}
+            .watchlist-poster-wrap {{ position: relative; display: inline-block; }}
+            .watchlist-poster {{
+                width: 120px; height: 180px; object-fit: cover;
+                border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                transition: transform 0.2s;
+            }}
+            .watchlist-poster:hover {{ transform: scale(1.05); cursor: pointer; }}
+            .watchlist-type-badge {{
+                position: absolute; top: 6px; left: 6px;
+                background: rgba(0,0,0,0.7); color: #fff;
+                padding: 2px 6px; border-radius: 4px; font-size: 10px;
+            }}
+            .watchlist-status-badge {{
+                position: absolute; bottom: 6px; left: 50%;
+                transform: translateX(-50%); color: #fff;
+                padding: 2px 8px; border-radius: 10px; font-size: 10px;
+                white-space: nowrap; font-weight: 600; letter-spacing: 0.3px;
+            }}
+            .watchlist-title {{
+                font-size: 12px; margin-top: 8px;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }}
+            .watchlist-remove-btn {{
+                position: absolute; top: 6px; right: 6px;
+                background: rgba(220,53,69,0.85); color: #fff; border: none;
+                width: 22px; height: 22px; border-radius: 50%;
+                font-size: 10px; cursor: pointer; display: none;
+                align-items: center; justify-content: center;
+                padding: 0; line-height: 1;
+            }}
+            .watchlist-poster-wrap:hover .watchlist-remove-btn {{ display: flex; }}
+            @media (max-width: 768px) {{
+                .watchlist-container {{ max-width: 100vw; overflow: hidden; }}
+                .watchlist-scroll {{ max-width: calc(100vw - 48px); }}
+                .watchlist-item {{ flex: 0 0 calc(50% - 6px); }}
+            }}
+            </style>'''
+
+            return (html, 200, {'Content-Type': 'text/html; charset=utf-8'})
+
+        @bp.route('/watchlist/<media_type>/<int:tmdb_id>', methods=['DELETE'])
+        def remove_watchlist_item(media_type, tmdb_id):
+            ok = integration.remove_from_watchlist(tmdb_id, media_type)
+            if ok:
+                return jsonify({'status': 'removed'}), 200
+            return jsonify({'error': 'Failed to remove from Trakt watchlist'}), 500
 
         return bp
 
