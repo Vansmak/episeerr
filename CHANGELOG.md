@@ -1,16 +1,6 @@
 # Changelog
-
-## Unreleased — Branch Restructure (2026-05-22)
-
-### 🔀 Build Separation
-
-- **Arvio integration removed from dev** — `integrations/arvio.py` and all associated routes, auth-exempt endpoints, dashboard watchlist UI, and search index entries have been removed from this branch. Arvio lives exclusively in the `custom` branch (`episeerr_custom`) as a personal build.
-- **Trakt integration remains in dev** — Trakt watchlist sync is a community feature and stays on this branch.
-- **Movie rules remain in dev** — Radarr movie rules are community-facing and stay on this branch.
-- `release_dev.sh` restored — dev/beta Docker builds (`vansmak/episeerr:<version>-dev`) are still released from this branch via `release_dev.sh`. Stable promotion to production still uses `~/projects/promote_dev.sh`.
-
----
-
+## v3.7.6
+fixed movie rule edit delete navigation
 ## v3.7.5
 
 ### ✨ Movie Rules

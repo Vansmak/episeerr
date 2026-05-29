@@ -338,9 +338,9 @@ document.addEventListener('DOMContentLoaded', function() {
         loadActivitySlim();
         loadIntegrationWidgets();
         loadPlexWatchlist();
+        loadTraktWatchlist();
         loadJellyfinFavorites();
         loadEmbyFavorites();
-        loadTraktWatchlist();
         // Set intervals
         statsInterval = setInterval(loadDashboardStats, 60000);
         activityInterval = setInterval(loadActivitySlim, 60000);
@@ -955,6 +955,21 @@ function syncPlexWatchlist() {
 }
 
 // ────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────
+function getBannerUrl(episode) {
+    return episode.banner || '/static/placeholder-banner.png'; // use your own placeholder
+}
+
+function getTimeAgo(date) {
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
+}
+
+// ────────────────────────────────────────────────
 // Trakt Watchlist
 // ────────────────────────────────────────────────
 function loadTraktWatchlist() {
@@ -962,10 +977,7 @@ function loadTraktWatchlist() {
     const container = document.getElementById('trakt-watchlist-container');
     if (!section || !container) return;
     fetch('/api/integration/trakt/watchlist-html')
-        .then(r => {
-            if (!r.ok) return null;
-            return r.text();
-        })
+        .then(r => { if (!r.ok) return null; return r.text(); })
         .then(html => {
             if (html && html.trim()) {
                 section.style.display = '';
@@ -989,21 +1001,6 @@ function syncTraktWatchlist() {
         .then(r => r.json())
         .then(() => { setTimeout(loadTraktWatchlist, 1500); })
         .catch(err => console.error('Trakt sync failed:', err));
-}
-
-// ────────────────────────────────────────────────
-// Helpers
-// ────────────────────────────────────────────────
-function getBannerUrl(episode) {
-    return episode.banner || '/static/placeholder-banner.png'; // use your own placeholder
-}
-
-function getTimeAgo(date) {
-    const seconds = Math.floor((new Date() - date) / 1000);
-    if (seconds < 60) return 'Just now';
-    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
-    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
-    return Math.floor(seconds / 86400) + 'd ago';
 }
 
 // Cleanup intervals

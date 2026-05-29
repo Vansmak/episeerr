@@ -1,4 +1,4 @@
-__version__ = "3.7.5"
+__version__ = "3.7.7"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -108,13 +108,6 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'seerr_integration.seerr_webhook',
     'plex_integration.webhook',
     'tautulli_integration.tautulli_webhook',
-    # Arvio TV app — all routes are LAN-only calls from the TV
-    'arvio_integration.status',
-    'arvio_integration.get_settings',
-    'arvio_integration.put_settings',
-    'arvio_integration.webhook',
-    'arvio_integration.watchlist',
-    'arvio_integration.sync',
 }
 
 
@@ -327,7 +320,6 @@ def setup():
     tautulli = get_service('tautulli', 'default')
     tmdb = get_service('tmdb', 'default')
 
-    # Read enabled flags without the enabled=1 filter so the toggle shows correctly
     def _svc_enabled(service_type):
         try:
             import sqlite3 as _sql
@@ -342,7 +334,7 @@ def setup():
 
     sonarr_enabled = _svc_enabled('sonarr')
     tmdb_enabled   = _svc_enabled('tmdb')
-    
+
         # NEW: Get integration configurations with guaranteed fields
     integration_configs = {}
     for integration in get_all_integrations():
@@ -368,12 +360,14 @@ def setup():
             }
         ]
         
-        # If the integration defines custom fields, use them (empty list = intentionally no fields)
+        # If the integration actually defines custom fields, use them instead
         try:
             custom = integration.get_setup_fields()
-            if isinstance(custom, list):
+            if isinstance(custom, list) and len(custom) > 0:
                 setup_fields = custom
-            # else: None or exception → keep fallback
+                print(f"Using CUSTOM fields for {integration.service_name} ({len(custom)} fields)")
+            else:
+                print(f"Using FALLBACK fields for {integration.service_name} (2 fields)")
         except Exception as e:
             print(f"Error reading custom fields for {integration.service_name}: {e} — using fallback")
         
@@ -386,24 +380,9 @@ def setup():
             if isinstance(config.get('config'), dict):
                 saved_values.update(config['config'])
         
-        # Check actual DB enabled flag without the enabled=1 filter so the
-        # toggle shows the correct state even when the service is disabled.
-        _is_enabled = True
-        try:
-            import sqlite3 as _sql
-            from settings_db import DB_PATH as _DB
-            _row = _sql.connect(_DB).execute(
-                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
-                (integration.service_name,)
-            ).fetchone()
-            if _row is not None:
-                _is_enabled = bool(_row[0])
-        except Exception:
-            pass
-
         integration_configs[integration.service_name] = {
             'connected': config is not None,
-            'enabled': _is_enabled,
+            'enabled': _svc_enabled(integration.service_name),
             'url': saved_values.get('url'),
             'apikey': saved_values.get('apikey'),
             'integration': integration,
@@ -524,6 +503,31 @@ def test_connection(service):
 
 # Replace save_service_config in episeerr.py with this:
 
+@app.route('/api/toggle-service/<service>', methods=['POST'])
+def toggle_service_enabled(service):
+    """Enable or disable a service without changing its config."""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        conn = _sql.connect(_DB)
+        result = conn.execute(
+            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE service_type = ? AND name = 'default'",
+            (1 if enabled else 0, service)
+        )
+        conn.commit()
+        conn.close()
+        if result.rowcount == 0:
+            return jsonify({'ok': False, 'error': f'Service {service!r} not found in DB'}), 404
+        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
+    except Exception as exc:
+        app.logger.error("toggle_service_enabled %s: %s", service, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
 # Replace save_service_config in episeerr.py:
 
 @app.route('/api/save-service/<service>', methods=['POST'])
@@ -571,10 +575,6 @@ def save_service_config(service):
                 from integrations import get_integration as _get_int
                 _int = _get_int(service)
                 normalized_data = integration_data.copy()
-                if _int and hasattr(_int, 'preprocess_save_data'):
-                    _int.preprocess_save_data(normalized_data)
-                    url = normalized_data.get('url', url)
-                    api_key = normalized_data.get('api_key', api_key)
                 save_service(
                     service_type=service,
                     name='default',
@@ -713,34 +713,6 @@ def save_service_config(service):
             'status': 'error',
             'message': f'Error saving: {str(e)}'
         }), 500
-
-@app.route('/api/toggle-service/<service>', methods=['POST'])
-def toggle_service_enabled(service):
-    """Enable or disable a service without changing its config.
-    When disabled, get_service() returns None so ALL API calls for that
-    service are skipped — no polling, no dashboard stats, no retries.
-    """
-    data = request.get_json(silent=True) or {}
-    enabled = bool(data.get('enabled', True))
-    try:
-        import sqlite3 as _sql
-        from settings_db import DB_PATH as _DB
-        conn = _sql.connect(_DB)
-        result = conn.execute(
-            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE service_type = ? AND name = 'default'",
-            (1 if enabled else 0, service)
-        )
-        conn.commit()
-        conn.close()
-        if result.rowcount == 0:
-            return jsonify({'ok': False, 'error': f'Service {service!r} not found in DB'}), 404
-        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
-        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
-    except Exception as exc:
-        app.logger.error("toggle_service_enabled %s: %s", service, exc)
-        return jsonify({'ok': False, 'error': str(exc)}), 500
-
 
 @app.route('/api/quick-links', methods=['GET', 'POST'])
 def manage_quick_links():
@@ -2817,7 +2789,6 @@ _SEARCH_SETTINGS_INDEX = [
     {'keywords': {'logs', 'log', 'history', 'activity', 'debug', 'troubleshoot', 'troubleshooting'}, 'title': 'View Logs', 'subtitle': 'App & cleanup logs (episeerr.log)', 'url': '/logs', 'icon': 'fas fa-terminal'},
     {'keywords': {'cleanup logs', 'cleanuplogs'}, 'title': 'Cleanup Logs', 'subtitle': 'Scheduled cleanup history', 'url': '/cleanup-logs', 'icon': 'fas fa-file-alt'},
     {'keywords': {'auth', 'authentication', 'login', 'password', 'security'}, 'title': 'Authentication', 'subtitle': 'Security settings', 'url': '/scheduler', 'icon': 'fas fa-lock'},
-    {'keywords': {'trakt', 'trakt.tv', 'watchlist'}, 'title': 'Trakt', 'subtitle': 'Trakt watchlist sync', 'url': '/setup#trakt-config', 'icon': 'fas fa-star'},
 ]
 
 _SEARCH_NAV_INDEX = [

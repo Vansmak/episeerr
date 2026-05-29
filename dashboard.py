@@ -391,29 +391,11 @@ def dashboard_integrations():
     
     integrations_data = []
     for integration in get_all_integrations():
-        widget = integration.get_dashboard_widget() or {}
-        # Only suppress this widget for services explicitly disabled in the DB
-        # (a row exists with enabled=0). Services with no DB row at all
-        # (env-var-only: Radarr, JF, Spotify, SABnzbd, Sonos …) must be
-        # left completely unaffected — their widget's own enabled value stands.
-        try:
-            import sqlite3 as _sql
-            from settings_db import DB_PATH as _DB
-            _row = _sql.connect(_DB).execute(
-                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
-                (integration.service_name,)
-            ).fetchone()
-            if _row is not None and not bool(_row[0]):
-                widget['enabled'] = False
-            # _row is None  → no DB row → leave widget['enabled'] as-is
-            # _row[0] == 1  → explicitly enabled → leave widget['enabled'] as-is
-        except Exception:
-            pass  # DB error → leave widget unchanged, fail safe
         integrations_data.append({
             'service_name': integration.service_name,
             'display_name': integration.display_name,
             'icon': integration.icon,
-            'widget': widget
+            'widget': integration.get_dashboard_widget()
         })
     
     return jsonify({
