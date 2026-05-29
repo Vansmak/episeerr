@@ -187,19 +187,31 @@
     {% for integration in integrations %}
     <div class="row mb-3">
         <div class="col-12">
-            <div class="card">
+            <div class="card" id="card-{{ integration.service_name }}"
+                 {% if not integration_configs[integration.service_name].enabled %}style="opacity:0.6"{% endif %}>
                 <div class="card-header d-flex justify-content-between align-items-center">
-                    <div>
-                        <h5 class="mb-0">
-                            <img src="{{ integration.icon }}" style="width: 20px;" class="me-2">
-                            {{ integration.display_name }}
-                            {% if integration_configs[integration.service_name].connected %}
-                                <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
-                            {% else %}
-                                <span class="badge bg-secondary ms-2">Optional</span>
-                            {% endif %}
-                        </h5>
-                        <small class="text-muted">{{ integration.description }}</small>
+                    <div class="d-flex align-items-center gap-3">
+                        <!-- Enable/disable toggle — first thing visible, prominent -->
+                        <div class="form-check form-switch mb-0" title="Enable or disable this service">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   id="{{ integration.service_name }}-enabled-toggle"
+                                   {% if integration_configs[integration.service_name].enabled %}checked{% endif %}
+                                   onchange="toggleServiceEnabled('{{ integration.service_name }}', this.checked)">
+                        </div>
+                        <div>
+                            <h5 class="mb-0">
+                                <img src="{{ integration.icon }}" style="width: 20px;" class="me-2">
+                                {{ integration.display_name }}
+                                {% if integration_configs[integration.service_name].connected %}
+                                    <span class="badge bg-success ms-2"><i class="fas fa-check me-1"></i>Connected</span>
+                                {% elif not integration_configs[integration.service_name].enabled %}
+                                    <span class="badge bg-warning text-dark ms-2">Disabled</span>
+                                {% else %}
+                                    <span class="badge bg-secondary ms-2">Optional</span>
+                                {% endif %}
+                            </h5>
+                            <small class="text-muted">{{ integration.description }}</small>
+                        </div>
                     </div>
                     <button class="btn btn-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#{{ integration.service_name }}-config">
                         <i class="fas fa-cog me-1"></i>
@@ -412,6 +424,36 @@
 {% block extra_js %}
 <script>
 
+function toggleServiceEnabled(service, enabled) {
+    fetch(`/api/toggle-service/${service}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({enabled: enabled})
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            const card = document.getElementById(`card-${service}`);
+            if (card) card.style.opacity = enabled ? '' : '0.6';
+            // Update badge
+            const badge = card?.querySelector('.badge');
+            if (badge && !enabled) {
+                badge.className = 'badge bg-warning text-dark ms-2';
+                badge.textContent = 'Disabled';
+            }
+        } else {
+            console.error('Toggle failed:', data.error);
+            // Revert checkbox
+            const cb = document.getElementById(`${service}-enabled-toggle`);
+            if (cb) cb.checked = !enabled;
+        }
+    })
+    .catch(err => {
+        console.error('Toggle error:', err);
+        const cb = document.getElementById(`${service}-enabled-toggle`);
+        if (cb) cb.checked = !enabled;
+    });
+}
 
 // Load media server and optional integrations on page load
 document.addEventListener('DOMContentLoaded', function() {

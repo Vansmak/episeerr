@@ -109,9 +109,16 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'plex_integration.webhook',
     'tautulli_integration.tautulli_webhook',
     'arvio_integration.arvio_webhook',
-    # Arvio settings sync — TV device can't hold a browser session
+    # Arvio — TV device can't hold a browser session
+    'arvio_integration.get_status',
     'arvio_integration.get_settings',
     'arvio_integration.put_settings',
+    'arvio_integration.get_watchlist',   # legacy name (kept for safety)
+    'arvio_integration.watchlist',       # actual endpoint name (GET + POST)
+    'arvio_integration.trigger_sync',
+    # Arvio settings backup/restore — new device only needs Episeerr URL to restore
+    'arvio_integration.backup_settings',
+    'arvio_integration.get_backup',
 }
 
 
@@ -367,8 +374,24 @@ def setup():
             if isinstance(config.get('config'), dict):
                 saved_values.update(config['config'])
         
+        # Check actual DB enabled flag (without the enabled=1 filter so we can
+        # show the toggle even when the service is currently disabled).
+        _is_enabled = True
+        try:
+            import sqlite3 as _sql
+            from settings_db import DB_PATH as _DB
+            _row = _sql.connect(_DB).execute(
+                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
+                (integration.service_name,)
+            ).fetchone()
+            if _row is not None:
+                _is_enabled = bool(_row[0])
+        except Exception:
+            pass
+
         integration_configs[integration.service_name] = {
             'connected': config is not None,
+            'enabled': _is_enabled,
             'url': saved_values.get('url'),
             'apikey': saved_values.get('apikey'),
             'integration': integration,
@@ -433,9 +456,9 @@ def test_connection(service):
                        integration_data.get('path') or
                        '')
             
-            # Allow test if we have url, api_key, or any other integration field (e.g. docker_host)
+            # Allow test if we have url, api_key, any other integration field, or no setup fields at all
             has_data = api_key or url or any(v for v in integration_data.values() if v)
-            if has_data:
+            if has_data or not integration.get_setup_fields():
                 success, message = integration.test_connection(url, api_key)
                 
                 if success:
@@ -676,6 +699,34 @@ def save_service_config(service):
             'status': 'error',
             'message': f'Error saving: {str(e)}'
         }), 500
+
+@app.route('/api/toggle-service/<service>', methods=['POST'])
+def toggle_service_enabled(service):
+    """Enable or disable a service without changing its config.
+    When disabled, get_service() returns None so ALL API calls for that
+    service are skipped — no polling, no dashboard stats, no retries.
+    """
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        conn = _sql.connect(_DB)
+        result = conn.execute(
+            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE service_type = ? AND name = 'default'",
+            (1 if enabled else 0, service)
+        )
+        conn.commit()
+        conn.close()
+        if result.rowcount == 0:
+            return jsonify({'ok': False, 'error': f'Service {service!r} not found in DB'}), 404
+        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
+    except Exception as exc:
+        app.logger.error("toggle_service_enabled %s: %s", service, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
 
 @app.route('/api/quick-links', methods=['GET', 'POST'])
 def manage_quick_links():

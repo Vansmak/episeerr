@@ -1,5 +1,10 @@
 # episeerr_custom — Personal Custom Build
 
+> **CRITICAL: This is episeerr_custom at `~/projects/episeerr_custom`. Never edit `episeerr_dev`. The running Docker container is `episeerr`, deployed from `/docker/media/compose`. Deploy changes with `docker cp` (not rebuild) unless dependencies changed:**
+> ```bash
+> docker cp ~/projects/episeerr_custom/integrations/arvio.py episeerr:/app/integrations/arvio.py && docker restart episeerr
+> ```
+
 This is the **permanent personal build** of Episeerr. It is never promoted to production.
 
 ## Purpose

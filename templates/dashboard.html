@@ -90,28 +90,6 @@
     </div>
   </div>
 
-  <!-- Arvio Watchlist Section (hidden until Arvio is configured) -->
-  <div class="row mb-2" id="arvio-watchlist-section" style="display: none;">
-    <div class="col-12">
-      <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
-        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom py-2" onclick="toggleArvioWatchlist()" style="cursor: pointer;">
-          <h6 class="mb-0" style="font-size:0.82rem;">
-            <i class="fas fa-mobile-alt me-2 text-info"></i>Arvio Watchlist
-            <i id="arvio-watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
-          </h6>
-          <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation();">
-            <button class="btn btn-sm btn-outline-secondary py-0" onclick="syncArvioWatchlist()" title="Sync now">
-              <i class="fas fa-sync-alt me-1"></i>Sync
-            </button>
-          </div>
-        </div>
-        <div class="card-body p-2" id="arvio-watchlist-body" style="overflow-x: hidden;">
-          <div id="arvio-watchlist-container"><!-- loaded dynamically --></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <!-- Trakt Watchlist Section (hidden until Trakt is configured) -->
   <div class="row mb-2" id="trakt-watchlist-section" style="display: none;">
     <div class="col-12">
@@ -362,7 +340,6 @@ document.addEventListener('DOMContentLoaded', function() {
         loadPlexWatchlist();
         loadJellyfinFavorites();
         loadEmbyFavorites();
-        loadArvioWatchlist();
         loadTraktWatchlist();
         // Set intervals
         statsInterval = setInterval(loadDashboardStats, 60000);
@@ -975,43 +952,6 @@ function syncPlexWatchlist() {
         .finally(() => {
             if (spinner) spinner.classList.remove('fa-spin');
         });
-}
-
-// ────────────────────────────────────────────────
-// Arvio Watchlist
-// ────────────────────────────────────────────────
-function loadArvioWatchlist() {
-    const section = document.getElementById('arvio-watchlist-section');
-    const container = document.getElementById('arvio-watchlist-container');
-    if (!section || !container) return;
-    fetch('/api/integration/arvio/watchlist')
-        .then(r => {
-            if (!r.ok) return null;
-            return r.text();
-        })
-        .then(html => {
-            if (html && html.trim()) {
-                section.style.display = '';
-                container.innerHTML = html;
-            }
-        })
-        .catch(() => {});
-}
-
-function toggleArvioWatchlist() {
-    const body = document.getElementById('arvio-watchlist-body');
-    const icon = document.getElementById('arvio-watchlist-toggle-icon');
-    if (!body) return;
-    const hidden = body.style.display === 'none';
-    body.style.display = hidden ? '' : 'none';
-    if (icon) icon.style.transform = hidden ? '' : 'rotate(-90deg)';
-}
-
-function syncArvioWatchlist() {
-    fetch('/api/integration/arvio/sync', {method: 'POST'})
-        .then(r => r.json())
-        .then(() => { setTimeout(loadArvioWatchlist, 1500); })
-        .catch(err => console.error('Arvio sync failed:', err));
 }
 
 // ────────────────────────────────────────────────
