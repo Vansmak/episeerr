@@ -178,10 +178,22 @@ def _run_maintenance():
         )
         if result.returncode == 0:
             logger.info("[Dispatcharr] Maintenance script completed successfully")
+            _notify_xadarr_iptv_refresh()
         else:
             logger.error(f"[Dispatcharr] Maintenance script failed: {result.stderr}")
     except Exception as exc:
         logger.error(f"[Dispatcharr] Maintenance script error: {exc}")
+
+
+def _notify_xadarr_iptv_refresh():
+    """Tell xadarr-server the playlist has been updated so Xadarr picks it up."""
+    import os
+    url = os.environ.get("XADARR_SERVER_URL", "http://localhost:7979")
+    try:
+        requests.post(f"{url}/notify/iptv-refresh", timeout=5)
+        logger.info("[Dispatcharr] Notified xadarr-server of IPTV refresh")
+    except Exception as exc:
+        logger.debug(f"[Dispatcharr] Could not notify xadarr-server: {exc}")
 
 # ══════════════════════════════════════════════════════════════════
 #  Widget HTML renderer
