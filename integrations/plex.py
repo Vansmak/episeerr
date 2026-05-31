@@ -2292,9 +2292,13 @@ class PlexIntegration(ServiceIntegration):
                 
                 if not plex_config or not plex_config.get('enabled'):
                     return jsonify({'success': False, 'message': 'Plex not enabled'})
-                
+
+                sync_config = integration.get_sync_config()
+                if not sync_config.get('enabled'):
+                    return jsonify({'success': False, 'message': 'Plex autosync disabled'})
+
                 api_key = plex_config.get('api_key')
-                
+
                 if not api_key:
                     return jsonify({'success': False, 'message': 'Plex not configured'})
                 

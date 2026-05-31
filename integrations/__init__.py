@@ -63,10 +63,13 @@ def discover_integrations():
                 # Blueprint support
                 if hasattr(integration, 'create_blueprint'):
                     try:
-                        blueprint = integration.create_blueprint()
-                        if blueprint:
-                            _integration_blueprints.append(blueprint)
-                            logger.info(f"  → Blueprint registered for {service_name}")
+                        result = integration.create_blueprint()
+                        blueprints = result if isinstance(result, list) else ([result] if result else [])
+                        for blueprint in blueprints:
+                            if blueprint:
+                                _integration_blueprints.append(blueprint)
+                        if blueprints:
+                            logger.info(f"  → Blueprint(s) registered for {service_name}")
                     except Exception as bp_err:
                         logger.error(f"  → Failed to create blueprint for {service_name}: {bp_err}")
             else:

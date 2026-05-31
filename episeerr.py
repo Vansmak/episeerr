@@ -1,4 +1,4 @@
-__version__ = "3.7.7"
+__version__ = "3.7.8"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -319,7 +319,22 @@ def setup():
     sonarr = get_service('sonarr', 'default')
     tautulli = get_service('tautulli', 'default')
     tmdb = get_service('tmdb', 'default')
-    
+
+    def _svc_enabled(service_type):
+        try:
+            import sqlite3 as _sql
+            from settings_db import DB_PATH as _DB
+            row = _sql.connect(_DB).execute(
+                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
+                (service_type,)
+            ).fetchone()
+            return bool(row[0]) if row is not None else True
+        except Exception:
+            return True
+
+    sonarr_enabled = _svc_enabled('sonarr')
+    tmdb_enabled   = _svc_enabled('tmdb')
+
         # NEW: Get integration configurations with guaranteed fields
     integration_configs = {}
     for integration in get_all_integrations():
@@ -367,6 +382,7 @@ def setup():
         
         integration_configs[integration.service_name] = {
             'connected': config is not None,
+            'enabled': _svc_enabled(integration.service_name),
             'url': saved_values.get('url'),
             'apikey': saved_values.get('apikey'),
             'integration': integration,
@@ -389,11 +405,13 @@ def setup():
 
     return render_template('setup.html',
         setup_complete=setup_complete,
+        sonarr_enabled=sonarr_enabled,
         sonarr_connected=sonarr is not None,
         sonarr_url=sonarr['url'] if sonarr else None,
         sonarr_apikey=sonarr['api_key'] if sonarr else None,
         sonarr_alternate_url=sonarr_config.get('alternate_url', ''),
         sonarr_open_in_iframe=sonarr_config.get('open_in_iframe', False),
+        tmdb_enabled=tmdb_enabled,
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
         integrations=get_all_integrations(),
@@ -484,6 +502,31 @@ def test_connection(service):
         return jsonify({'status': 'error', 'message': f'Connection failed: {str(e)}'}), 400
 
 # Replace save_service_config in episeerr.py with this:
+
+@app.route('/api/toggle-service/<service>', methods=['POST'])
+def toggle_service_enabled(service):
+    """Enable or disable a service without changing its config."""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        conn = _sql.connect(_DB)
+        result = conn.execute(
+            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE service_type = ? AND name = 'default'",
+            (1 if enabled else 0, service)
+        )
+        conn.commit()
+        conn.close()
+        if result.rowcount == 0:
+            return jsonify({'ok': False, 'error': f'Service {service!r} not found in DB'}), 404
+        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
+    except Exception as exc:
+        app.logger.error("toggle_service_enabled %s: %s", service, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
 
 # Replace save_service_config in episeerr.py:
 
