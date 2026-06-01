@@ -90,6 +90,28 @@
     </div>
   </div>
 
+  <!-- Trakt Watchlist Section (hidden until Trakt is configured) -->
+  <div class="row mb-2" id="trakt-watchlist-section" style="display: none;">
+    <div class="col-12">
+      <div class="card border-0 shadow-lg" style="overflow-x: hidden;">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom py-2" onclick="toggleTraktWatchlist()" style="cursor: pointer;">
+          <h6 class="mb-0" style="font-size:0.82rem;">
+            <i class="fas fa-star me-2 text-warning"></i>Trakt Watchlist
+            <i id="trakt-watchlist-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em;"></i>
+          </h6>
+          <div class="d-flex align-items-center gap-2" onclick="event.stopPropagation();">
+            <button class="btn btn-sm btn-outline-secondary py-0" onclick="syncTraktWatchlist()" title="Sync now">
+              <i class="fas fa-sync-alt me-1"></i>Sync
+            </button>
+          </div>
+        </div>
+        <div class="card-body p-2" id="trakt-watchlist-body" style="overflow-x: hidden;">
+          <div id="trakt-watchlist-container"><!-- loaded dynamically --></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Full-Width Calendar + Activity Integration -->
   <div class="row mb-2">
     <div class="col-12">
@@ -316,6 +338,7 @@ document.addEventListener('DOMContentLoaded', function() {
         loadActivitySlim();
         loadIntegrationWidgets();
         loadPlexWatchlist();
+        loadTraktWatchlist();
         loadJellyfinFavorites();
         loadEmbyFavorites();
         // Set intervals
@@ -944,6 +967,40 @@ function getTimeAgo(date) {
     if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
     if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
     return Math.floor(seconds / 86400) + 'd ago';
+}
+
+// ────────────────────────────────────────────────
+// Trakt Watchlist
+// ────────────────────────────────────────────────
+function loadTraktWatchlist() {
+    const section = document.getElementById('trakt-watchlist-section');
+    const container = document.getElementById('trakt-watchlist-container');
+    if (!section || !container) return;
+    fetch('/api/integration/trakt/watchlist-html')
+        .then(r => { if (!r.ok) return null; return r.text(); })
+        .then(html => {
+            if (html && html.trim()) {
+                section.style.display = '';
+                container.innerHTML = html;
+            }
+        })
+        .catch(() => {});
+}
+
+function toggleTraktWatchlist() {
+    const body = document.getElementById('trakt-watchlist-body');
+    const icon = document.getElementById('trakt-watchlist-toggle-icon');
+    if (!body) return;
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? '' : 'none';
+    if (icon) icon.style.transform = hidden ? '' : 'rotate(-90deg)';
+}
+
+function syncTraktWatchlist() {
+    fetch('/api/integration/trakt/sync', {method: 'POST'})
+        .then(r => r.json())
+        .then(() => { setTimeout(loadTraktWatchlist, 1500); })
+        .catch(err => console.error('Trakt sync failed:', err));
 }
 
 // Cleanup intervals
