@@ -1,4 +1,30 @@
 # Changelog
+
+## v3.7.7
+
+### ✨ Trakt Integration
+
+Episeerr can now sync your Trakt watchlist to Sonarr/Radarr.
+
+- **OAuth device code flow** — no browser redirect needed; generate a code in setup, approve it on Trakt.tv, poll confirms and saves tokens automatically
+- **Watchlist sync**: fetches shows and movies from Trakt watchlist and adds them to Sonarr/Radarr using the same rule-assignment logic as other integrations
+- **Dashboard widget** — poster card strip on the dashboard showing your Trakt watchlist with Sonarr/Radarr status badges; click a card to remove it from Trakt
+- **Token auto-refresh** — access token silently refreshed on expiry using the stored refresh token; no re-auth needed
+
+### ✨ Service Enable/Disable Toggle
+
+Integration cards on the setup page now have an enable/disable toggle that persists without clearing configuration.
+
+- Toggle fires `POST /api/toggle-service/<service>` with `{"enabled": true/false}` and updates the `services` DB row without touching any other config fields
+- `get_service()` already filters `WHERE enabled = 1`, so disabled services are automatically excluded from all polling, cleanup, and webhook dispatch
+
+### 🐛 Bug Fixes
+
+- **Grace period cleanup ignored global dry-run mode** — `delete_episodes_in_sonarr_with_logging` only checked the rule-level `dry_run` flag; the global `dry_run_mode` setting was not consulted. Fixed by loading `global_settings` and ORing both flags — if either is true the deletion is queued for approval rather than executed live. (`media_processor.py`)
+- **`parse_date_fixed` date parsing failures on non-standard Sonarr timestamps** — added a multi-method parser that handles UTC `Z` suffix, fractional seconds (stripping milliseconds before re-parsing), and timezone-naive ISO strings. Prevents cleanup runs from silently skipping files with timestamps Sonarr emits in edge cases (e.g. items added during DST transitions). (`media_processor.py`)
+
+---
+
 ## v3.7.6
 fixed movie rule edit delete navigation
 ## v3.7.5

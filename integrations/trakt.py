@@ -565,7 +565,7 @@ class TraktIntegration(ServiceIntegration):
             })
         return results
 
-    # ── Sonarr / Radarr helpers (same pattern as arvio.py) ────────
+    # ── Sonarr / Radarr helpers ───────────────────────────────────
 
     def _check_sonarr(self, tmdb_id) -> Optional[dict]:
         try:

@@ -473,9 +473,9 @@ docker logs episeerr | grep "Received Sonarr webhook"
 
 ### 2. Plex Webhook (For Viewing Automation — Plex Pass required)
 
-**Enables:** Next episode ready when you watch, dashboard "Now Playing" widget
+**Enables:** Next episode ready when you watch, dashboard "Now Playing" widget, real-time movie watch detection
 
-Episeerr now integrates with Plex **directly** — no Tautulli required for episode detection.
+Episeerr now integrates with Plex **directly** — no Tautulli required for episode detection. The `media.scrobble` and `media.stop` events cover both TV episodes and movies — no additional Plex configuration needed for movie support.
 
 > **⚠️ Plex OR Tautulli for episode detection — not both.**
 > Configure one webhook source per setup. Using both can cause double-processing.
@@ -537,16 +537,20 @@ docker logs episeerr | grep "\[Plex webhook\]"
    ```json
    {
      "plex_title": "{show_name}",
+     "plex_movie_title": "{title}",
      "plex_season_num": "{season_num}",
      "plex_ep_num": "{episode_num}",
      "thetvdb_id": "{thetvdb_id}",
      "themoviedb_id": "{themoviedb_id}",
+     "media_type": "{media_type}",
      "notification_type": "{notification_type}"
    }
    ```
 4. **Save**
 
-> **Legacy URL:** `/webhook` still works if you have an existing Tautulli setup — no changes needed.
+> **`media_type` is required for movie support.** Without it, Episeerr falls back to detecting movies by the absence of season/episode numbers, which works in most cases but `media_type` is the explicit, reliable signal.
+>
+> **Legacy URL:** `/webhook` still works if you have an existing Tautulli setup — just add `"media_type": "{media_type}"` to your existing template.
 
 **Optional: Playback Start activation (for `+` modifier rules)**
 
@@ -561,10 +565,12 @@ If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold 
    ```json
    {
      "plex_title": "{show_name}",
+     "plex_movie_title": "{title}",
      "plex_season_num": "{season_num}",
      "plex_ep_num": "{episode_num}",
      "thetvdb_id": "{thetvdb_id}",
      "themoviedb_id": "{themoviedb_id}",
+     "media_type": "{media_type}",
      "notification_type": "{notification_type}"
    }
    ```
@@ -609,7 +615,7 @@ Jellyfin sends a webhook on every progress update. Episeerr fires once when prog
    - **Webhook URL:** `http://your-episeerr:5002/api/integration/jellyfin/webhook`
    - **Notification Type:** Select ONLY **"Playback Progress"**
    - **User Filter:** Your username (recommended)
-   - **Item Type:** Episodes
+   - **Item Type:** ✅ Episodes **AND** ✅ Movies — without Movies checked, movie watch dates are not recorded in real-time
    - **Send All Properties:** ✅ Enabled
 3. **Save**
 
@@ -641,9 +647,9 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
 2. **Configure:**
    - **Webhook URL:** `http://your-episeerr:5002/api/integration/jellyfin/webhook`
-   - **Notification Type:** Select **"Session Start"**
+   - **Notification Type:** Select **"Session Start"** and **"Playback Stop"**
    - **User Filter:** Your username
-   - **Item Type:** Episodes
+   - **Item Type:** ✅ Episodes **AND** ✅ Movies — without Movies checked, movie watch dates are not recorded in real-time
 
 **Environment Variables (if not using Setup Page):**
 ```yaml
@@ -706,8 +712,10 @@ Emby doesn't send continuous progress webhooks like Jellyfin's PlaybackProgress,
    - **Webhook Name:** Episeerr Episode Tracking
    - **Webhook URL:** `http://your-episeerr:5002/api/integration/emby/webhook`
    - **Events:** Enable **"playback.start"** and **"playback.stop"**
-   - *(No item type filter in Emby — it sends all events; Episeerr filters to Episodes internally)*
+   - *(Emby sends all media types; Episeerr routes Episodes to series rules and Movies to movie cleanup rules automatically)*
 3. **Save**
+
+> **Movie support:** Emby's `playback.stop` events include `Item.Type` for both episodes and movies. Episeerr records movie watch timestamps on stop, which the cleanup scheduler uses for grace period logic. No additional configuration needed beyond ensuring `playback.stop` is enabled.
 
 > **Note:** The webhook is configured per-user in Emby, not server-wide like Jellyfin's plugin. Make sure you're configuring it for the user account that watches content.
 
