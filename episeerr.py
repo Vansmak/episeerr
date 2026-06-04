@@ -5524,11 +5524,69 @@ def api_assign_pending_rule():
             target_rule['series'][series_id_str] = {'activity_date': None}
         save_config(config)
 
-        # Sync Sonarr tag
+        # Sync rule tag + remove episeerr_select tag
         try:
             episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
         except Exception as e:
             app.logger.warning(f"Tag sync failed for series {series_id}: {e}")
+
+        try:
+            sonarr_cfg = get_sonarr_config()
+            s_url = normalize_url(sonarr_cfg.get('url', ''))
+            s_key = sonarr_cfg.get('api_key', '')
+            s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
+
+            # Remove episeerr_select tag
+            tag_resp = http.get(f"{s_url}/api/v3/tag", headers=s_headers)
+            if tag_resp.ok:
+                tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
+                select_id = tag_map.get('episeerr_select')
+                if select_id:
+                    sr = http.get(f"{s_url}/api/v3/series/{series_id}", headers=s_headers)
+                    if sr.ok:
+                        sd = sr.json()
+                        tags = [t for t in sd.get('tags', []) if t != select_id]
+                        sd['tags'] = tags
+                        http.put(f"{s_url}/api/v3/series", headers=s_headers, json=sd)
+
+            # Monitor episodes per rule then search
+            rule_cfg = config['rules'][rule_name]
+            get_type     = rule_cfg.get('get_type', 'episodes')
+            get_count    = rule_cfg.get('get_count', 1)
+            action       = rule_cfg.get('action_option', 'monitor')
+            always_have  = rule_cfg.get('always_have', '')
+
+            if always_have:
+                try:
+                    import media_processor as _mp
+                    _mp.process_always_have(int(series_id), always_have)
+                except Exception as e:
+                    app.logger.error(f"always_have failed: {e}")
+
+            eps_resp = http.get(f"{s_url}/api/v3/episode?seriesId={series_id}", headers=s_headers)
+            if eps_resp.ok:
+                all_eps = eps_resp.json()
+                s1_eps  = sorted([e for e in all_eps if e.get('seasonNumber') == 1],
+                                 key=lambda x: x.get('episodeNumber', 0))
+                if get_type == 'all':
+                    to_monitor = [e['id'] for e in all_eps if e.get('seasonNumber', 0) >= 1]
+                elif get_type == 'seasons':
+                    n = get_count or 1
+                    to_monitor = [e['id'] for e in all_eps if 1 <= e.get('seasonNumber', 0) < 1 + n]
+                else:
+                    n = get_count or 1
+                    to_monitor = [e['id'] for e in s1_eps[:n]]
+
+                if to_monitor:
+                    http.put(f"{s_url}/api/v3/episode/monitor", headers=s_headers,
+                             json={"episodeIds": to_monitor, "monitored": True})
+                    app.logger.info(f"[API] Monitored {len(to_monitor)} eps for series {series_id}")
+                    if action == 'search':
+                        http.post(f"{s_url}/api/v3/command", headers=s_headers,
+                                  json={"name": "EpisodeSearch", "episodeIds": to_monitor})
+                        app.logger.info(f"[API] Triggered search for series {series_id}")
+        except Exception as e:
+            app.logger.error(f"Rule execution failed for series {series_id}: {e}", exc_info=True)
 
         # Delete pending request
         if request_id:
