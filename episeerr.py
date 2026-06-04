@@ -123,6 +123,7 @@ _AUTH_EXEMPT_ENDPOINTS = {
     # TV app rule picker JSON endpoints
     'api_assign_pending_rule',
     'get_pending_requests',
+    'get_managed_series',
 }
 
 
@@ -5395,6 +5396,61 @@ def get_tmdb_season(tmdb_id, season_number):
     except Exception as e:
         app.logger.error(f"Error getting TMDB season data: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+@app.route('/api/managed-series')
+def get_managed_series():
+    """
+    Return all series managed by Episeerr rules, keyed by TMDB ID.
+    Used by xadarr-server web UI and TV app for rule badges.
+    Response: [{tmdbId, sonarrId, title, rule}]
+    Requires Sonarr to look up TMDB IDs from Sonarr series IDs.
+    """
+    try:
+        config = load_config()
+        rules = config.get('rules', {})
+
+        # Build sonarr_id → rule_name map from config
+        sonarr_to_rule = {}
+        for rule_name, rule_data in rules.items():
+            for sid in rule_data.get('series', {}):
+                sonarr_to_rule[str(sid)] = rule_name
+
+        if not sonarr_to_rule:
+            return jsonify([])
+
+        sonarr_cfg = get_sonarr_config()
+        if not sonarr_cfg:
+            return jsonify([])
+
+        from episeerr_utils import http as _http, normalize_url
+        s_url = normalize_url(sonarr_cfg.get('url', ''))
+        s_key = sonarr_cfg.get('api_key', '')
+        headers = {'X-Api-Key': s_key}
+
+        r = _http.get(f"{s_url}/api/v3/series", headers=headers, timeout=10)
+        if not r.ok:
+            return jsonify([])
+
+        all_series = r.json()
+        result = []
+        for s in all_series:
+            sid = str(s.get('id', ''))
+            if sid not in sonarr_to_rule:
+                continue
+            tmdb_id = s.get('tmdbId') or s.get('tvdbId')
+            result.append({
+                'sonarrId': s.get('id'),
+                'tmdbId':   s.get('tmdbId'),
+                'tvdbId':   s.get('tvdbId'),
+                'title':    s.get('title', ''),
+                'rule':     sonarr_to_rule[sid],
+            })
+
+        return jsonify(result)
+    except Exception as e:
+        app.logger.error(f"Error in /api/managed-series: {e}")
+        return jsonify([])
+
 
 @app.route('/api/pending-requests')
 def get_pending_requests():
