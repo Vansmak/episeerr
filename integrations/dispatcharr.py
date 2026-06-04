@@ -162,26 +162,6 @@ def _get_saved_config() -> Optional[Dict]:
     except Exception as exc:
         logger.warning(f"[Dispatcharr] config load failed: {exc}")
         return None
-def _run_maintenance():
-    """Run Dispatcharr maintenance SQL after M3U refresh."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            [
-                "docker", "exec", "-i", "dispatcharr",
-                "psql", "-U", "postgres", "-d", "dispatcharr"
-            ],
-            input=open("/home/joe/config/dispatcharr/scripts/maintenance.sql").read(),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if result.returncode == 0:
-            logger.info("[Dispatcharr] Maintenance script completed successfully")
-        else:
-            logger.error(f"[Dispatcharr] Maintenance script failed: {result.stderr}")
-    except Exception as exc:
-        logger.error(f"[Dispatcharr] Maintenance script error: {exc}")
 
 # ══════════════════════════════════════════════════════════════════
 #  Widget HTML renderer
@@ -436,7 +416,7 @@ class DispatcharrIntegration(ServiceIntegration):
         headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
         base    = url.rstrip("/")
 
-        events_to_subscribe = ["channel_start", "channel_stop", "m3u_refreshed"]
+        events_to_subscribe = ["channel_start", "channel_stop"]
 
         try:
             integration_id = existing_id
@@ -592,13 +572,6 @@ class DispatcharrIntegration(ServiceIntegration):
                 name = (removed or {}).get("channel_name", cid)
                 logger.info(f"[Dispatcharr] Stream stopped: {name!r} ({cid})")
 
-            elif event in ("m3u_refresh", "m3u_refreshed"):
-                logger.info("[Dispatcharr] M3U refreshed — running maintenance script")
-                threading.Thread(
-                    target=_run_maintenance,
-                    daemon=True,
-                    name="dispatcharr-maintenance"
-                ).start()
             else:
                 logger.debug(f"[Dispatcharr] Ignored unhandled event: {event!r}")
 

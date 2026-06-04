@@ -2043,6 +2043,11 @@ class PlexIntegration(ServiceIntegration):
                         if tmdb_id:
                             logger.info(f"[Plex] Movie watched: {title} at {progress}% >= {threshold}% ({user})")
                             integration.mark_item_watched(tmdb_id, 'movie')
+                            try:
+                                from movie_processor import record_movie_watched
+                                record_movie_watched(tmdb_id, title, user)
+                            except Exception as _e:
+                                logger.debug(f"[Plex] record_movie_watched error: {_e}")
                         else:
                             logger.debug(f"[Plex] Movie stop — no TMDB ID in metadata for '{title}'")
                     else:
@@ -2067,6 +2072,11 @@ class PlexIntegration(ServiceIntegration):
                     if tmdb_id:
                         logger.info(f"[Plex] Movie scrobble: {title} ({user})")
                         integration.mark_item_watched(tmdb_id, 'movie')
+                        try:
+                            from movie_processor import record_movie_watched
+                            record_movie_watched(tmdb_id, title, user)
+                        except Exception as _e:
+                            logger.debug(f"[Plex] record_movie_watched error: {_e}")
                     else:
                         logger.debug(f"[Plex] Movie scrobble — no TMDB ID in metadata for '{title}'")
 
