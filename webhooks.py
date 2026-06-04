@@ -44,6 +44,9 @@ def process_sonarr_webhook():
         if event_type == 'Grab':
             return handle_episode_grab(json_data)
 
+        if event_type == 'Download':
+            return handle_episode_download(json_data)
+
         series = json_data.get('series', {})
         series_id = series.get('id')
         tvdb_id = series.get('tvdbId')
@@ -321,6 +324,17 @@ def process_sonarr_webhook():
             current_app.logger.info(f"✓ Created episode selection request for {series_title}")
 
             try:
+                from integrations.xadarr import fire_xadarr_webhook
+                fire_xadarr_webhook("watchlist.requested", {
+                    "title":   series_title,
+                    "tmdb_id": tmdb_id,
+                    "tvdb_id": tvdb_id,
+                    "media_type": "show",
+                })
+            except Exception as e:
+                current_app.logger.debug(f"[Xadarr] watchlist.requested webhook skipped: {e}")
+
+            try:
                 from notifications import send_notification
                 send_notification(
                     "selection_pending",
@@ -365,6 +379,18 @@ def process_sonarr_webhook():
                 current_app.logger.info(f"Synced tag episeerr_{assigned_rule}")
             except Exception as e:
                 current_app.logger.error(f"Tag sync failed: {e}")
+
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("rule.assigned", {
+                "title":      series_title,
+                "tmdb_id":    tmdb_id,
+                "tvdb_id":    tvdb_id,
+                "rule":       assigned_rule,
+                "media_type": "show",
+            })
+        except Exception as e:
+            current_app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
 
         # Execute rule logic
         try:
@@ -662,12 +688,63 @@ def handle_episode_grab(json_data):
         except Exception as e:
             current_app.logger.error(f"Error deleting notification: {e}")
 
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("episode.grabbed", {
+                "title":         series_title,
+                "episode_title": episode_info.get("title", ""),
+                "season":        season_num,
+                "episode":       episode_num,
+                "media_type":    "show",
+            })
+        except Exception as e:
+            current_app.logger.debug(f"[Xadarr] episode.grabbed webhook skipped: {e}")
+
         return jsonify({"status": "success", "message": "Grab processed"}), 200
 
     except Exception as e:
         current_app.logger.error(f"Error handling grab webhook: {str(e)}")
         import traceback
         current_app.logger.error(f"Traceback: {traceback.format_exc()}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# ============================================================================
+# DOWNLOAD HANDLER (episode imported/ready)
+# ============================================================================
+
+def handle_episode_download(json_data):
+    """Handle Sonarr Download event (episode file imported — episode is now ready)."""
+    try:
+        series = json_data.get('series', {})
+        series_title = series.get('title', 'Unknown')
+        episodes = json_data.get('episodes', [])
+
+        if not episodes:
+            return jsonify({"status": "success", "message": "No episodes in download event"}), 200
+
+        episode_info = episodes[0]
+        season_num = episode_info.get('seasonNumber')
+        episode_num = episode_info.get('episodeNumber')
+
+        current_app.logger.info(f"✅ Episode ready: {series_title} S{season_num}E{episode_num}")
+
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("episode.ready", {
+                "title":         series_title,
+                "episode_title": episode_info.get("title", ""),
+                "season":        season_num,
+                "episode":       episode_num,
+                "media_type":    "show",
+            })
+        except Exception as e:
+            current_app.logger.debug(f"[Xadarr] episode.ready webhook skipped: {e}")
+
+        return jsonify({"status": "success", "message": "Download event processed"}), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Error handling download webhook: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

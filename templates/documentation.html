@@ -1214,21 +1214,38 @@
         </div>
         <div class="card-body">
             <h5>Supported Services:</h5>
+            <div class="alert alert-warning py-2 px-3 mb-3" style="font-size:12px;">
+                <strong><i class="fas fa-film me-1"></i>Movie watch detection requires webhook config:</strong>
+                Tautulli — add <code>media_type</code> to template &nbsp;|&nbsp;
+                Jellyfin/Emby — check <strong>Movies</strong> under Item Type &nbsp;|&nbsp;
+                Plex — <code>media.scrobble</code> covers both automatically
+            </div>
             <div class="row">
                 <div class="col-md-4">
                 <h6><i class="fas fa-chart-bar text-primary me-2"></i>Tautulli <small class="text-muted">(Plex Option A)</small></h6>
                 <p>Tracks viewing activity in Plex — handles TV shows and movies</p>
                 <pre class="bg-dark text-light p-2"><code>Webhook URL:
-            http://your-server:5002/webhook
+            http://your-server:5002/api/integration/tautulli/webhook
 
             Trigger: Watched
             (set % threshold in Tautulli
             Settings → General)</code></pre>
-                <p class="small text-muted mb-0">TV → rule automation &nbsp;|&nbsp; Movies → watchlist status</p>
+                <p class="small mb-1">JSON template (required fields):</p>
+                <pre class="bg-dark text-light p-2" style="font-size:10px;"><code>{
+  "plex_title": "{show_name}",
+  "plex_movie_title": "{title}",
+  "plex_season_num": "{season_num}",
+  "plex_ep_num": "{episode_num}",
+  "thetvdb_id": "{thetvdb_id}",
+  "themoviedb_id": "{themoviedb_id}",
+  "media_type": "{media_type}",
+  "notification_type": "{notification_type}"
+}</code></pre>
+                <p class="small text-warning mb-0"><i class="fas fa-exclamation-triangle me-1"></i><code>media_type</code> required for movie support</p>
             </div>
             <div class="col-md-4">
                 <h6><i class="fab fa-plex text-warning me-2"></i>Plex Native Webhook <small class="text-muted">(Option B)</small></h6>
-                <p>Direct Plex webhook — no Tautulli needed. Handles TV shows and movies.</p>
+                <p>Direct Plex webhook — no Tautulli needed. Handles TV episodes and movies via <code>media.scrobble</code> / <code>media.stop</code>.</p>
                 <pre class="bg-dark text-light p-2"><code>Configure in:
             Integrations → Plex
             → Watch Detection
@@ -1236,6 +1253,7 @@
             Modes: Scrobble |
             Stop+Threshold |
             Polling</code></pre>
+                <p class="small text-success mb-0"><i class="fas fa-check-circle me-1"></i>Movies covered automatically — no extra config</p>
                 <p class="small text-muted mb-0">Choose one: Tautulli <strong>or</strong> Plex native — not both</p>
             </div>
 
@@ -1250,12 +1268,24 @@
             Polling: Playback Start + Stop
             Progress: Playback Progress
 
-            Required Header:
-            Content-Type: application/json</code></pre>
-                <p class="small text-muted mb-0">Set detection method in Integrations → Jellyfin</p>
+            Item Type: ✅ Episodes
+                       ✅ Movies</code></pre>
+                <p class="small text-warning mb-0"><i class="fas fa-exclamation-triangle me-1"></i>Must check Movies under Item Type for real-time movie watch dates</p>
+                <p class="small text-muted mb-0 mt-1">Set detection method in Integrations → Jellyfin</p>
             </div>
 
-            <div class="col-md-4">
+            <div class="col-md-4 mt-3">
+                <h6><i class="fas fa-server text-info me-2"></i>Emby</h6>
+                <p class="small">Polling only — Emby does not support PlaybackProgress webhooks.</p>
+                <pre class="bg-dark text-light p-2"><code>Webhook URL:
+            http://your-server:5002/api/integration/emby/webhook
+
+            Events: playback.start
+                    playback.stop</code></pre>
+                <p class="small text-success mb-0"><i class="fas fa-check-circle me-1"></i>Movies detected on playback.stop — no extra config</p>
+            </div>
+
+            <div class="col-md-4 mt-3">
                 <h6><i class="fas fa-tv text-warning me-2"></i>Sonarr</h6>
                 <p>Detects new series additions</p>
                 <pre class="bg-dark text-light p-2"><code>Webhook URL:

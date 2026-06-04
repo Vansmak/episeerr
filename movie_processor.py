@@ -242,10 +242,49 @@ def _build_tautulli_watch_cache():
     return cache
 
 
+MOVIE_WATCH_EVENTS_FILE = os.path.join(os.getcwd(), 'data', 'movie_watch_events.json')
+
+
+def record_movie_watched(tmdb_id: str, title: str, user: str = 'Unknown') -> None:
+    """Record a real-time webhook movie watch event to persistent cache.
+
+    Called by Jellyfin/Emby/Plex/Tautulli webhook handlers on movie PlaybackStop
+    or scrobble. build_movie_watch_cache() reads this file so the cleanup
+    scheduler picks up the event without waiting for the next full library scan.
+    """
+    ts = int(time.time())
+    try:
+        os.makedirs(os.path.dirname(MOVIE_WATCH_EVENTS_FILE), exist_ok=True)
+        events: dict = {}
+        if os.path.exists(MOVIE_WATCH_EVENTS_FILE):
+            with open(MOVIE_WATCH_EVENTS_FILE, 'r') as f:
+                events = json.load(f)
+        if int(events.get(str(tmdb_id), 0)) < ts:
+            events[str(tmdb_id)] = ts
+        with open(MOVIE_WATCH_EVENTS_FILE, 'w') as f:
+            json.dump(events, f)
+        logger.info(f"[movie] Recorded watch: '{title}' (tmdb={tmdb_id}) by {user}")
+    except Exception as e:
+        logger.warning(f"[movie] record_movie_watched error: {e}")
+
+
+def _build_webhook_watch_cache() -> dict:
+    """Load real-time webhook-recorded watch events from data/movie_watch_events.json."""
+    if not os.path.exists(MOVIE_WATCH_EVENTS_FILE):
+        return {}
+    try:
+        with open(MOVIE_WATCH_EVENTS_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.warning(f"[movie] webhook watch cache load error: {e}")
+        return {}
+
+
 def build_movie_watch_cache():
     """
     Build unified watch cache. Returns (tmdb_cache, title_cache, sources).
-    Priority: Plex → Jellyfin → Emby → Tautulli (title fallback).
+    Priority: Webhook events → Plex → Jellyfin → Emby → Tautulli (title fallback).
+    Webhook events come first so real-time watch detection beats polling.
     """
     tmdb_cache = {}
     title_cache = {}
@@ -266,6 +305,14 @@ def build_movie_watch_cache():
     title_cache = _build_tautulli_watch_cache()
     if title_cache:
         sources.append('Tautulli')
+
+    # Merge webhook-recorded events last — they always win (most recent timestamp)
+    webhook_cache = _build_webhook_watch_cache()
+    if webhook_cache:
+        for k, v in webhook_cache.items():
+            if int(v) > tmdb_cache.get(k, 0):
+                tmdb_cache[k] = int(v)
+        sources.append('Webhook')
 
     logger.info(
         f"Movie watch cache: {', '.join(sources) or 'none'} — "

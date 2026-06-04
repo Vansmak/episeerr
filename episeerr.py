@@ -116,9 +116,13 @@ _AUTH_EXEMPT_ENDPOINTS = {
     'xadarr_integration.get_watchlist',   # legacy name (kept for safety)
     'xadarr_integration.watchlist',       # actual endpoint name (GET + POST)
     'xadarr_integration.trigger_sync',
+    'xadarr_integration.get_pending',     # TV app rule picker
     # Xadarr settings backup/restore — new device only needs Episeerr URL to restore
     'xadarr_integration.backup_settings',
     'xadarr_integration.get_backup',
+    # TV app rule picker JSON endpoints
+    'api_assign_pending_rule',
+    'get_pending_requests',
 }
 
 
@@ -5423,6 +5427,75 @@ def delete_request(request_id):
     except Exception as e:
         app.logger.error(f"Error deleting request {request_id}: {str(e)}")
         return jsonify({"status": "error", "message": "Failed to delete request"}), 500
+
+
+@app.route('/api/assign-pending-rule', methods=['POST'])
+def api_assign_pending_rule():
+    """
+    JSON endpoint for assigning a rule to a pending series.
+    Used by the Xadarr Android TV app's native rule picker.
+    Body: {"tmdb_id": "...", "rule_name": "..."}
+    On success: clears the pending request, fires rule processing.
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        tmdb_id = str(data.get('tmdb_id', '')).strip()
+        rule_name = str(data.get('rule_name', '')).strip()
+
+        if not tmdb_id or not rule_name:
+            return jsonify({"success": False, "error": "tmdb_id and rule_name required"}), 400
+
+        config = load_config()
+        if rule_name not in config.get('rules', {}):
+            return jsonify({"success": False, "error": f"Unknown rule: {rule_name}"}), 400
+
+        request_data = find_pending_request_by_tmdb(tmdb_id)
+        if not request_data:
+            return jsonify({"success": False, "error": "No pending request found for this series"}), 404
+
+        series_id = request_data.get('series_id')
+        series_title = request_data.get('title', '')
+        request_id = request_data.get('id')
+
+        if not series_id:
+            return jsonify({"success": False, "error": "Pending request has no series_id"}), 400
+
+        # Add to rule config
+        series_id_str = str(series_id)
+        target_rule = config['rules'][rule_name]
+        target_rule.setdefault('series', {})
+        if series_id_str not in target_rule['series']:
+            target_rule['series'][series_id_str] = {'activity_date': None}
+        save_config(config)
+
+        # Sync Sonarr tag
+        try:
+            episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
+        except Exception as e:
+            app.logger.warning(f"Tag sync failed for series {series_id}: {e}")
+
+        # Delete pending request
+        if request_id:
+            delete_pending_request(request_id)
+
+        # Fire xadarr webhook
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("rule.assigned", {
+                "title":      series_title,
+                "tmdb_id":    tmdb_id,
+                "rule":       rule_name,
+                "media_type": "show",
+            })
+        except Exception as e:
+            app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
+
+        app.logger.info(f"[API] Assigned rule '{rule_name}' to '{series_title}' (series_id={series_id})")
+        return jsonify({"success": True, "rule": rule_name, "title": series_title})
+
+    except Exception as e:
+        app.logger.error(f"Error in assign-pending-rule: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 # ============================================================================

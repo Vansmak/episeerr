@@ -9,6 +9,7 @@ Sync API (prefix: /api/integration/xadarr):
     GET  /settings    ← Xadarr pulls its full settings blob on new-device setup
     PUT  /settings    ← Xadarr pushes its settings blob (profile sync, addons, etc.)
     POST /webhook     ← Xadarr posts playback events (start/pause/stop/progress)
+    GET  /pending     ← Returns series currently in episeerr_select state
 
 Dashboard API (also under /api/integration/xadarr):
     GET/DELETE /history              ← playback event log
@@ -22,6 +23,13 @@ Dashboard UI (prefix: /xadarr):
 Data files:
     data/xadarr_settings.json        ← settings blob synced from TV app
     data/xadarr_history.json         ← playback event log (last 500)
+
+Outbound webhooks (fires to xadarr-server):
+    episode.grabbed   — Sonarr grabbed an episode for download
+    episode.ready     — Sonarr imported a downloaded episode
+    rule.triggered    — Episeerr ran a rule (media_processor)
+    rule.assigned     — User assigned a rule to a pending series
+    watchlist.requested — Series added to pending/selection queue
 """
 
 import os
@@ -36,6 +44,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, send_from_directory, Response, stream_with_context
 from integrations.base import ServiceIntegration
+from episeerr_utils import http as _http
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +64,40 @@ _processed_lock = threading.Lock()
 _COMPLETION_THRESHOLD_DEFAULT = 85  # fallback if service config is missing
 _STATIC_DIR = os.path.join(os.path.dirname(__file__), "xadarr_static")
 _LOCK = threading.Lock()
+
+# ── Outbound xadarr-server webhooks ───────────────────────────────────────────
+
+def _get_xadarr_server_url() -> Optional[str]:
+    """Return the configured xadarr-server base URL, or None if not set."""
+    try:
+        from settings_db import get_service
+        svc = get_service('xadarr', 'default')
+        if svc and svc.get('url'):
+            return svc['url'].rstrip('/')
+    except Exception as exc:
+        logger.debug(f"[Xadarr] Could not read server URL: {exc}")
+    return None
+
+
+def fire_xadarr_webhook(event: str, payload: dict) -> None:
+    """POST an event to xadarr-server's inbound webhook in a background thread."""
+    server_url = _get_xadarr_server_url()
+    if not server_url:
+        return
+
+    def _post():
+        try:
+            body = {"event": event, **payload}
+            _http.post(
+                f"{server_url}/api/integration/xadarr/webhook",
+                json=body,
+                timeout=5,
+            )
+            logger.debug(f"[Xadarr] Fired webhook {event} to {server_url}")
+        except Exception as exc:
+            logger.debug(f"[Xadarr] Webhook {event} failed: {exc}")
+
+    threading.Thread(target=_post, daemon=True).start()
 
 # ── SSE player-state broadcast ────────────────────────────────────────────────
 
@@ -302,6 +345,51 @@ class XadarrIntegration(ServiceIntegration):
                 "xadarr_profiles": profiles,
                 "settings_present": settings is not None,
             }), 200
+
+        # ── GET /pending ──────────────────────────────────────────────────────────
+        @bp.route("/pending", methods=["GET"])
+        def get_pending():
+            """
+            Return series currently awaiting rule selection (episeerr_select state).
+            Used by xadarr-server to show pending badges and by the TV app rule picker.
+            """
+            try:
+                from settings_db import get_all_pending_requests
+                rows = get_all_pending_requests()
+            except Exception as exc:
+                logger.error(f"[Xadarr] /pending DB error: {exc}")
+                return jsonify([]), 200
+
+            items = []
+            for row in rows:
+                tmdb_id = row.get("tmdb_id")
+                poster = None
+                if tmdb_id:
+                    try:
+                        from settings_db import get_service
+                        tmdb_svc = get_service("tmdb", "default")
+                        if tmdb_svc and tmdb_svc.get("api_key"):
+                            r = _http.get(
+                                f"https://api.themoviedb.org/3/tv/{tmdb_id}",
+                                params={"api_key": tmdb_svc["api_key"]},
+                                timeout=5,
+                            )
+                            if r.ok and r.json().get("poster_path"):
+                                poster = "https://image.tmdb.org/t/p/w342" + r.json()["poster_path"]
+                    except Exception:
+                        pass
+
+                items.append({
+                    "id":       row.get("id"),
+                    "seriesId": row.get("series_id"),
+                    "title":    row.get("title", ""),
+                    "tmdbId":   tmdb_id,
+                    "tvdbId":   row.get("tvdb_id"),
+                    "poster":   poster,
+                    "createdAt": row.get("created_at"),
+                })
+
+            return jsonify(items), 200
 
         # ── GET /settings ─────────────────────────────────────────────────────
         @bp.route("/settings", methods=["GET"])
