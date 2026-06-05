@@ -52,22 +52,32 @@ def process_watch_event(data: dict) -> dict:
         thetvdb_id     = data.get('thetvdb_id')
         themoviedb_id  = data.get('themoviedb_id')
 
-        # Movie detection: no season/episode numbers = movie watch event
+        # Movie detection: explicit media_type field (v3.8+) or absent season/episode
         # Tautulli sends "0" for movies (not empty), so treat 0/"0" as absent
         def _absent(val):
             return not val or str(val).strip() in ('0', '')
 
-        if _absent(season_number) and _absent(episode_number):
+        media_type_field = (data.get('media_type') or '').strip().lower()
+        is_movie = (media_type_field == 'movie') or (_absent(season_number) and _absent(episode_number))
+
+        if is_movie:
             logger.info(f"[Tautulli] Movie watched: '{series_title}' (tmdb={themoviedb_id or 'unknown'})")
             if themoviedb_id:
                 try:
+                    from movie_processor import record_movie_watched
+                    record_movie_watched(str(themoviedb_id), series_title)
+                except Exception as e:
+                    logger.warning(f"[Tautulli] record_movie_watched error: {e}")
+                try:
                     from integrations.plex import PlexIntegration
-                    plex_integration = PlexIntegration()
-                    plex_integration.mark_item_watched(str(themoviedb_id), 'movie')
+                    PlexIntegration().mark_item_watched(str(themoviedb_id), 'movie')
                 except Exception as e:
                     logger.warning(f"[Tautulli] Could not mark movie watched in watchlist: {e}")
             else:
-                logger.warning(f"[Tautulli] Movie '{series_title}' has no TMDB ID — watchlist not updated. Add {{themoviedb_id}} to your Tautulli template.")
+                logger.warning(
+                    f"[Tautulli] Movie '{series_title}' has no TMDB ID — watch not recorded. "
+                    "Add {themoviedb_id} to your Tautulli template."
+                )
             return {'status': 'success'}
 
         from media_processor import get_series_id
@@ -244,10 +254,13 @@ class TautulliIntegration(ServiceIntegration):
             <p class="text-muted mb-0" style="font-size:12px;">
                 In Tautulli: <strong>Settings → Notification Agents → Webhook</strong><br>
                 Trigger: <em>Watched</em> &nbsp;·&nbsp; URL: <code>/api/integration/tautulli/webhook</code><br>
-                <strong class="text-success">Leave Conditions blank</strong> — no media type filter needed. Episeerr detects TV vs movie automatically.<br>
+                <strong class="text-success">Leave Conditions blank</strong> — no media type filter needed.<br>
+                <span class="text-warning">Important:</span> The <code>media_type</code> field is required for reliable movie detection.
+                Also set <strong>TV Episode Watched Percent</strong> (Settings → General) to your preferred threshold (e.g. 80%).<br>
                 <span class="text-warning">Note:</span> If using Plex native webhook for watch detection, do <strong>not</strong> also enable this Tautulli watched webhook — choose one source only.
             </p>
-            <pre class="mt-2 mb-0 p-2 rounded" style="background:#1a1a2e;font-size:11px;">{{\n  "plex_title": "{{show_name}}",\n  "plex_movie_title": "{{title}}",\n  "plex_season_num": "{{season_num}}",\n  "plex_ep_num": "{{episode_num}}",\n  "thetvdb_id": "{{thetvdb_id}}",\n  "themoviedb_id": "{{themoviedb_id}}"\n}}</pre>
+            <pre class="mt-2 mb-0 p-2 rounded" style="background:#1a1a2e;font-size:11px;">{{\n  "plex_title": "{{show_name}}",\n  "plex_movie_title": "{{title}}",\n  "plex_season_num": "{{season_num}}",\n  "plex_ep_num": "{{episode_num}}",\n  "thetvdb_id": "{{thetvdb_id}}",\n  "themoviedb_id": "{{themoviedb_id}}",\n  "media_type": "{{media_type}}"\n}}</pre>
+            <small class="text-muted d-block mt-1">The <code>media_type</code> field routes movies to movie rule processing and episodes to series rule processing.</small>
         </div>
         '''
 

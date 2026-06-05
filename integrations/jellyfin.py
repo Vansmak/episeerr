@@ -103,7 +103,11 @@ class JellyfinIntegration(ServiceIntegration):
                     {'value': 'progress', 'label': 'PlaybackProgress (Advanced)'}
                 ],
                 'default': 'polling',
-                'help_text': 'Polling: webhook fires once, polls session. Progress: constant webhook spam.'
+                'help_text': (
+                    'Polling: webhook fires once, polls session. Progress: constant webhook spam. '
+                    'In Jellyfin webhook plugin, check both Episodes AND Movies under Item Type — '
+                    'without Movies checked, movie watch dates will not be recorded in real-time.'
+                )
             },
             {
                 'name': 'poll_interval',
@@ -599,9 +603,30 @@ class JellyfinIntegration(ServiceIntegration):
                             return jsonify({'status': 'success'}), 200
                         else:
                             return jsonify({'status': 'error', 'message': 'Missing episode data'}), 400
+                    elif item_type == 'Movie':
+                        title = data.get('Name', 'Unknown')
+                        provider_ids = data.get('ProviderIds', {})
+                        tmdb_id = (provider_ids.get('Tmdb') or provider_ids.get('tmdb') or '').strip()
+                        progress_ticks = data.get('PlaybackPositionTicks', 0)
+                        runtime_ticks = data.get('RunTimeTicks', 1)
+                        progress_percent = (progress_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
+                        user_name = data.get('NotificationUsername', 'Unknown')
+
+                        if not integration.check_user(user_name):
+                            return jsonify({'status': 'success', 'message': 'User not monitored'}), 200
+
+                        trigger_min = float(config.get('trigger_min', 50.0))
+                        if tmdb_id and progress_percent >= trigger_min:
+                            logger.info(f"🎬 Movie progress trigger: '{title}' at {progress_percent:.1f}% (User: {user_name})")
+                            try:
+                                from movie_processor import record_movie_watched
+                                record_movie_watched(tmdb_id, title, user_name)
+                            except Exception as e:
+                                logger.error(f"Failed to record movie watch: {e}")
+                        return jsonify({'status': 'success'}), 200
                     else:
-                        return jsonify({'status': 'success', 'message': 'Not an episode'}), 200
-                
+                        return jsonify({'status': 'success', 'message': 'Not an episode or movie'}), 200
+
                 # ============================================================================
                 # SESSION START: SessionStart or PlaybackStart
                 # ============================================================================
@@ -670,38 +695,67 @@ class JellyfinIntegration(ServiceIntegration):
                 # ============================================================================
                 elif notification_type == 'PlaybackStop':
                     webhook_id = data.get('Id')
+                    item_type = data.get('ItemType')
+                    user_name = data.get('NotificationUsername', 'Unknown')
+
+                    # Always stop any active episode polling
+                    stopped = integration.stop_polling(webhook_id)
+
+                    if item_type == 'Movie':
+                        title = data.get('Name', 'Unknown')
+                        provider_ids = data.get('ProviderIds', {})
+                        tmdb_id = (provider_ids.get('Tmdb') or provider_ids.get('tmdb') or '').strip()
+                        progress_ticks = data.get('PlaybackPositionTicks', 0)
+                        runtime_ticks = data.get('RunTimeTicks', 1)
+                        progress_percent = (progress_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
+                        trigger_percentage = float(config.get('trigger_percentage', 50.0))
+
+                        logger.info(f"🎬 Jellyfin movie stopped: '{title}' at {progress_percent:.1f}% (User: {user_name})")
+
+                        if not integration.check_user(user_name):
+                            return jsonify({'status': 'success', 'message': 'User not monitored'}), 200
+
+                        if tmdb_id and progress_percent >= trigger_percentage:
+                            logger.info(f"🎬 Recording movie watch: '{title}' (tmdb={tmdb_id})")
+                            try:
+                                from movie_processor import record_movie_watched
+                                record_movie_watched(tmdb_id, title, user_name)
+                            except Exception as e:
+                                logger.error(f"Failed to record movie watch: {e}")
+                        else:
+                            logger.debug(f"🎬 Movie stop: '{title}' at {progress_percent:.1f}% — below threshold or no TMDB ID")
+                        return jsonify({'status': 'success', 'message': 'Movie stop processed'}), 200
+
+                    # Episode handling (item_type == 'Episode' or unrecognised)
                     series_name = data.get('SeriesName', 'Unknown')
                     season = data.get('SeasonNumber')
                     episode = data.get('EpisodeNumber')
-                    user_name = data.get('NotificationUsername', 'Unknown')
-                    
+
                     logger.info(f"📺 Jellyfin playback stopped: {series_name} S{season}E{episode} (User: {user_name})")
-                    
-                    # Stop polling if active
-                    stopped = integration.stop_polling(webhook_id)
+
                     if stopped:
                         logger.info(f"🛑 Stopped polling for {series_name}")
-                    
+
                     # Fallback processing if watched enough
                     if all([series_name, season is not None, episode is not None]):
                         if not integration.check_user(user_name):
                             return jsonify({'status': 'success'}), 200
-                        
+
                         progress_ticks = data.get('PlaybackPositionTicks', 0)
                         runtime_ticks = data.get('RunTimeTicks', 1)
                         progress_percent = (progress_ticks / runtime_ticks * 100) if runtime_ticks > 0 else 0
-                        
+
                         logger.info(f"Final progress: {progress_percent:.1f}%")
-                        
+
                         tracking_key = get_episode_tracking_key(series_name, season, episode, user_name)
                         if tracking_key in processed_jellyfin_episodes:
                             logger.info(f"Already processed via polling")
                             return jsonify({'status': 'success', 'message': 'Already processed'}), 200
-                        
+
                         trigger_percentage = float(config.get('trigger_percentage', 50.0))
                         if progress_percent >= trigger_percentage:
                             logger.info(f"🎯 Processing on stop at {progress_percent:.1f}%")
-                            
+
                             episode_info = {
                                 'user_name': user_name,
                                 'series_name': series_name,
@@ -709,12 +763,12 @@ class JellyfinIntegration(ServiceIntegration):
                                 'episode_number': int(episode),
                                 'progress_percent': progress_percent
                             }
-                            
+
                             integration.process_episode(episode_info)
                             return jsonify({'status': 'success', 'message': 'Processed on stop'}), 200
                         else:
                             logger.info(f"Skipped - only watched {progress_percent:.1f}%")
-                    
+
                     return jsonify({'status': 'success', 'message': 'Playback stopped'}), 200
                 
                 else:
