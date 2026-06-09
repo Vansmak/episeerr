@@ -625,7 +625,9 @@ class TraktIntegration(ServiceIntegration):
             series_data = resp.json()[0] if isinstance(resp.json(), list) else resp.json()
 
             qp_resp = http.get(f"{sonarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
-            quality_profile = qp_resp.json()[0]['id'] if qp_resp.ok and qp_resp.json() else 1
+            from settings_db import get_preferred_quality_profile
+            quality_profile = get_preferred_quality_profile('sonarr', qp_resp.json()) \
+                if qp_resp.ok and qp_resp.json() else 1
 
             rf_resp = http.get(f"{sonarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
             root_folder = rf_resp.json()[0]['path'] if rf_resp.ok and rf_resp.json() else '/tv'
@@ -696,7 +698,9 @@ class TraktIntegration(ServiceIntegration):
             movie_data = lkp.json()
 
             qp_resp = http.get(f"{radarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
-            quality_profile = qp_resp.json()[0]['id'] if qp_resp.ok and qp_resp.json() else 1
+            from settings_db import get_preferred_quality_profile
+            quality_profile = get_preferred_quality_profile('radarr', qp_resp.json()) \
+                if qp_resp.ok and qp_resp.json() else 1
 
             rf_resp = http.get(f"{radarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
             root_folder = rf_resp.json()[0]['path'] if rf_resp.ok and rf_resp.json() else '/movies'
@@ -892,6 +896,15 @@ class TraktIntegration(ServiceIntegration):
 
             if synced:
                 status = synced.get('status', 'on_watchlist')
+                # Promote "added" → "available" once the file actually lands
+                if status == 'added_to_radarr' and tmdb_id:
+                    movie = self._check_radarr(tmdb_id)
+                    if movie and movie.get('hasFile'):
+                        status = 'available'
+                elif status == 'added_to_sonarr' and tmdb_id:
+                    series = self._check_sonarr(tmdb_id)
+                    if series and series.get('statistics', {}).get('episodeFileCount', 0) > 0:
+                        status = 'available'
             elif media_type == 'show' and self._check_sonarr(tmdb_id):
                 status = 'available'
             elif media_type == 'movie' and self._check_radarr(tmdb_id):
@@ -1222,3 +1235,14 @@ class TraktIntegration(ServiceIntegration):
 
 
 integration = TraktIntegration()
+
+# Auto-start scheduler on module load (survives container restarts).
+# discover_integrations() imports this module at Flask startup, so the DB is
+# already accessible here. Without this, the scheduler only starts when the
+# user re-saves the Trakt config after each container restart.
+try:
+    _startup_cfg = integration._get_trakt_config()
+    if _startup_cfg and _startup_cfg.get('sync_enabled') and not integration._sync_running:
+        integration.start_sync_scheduler()
+except Exception as _e:
+    logger.warning(f"[Trakt] Could not auto-start scheduler on startup: {_e}")

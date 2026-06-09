@@ -600,6 +600,10 @@
                             <div class="theme-preview" style="background: linear-gradient(45deg, #0a0a1a, #e040e0);"></div>
                             <span>Cyber Neon</span>
                         </div>
+                        <div class="theme-option" data-theme="black-gold">
+                            <div class="theme-preview" style="background: linear-gradient(45deg, #000000, #d4af37);"></div>
+                            <span>Black &amp; Gold</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -746,7 +750,7 @@ function toggleThemeSection() {
     const chevron = document.getElementById('themeChevron');
     if (!submenu) return;
     const isOpen = submenu.style.maxHeight && submenu.style.maxHeight !== '0px';
-    submenu.style.maxHeight = isOpen ? '0px' : '300px';
+    submenu.style.maxHeight = isOpen ? '0px' : '350px';
     if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(-180deg)';
     localStorage.setItem('sidebar-theme-expanded', String(!isOpen));
 }
@@ -755,7 +759,7 @@ function toggleThemeSection() {
 document.addEventListener('DOMContentLoaded', function() {
     const themeSubmenu = document.getElementById('themeSubmenu');
     if (themeSubmenu && localStorage.getItem('sidebar-theme-expanded') === 'true') {
-        themeSubmenu.style.maxHeight = '300px';
+        themeSubmenu.style.maxHeight = '350px';
         const chevron = document.getElementById('themeChevron');
         if (chevron) chevron.style.transform = 'rotate(-180deg)';
     }

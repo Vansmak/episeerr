@@ -8,13 +8,32 @@ This branch (`custom`) is a permanent personal fork of `episeerr_dev`. It is nev
 
 **Additions over dev:**
 
-- **Arvio integration** (`integrations/arvio.py`) — Android TV app integration for direct LAN watchlist sync. Exposes `/api/integration/arvio/watchlist` and `/api/integration/arvio/sync`. Dashboard shows an Arvio Watchlist card (hidden until configured). Auth-exempt endpoints allow the TV device to sync settings without a browser session.
-- **Progress webhooks via Arvio** — Arvio pushes playback progress events which Episeerr uses to track watch state without requiring Plex/Tautulli/Jellyfin.
-- **Settings backup via Episeerr** — Arvio reads and writes Episeerr settings over the LAN API (`GET/PUT /api/integration/arvio/settings`), keeping the TV app config in sync.
+- **Xadarr integration** (`integrations/xadarr.py`) — Android TV app integration. `fire_xadarr_webhook()` notifies Xadarr on episode grabs/ready/rule events. `/api/integration/xadarr/pending` returns `episeerr_select` items with TMDB poster for the TV rule picker.
+- **Arvio settings sync** (`integrations/arvio.py`) — reads and writes the Xadarr settings blob over the LAN API (`GET/PUT /api/integration/arvio/settings`), keeping the TV app config in sync across devices.
 
-**Retained from dev:** Trakt watchlist sync, movie rules, expression modifiers (e1+), universal search, JF/Emby favorites, all bug fixes and community features.
+**Retained from dev:** all v3.7.8 changes plus Trakt watchlist sync, movie rules, expression modifiers (e1+), universal search, JF/Emby favorites.
 
 Released as Docker tag `vansmak/episeerr:custom` via `~/projects/release_custom.sh`.
+
+---
+
+## v3.7.8 (2026-06-09)
+
+### ✨ Configurable Quality Profiles
+
+Sonarr and Radarr now have a **Preferred Quality Profile** dropdown in setup, replacing the old "enter the numeric ID" text field for Radarr and adding the option for Sonarr entirely.
+
+- Setup page auto-populates the dropdown from the live Sonarr/Radarr API; no need to look up profile IDs
+- Selected profile is used by all automatic adds: Trakt sync, Plex watchlist sync, Discover adds, and manual series prep
+- Falls back to the first available profile if none is saved, with a log warning
+
+### 🎨 Black & Gold Theme
+
+New `data-theme="black-gold"` — pure black background with rich gold accents. Available in the sidebar theme switcher. Gold frame touches on cards, nav bar, modals, and sidebar border.
+
+### 🐛 Bug Fixes
+
+- **Trakt watchlist "Added" badge never progressed to "Available"** — items added by Trakt sync were permanently stored as `added_to_sonarr`/`added_to_radarr` and `get_watchlist_with_status` never rechecked. Fixed: when stored status is `added_to_radarr`, a live Radarr check verifies `hasFile`; for `added_to_sonarr`, checks `episodeFileCount > 0`. Badge promotes to "Available" on the next dashboard load after the file lands. (`integrations/trakt.py`)
 
 ---
 
