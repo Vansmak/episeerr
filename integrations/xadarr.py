@@ -12,9 +12,6 @@ Sync API (prefix: /api/integration/xadarr):
     POST /settings/backup  ← Restore settings blob from an uploaded JSON file
     POST /webhook          ← Xadarr posts playback events (start/pause/stop/progress)
     GET  /pending          ← Returns series currently in episeerr_select state
-    GET  /watchlist        ← Return watchlist array from current settings blob
-    POST /watchlist        ← Add an item to the watchlist in the settings blob
-    DELETE /watchlist/<type>/<id>  ← Remove a watchlist item
 
 Addon manifest (root-level, for Xadarr addon manager):
     GET  /api/addon/xadarr-bridge/manifest.json
@@ -571,46 +568,6 @@ class XadarrIntegration(ServiceIntegration):
             profiles = len(data.get("profiles") or [])
             logger.info(f"[Xadarr] Settings restored from backup — {profiles} profile(s)")
             return jsonify({"status": "restored", "profiles": profiles}), 200
-
-        # ── GET/POST/DELETE /watchlist ────────────────────────────────────────
-        @bp.route("/watchlist", methods=["GET"])
-        def get_watchlist():
-            """Return the watchlist array from the current settings blob."""
-            settings = _load_settings() or {}
-            return jsonify(settings.get("watchlist") or []), 200
-
-        @bp.route("/watchlist", methods=["POST"])
-        def add_watchlist_item():
-            """Add an item to the watchlist in the settings blob."""
-            item = request.get_json(silent=True, force=True)
-            if not item or not isinstance(item, dict):
-                return jsonify({"error": "Expected a JSON object"}), 400
-            with _LOCK:
-                settings = _load_settings() or {}
-                watchlist = settings.get("watchlist") or []
-                watchlist.append(item)
-                settings["watchlist"] = watchlist
-                _save_settings(settings)
-            return jsonify({"status": "added", "count": len(watchlist)}), 200
-
-        @bp.route("/watchlist/<media_type>/<int:media_id>", methods=["DELETE"])
-        def remove_watchlist_item(media_type: str, media_id: int):
-            """Remove a watchlist item by type and id."""
-            with _LOCK:
-                settings = _load_settings() or {}
-                watchlist = settings.get("watchlist") or []
-                before = len(watchlist)
-                watchlist = [
-                    w for w in watchlist
-                    if not (
-                        str(w.get("type", "")).lower() == media_type.lower()
-                        and int(w.get("id") or w.get("tmdbId") or 0) == media_id
-                    )
-                ]
-                settings["watchlist"] = watchlist
-                _save_settings(settings)
-            removed = before - len(watchlist)
-            return jsonify({"status": "removed", "removed": removed}), 200
 
         # ── GET/DELETE /history ───────────────────────────────────────────────
         @bp.route("/history", methods=["GET"])
