@@ -171,7 +171,7 @@ def _run_maintenance():
                 "docker", "exec", "-i", "dispatcharr",
                 "psql", "-U", "postgres", "-d", "dispatcharr"
             ],
-            input=open("/home/joe/config/dispatcharr/scripts/maintenance.sql").read(),
+            input=open("/home/joe/projects/episeerr_custom/scripts/dispatcharr/maintenance.sql").read(),
             capture_output=True,
             text=True,
             timeout=120,

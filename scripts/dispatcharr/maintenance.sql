@@ -97,6 +97,38 @@ WHERE g.name IN (
 AND c.auto_created = true;
 
 -- ═══════════════════════════════════════════════════════════════════════════
+-- PART 4: Xadarr group blacklist — delete all auto_created channels in
+-- groups the user has marked "Remove" in Xadarr's group manager.
+--
+-- The blacklist file is written by the Xadarr TV app to:
+--   /home/joe/config/xadarr-server/data/dispatcharr_blacklist.txt
+-- (one raw M3U group name per line, as seen in Dispatcharr's group column)
+--
+-- For the file to be readable here, that host path must be volume-mounted
+-- into the dispatcharr container, e.g.:
+--   volumes:
+--     - /home/joe/config/xadarr-server/data/dispatcharr_blacklist.txt:/blacklist.txt:ro
+-- Then update the path in the \copy command below to match the mount point.
+-- ═══════════════════════════════════════════════════════════════════════════
+
+\echo ''
+\echo '── Part 4: Xadarr group blacklist ──'
+
+CREATE TEMP TABLE _group_blacklist (group_name text);
+
+\copy _group_blacklist (group_name) FROM PROGRAM 'cat /blacklist.txt 2>/dev/null || true'
+
+DELETE FROM dispatcharr_channels_channel c
+USING dispatcharr_channels_channelgroup g, _group_blacklist bl
+WHERE c.channel_group_id = g.id
+  AND g.name = bl.group_name
+  AND c.auto_created = true;
+
+SELECT COUNT(*) AS part4_groups_in_blacklist FROM _group_blacklist;
+
+DROP TABLE _group_blacklist;
+
+-- ═══════════════════════════════════════════════════════════════════════════
 -- PART 6: Whitelist enforcement
 -- Deletes auto_created channels whose tvg_id is not approved.
 -- ═══════════════════════════════════════════════════════════════════════════
