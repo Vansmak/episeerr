@@ -1,0 +1,14 @@
+{
+  "id": "com.joe.dispatcharr-bridge",
+  "version": "1.0.0",
+  "name": "Dispatcharr Bridge",
+  "description": "Dispatcharr integration for IPTV group management",
+  "catalogs": [],
+  "resources": [],
+  "xadarr": {
+    "extensions": ["group_blacklist"],
+    "groupBlacklist": {
+      "defaultPath": "/data/dispatcharr_blacklist.txt"
+    }
+  }
+}

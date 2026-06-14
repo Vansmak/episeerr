@@ -896,6 +896,28 @@ class XadarrIntegration(ServiceIntegration):
                 },
             }), 200
 
+        # ── Dispatcharr bridge addon manifest ──────────────────────────────────
+        # Replaces http://<xadarr-server>:7979/dispatcharr-bridge/manifest.json.
+        # Install in Xadarr app from: http://<episeerr>:5002/api/addon/dispatcharr-bridge
+        dc_bp = Blueprint("dispatcharr_addon", __name__, url_prefix="/api/addon/dispatcharr-bridge")
+
+        @dc_bp.route("/manifest.json", methods=["GET"])
+        def dispatcharr_manifest():
+            return jsonify({
+                "id":          "com.joe.dispatcharr-bridge",
+                "version":     "1.0.0",
+                "name":        "Dispatcharr Bridge",
+                "description": "Dispatcharr integration for IPTV group management",
+                "catalogs":    [],
+                "resources":   [],
+                "xadarr": {
+                    "extensions":    ["group_blacklist"],
+                    "groupBlacklist": {
+                        "defaultPath": "/data/dispatcharr_blacklist.txt",
+                    },
+                },
+            }), 200
+
         # ── Web UI API blueprint (mirrors xadarr-server API at /xadarr/api) ──────
         web_bp = Blueprint("xadarr_web", __name__, url_prefix="/xadarr/api")
 
@@ -1617,7 +1639,7 @@ class XadarrIntegration(ServiceIntegration):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        return [bp, ui_bp, addon_bp, web_bp]
+        return [bp, ui_bp, addon_bp, dc_bp, web_bp]
 
 
 # ── Module-level instance (auto-discovered by integrations/__init__.py) ───────
