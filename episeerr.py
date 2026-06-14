@@ -120,6 +120,13 @@ _AUTH_EXEMPT_ENDPOINTS = {
     # Xadarr settings backup/restore — new device only needs Episeerr URL to restore
     'xadarr_integration.backup_settings',
     'xadarr_integration.get_backup',
+    'xadarr_integration.download_settings_backup',
+    'xadarr_integration.upload_settings_backup',
+    # Addon manifest — fetched by Xadarr addon manager (unauthenticated)
+    'xadarr_addon.addon_manifest',
+    # Xadarr web UI — browser-accessible (no TV session), Trakt OAuth callback
+    'xadarr_web.web_trakt_connect',
+    'xadarr_web.web_trakt_callback',
     # TV app rule picker JSON endpoints
     'api_assign_pending_rule',
     'get_pending_requests',
