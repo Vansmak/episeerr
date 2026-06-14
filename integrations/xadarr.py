@@ -137,7 +137,10 @@ def _xw_set_connections(blob: dict, conns: list) -> None:
 
 def _xw_iptv(blob: dict) -> dict:
     pid = _xw_pid(blob)
-    return blob.get("iptvByProfile", {}).get(pid, {"m3uUrl": "", "epgUrl": ""})
+    profile_iptv = blob.get("iptvByProfile", {}).get(pid, {})
+    m3u = profile_iptv.get("m3uUrl") or blob.get("iptvM3uUrl", "")
+    epg = profile_iptv.get("epgUrl") or blob.get("iptvEpgUrl", "")
+    return {"m3uUrl": m3u, "epgUrl": epg}
 
 
 def _xw_set_iptv(blob: dict, m3u: str, epg: str) -> None:
@@ -665,6 +668,28 @@ class XadarrIntegration(ServiceIntegration):
             body = request.get_json(silent=True, force=True)
             if not body or not isinstance(body, dict):
                 return jsonify({"error": "Expected a JSON object"}), 400
+            # Preserve homeServerConnectionJson if the incoming blob has blank tokens.
+            # Prevents a device that lost its Keystore key from wiping credentials for all clients.
+            existing = _load_json(_SETTINGS_FILE, {})
+            existing_profiles = existing.get("profileSettingsById") or {}
+            incoming_profiles = body.get("profileSettingsById") or {}
+            for pid, existing_ps in existing_profiles.items():
+                existing_conn = existing_ps.get("homeServerConnectionJson") if isinstance(existing_ps, dict) else None
+                if not existing_conn:
+                    continue
+                incoming_ps = incoming_profiles.get(pid)
+                if not isinstance(incoming_ps, dict):
+                    continue
+                incoming_conn = incoming_ps.get("homeServerConnectionJson")
+                if not incoming_conn:
+                    incoming_ps["homeServerConnectionJson"] = existing_conn
+                else:
+                    try:
+                        conns = json.loads(incoming_conn).get("connections", [])
+                        if conns and not any(c.get("accessToken") for c in conns):
+                            incoming_ps["homeServerConnectionJson"] = existing_conn
+                    except Exception:
+                        pass
             ok = _save_settings(body)
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500

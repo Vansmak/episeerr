@@ -485,8 +485,8 @@
         <div class="catalogue-row" x-show="serverItems.filter(i=>i.mediaType==='show').length > 0"
              :style="'order:'+serverCatOrder('show')">
           <div class="row-header">
-            <span class="row-title" x-text="(servers[0]?.displayName || servers[0]?.serverName || 'Server') + ' — Shows'"></span>
-            <button class="row-see-all" @click="openExpandedRow((servers[0]?.displayName || servers[0]?.serverName || 'Server') + ' — Shows', serverItems.filter(i=>i.mediaType==='show'))">See all</button>
+            <span class="row-title" x-text="serverFriendlyName() + ' — Shows'"></span>
+            <button class="row-see-all" @click="openExpandedRow(serverFriendlyName() + ' — Shows', serverItems.filter(i=>i.mediaType==='show'))">See all</button>
           </div>
           <div class="row-scroll">
             <template x-for="item in serverItems.filter(i=>i.mediaType==='show')" :key="'svs-'+item.id">
@@ -514,8 +514,8 @@
         <div class="catalogue-row" x-show="serverItems.filter(i=>i.mediaType==='movie').length > 0"
              :style="'order:'+serverCatOrder('movie')">
           <div class="row-header">
-            <span class="row-title" x-text="(servers[0]?.displayName || servers[0]?.serverName || 'Server') + ' — Movies'"></span>
-            <button class="row-see-all" @click="openExpandedRow((servers[0]?.displayName || servers[0]?.serverName || 'Server') + ' — Movies', serverItems.filter(i=>i.mediaType==='movie'))">See all</button>
+            <span class="row-title" x-text="serverFriendlyName() + ' — Movies'"></span>
+            <button class="row-see-all" @click="openExpandedRow(serverFriendlyName() + ' — Movies', serverItems.filter(i=>i.mediaType==='movie'))">See all</button>
           </div>
           <div class="row-scroll">
             <template x-for="item in serverItems.filter(i=>i.mediaType==='movie')" :key="'svm-'+item.id">
@@ -889,11 +889,12 @@
                   </template>
                   <div class="server-card-url" x-text="srv.serverUrl"></div>
                 </div>
+                <button class="btn btn-ghost btn-xs" @click="reconnectServer(srv)" title="Re-authenticate">↺</button>
                 <button class="btn btn-ghost btn-xs" @click="removeServer(srv.connectionId)">✕</button>
               </div>
             </template>
           </div>
-          <button class="btn btn-secondary btn-sm mt-2" @click="showServerForm=!showServerForm">
+          <button class="btn btn-secondary btn-sm mt-2" @click="showServerForm=!showServerForm; serverForm={kind:'JELLYFIN',url:'',username:'',password:'',token:''}">
             <span x-text="showServerForm ? 'Cancel' : '+ Connect Server'"></span>
           </button>
           <div class="connect-form" x-show="showServerForm">

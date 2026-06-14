@@ -156,6 +156,7 @@ function xadarr() {
       this.loadHistory();
       this.loadEpiseerrPending();
       this.loadServers();
+      this.loadAddons();
       this.loadTraktStatus();
     },
 
@@ -584,6 +585,16 @@ function xadarr() {
     },
 
     // ── Servers ───────────────────────────────────────────────────────────
+    serverFriendlyName() {
+      const s = this.servers[0];
+      if (!s) return 'Server';
+      if (s.displayName) return s.displayName;
+      const sn = s.serverName || '';
+      if (sn && !/^[0-9a-f]{6,}$/i.test(sn)) return sn;
+      const k = (s.serverKind || '').toLowerCase();
+      return k === 'plex' ? 'Plex' : k === 'emby' ? 'Emby' : k === 'jellyfin' ? 'Jellyfin' : 'Server';
+    },
+
     async loadServers() {
       const data = await fetch(BASE+'/api/setup/servers').then(r => r.json()).catch(() => []);
       this.servers = Array.isArray(data) ? data : [];
@@ -619,6 +630,15 @@ function xadarr() {
       if (!confirm('Remove this server?')) return;
       await fetch(BASE+`/api/setup/servers/${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
       await this.loadServers();
+    },
+
+    reconnectServer(srv) {
+      this.serverForm.kind = srv.serverKind || 'JELLYFIN';
+      this.serverForm.url = srv.serverUrl || '';
+      this.serverForm.username = srv.userName || '';
+      this.serverForm.password = '';
+      this.serverForm.token = '';
+      this.showServerForm = true;
     },
 
     startRenameServer(srv) {
