@@ -5,11 +5,19 @@ Provides:   Settings sync, playback webhooks,
             and a web dashboard at /xadarr for Xadarr Android TV app.
 
 Sync API (prefix: /api/integration/xadarr):
-    GET  /status      ← Xadarr pings this to verify the server is reachable
-    GET  /settings    ← Xadarr pulls its full settings blob on new-device setup
-    PUT  /settings    ← Xadarr pushes its settings blob (profile sync, addons, etc.)
-    POST /webhook     ← Xadarr posts playback events (start/pause/stop/progress)
-    GET  /pending     ← Returns series currently in episeerr_select state
+    GET  /status           ← Xadarr pings this to verify the server is reachable
+    GET  /settings         ← Xadarr pulls its full settings blob on new-device setup
+    PUT  /settings         ← Xadarr pushes its settings blob (profile sync, addons, etc.)
+    GET  /settings/backup  ← Download settings blob as a JSON file
+    POST /settings/backup  ← Restore settings blob from an uploaded JSON file
+    POST /webhook          ← Xadarr posts playback events (start/pause/stop/progress)
+    GET  /pending          ← Returns series currently in episeerr_select state
+    GET  /watchlist        ← Return watchlist array from current settings blob
+    POST /watchlist        ← Add an item to the watchlist in the settings blob
+    DELETE /watchlist/<type>/<id>  ← Remove a watchlist item
+
+Addon manifest (root-level, for Xadarr addon manager):
+    GET  /api/addon/xadarr-bridge/manifest.json
 
 Dashboard API (also under /api/integration/xadarr):
     GET/DELETE /history              ← playback event log
@@ -521,6 +529,89 @@ class XadarrIntegration(ServiceIntegration):
 
             return jsonify({"status": "received"}), 200
 
+        # ── GET /settings/backup ─────────────────────────────────────────────
+        @bp.route("/settings/backup", methods=["GET"])
+        def download_settings_backup():
+            """
+            Download the current settings blob as a JSON file.
+            Mirrors xadarr-server's GET /api/integration/xadarr/settings/backup.
+            """
+            from flask import make_response
+            data = _load_settings()
+            if data is None:
+                return jsonify({"error": "No settings saved yet"}), 404
+            payload = json.dumps(data, ensure_ascii=False, indent=2)
+            resp = make_response(payload, 200)
+            resp.headers["Content-Type"] = "application/json"
+            resp.headers["Content-Disposition"] = "attachment; filename=xadarr_settings_backup.json"
+            return resp
+
+        # ── POST /settings/backup ─────────────────────────────────────────────
+        @bp.route("/settings/backup", methods=["POST"])
+        def upload_settings_backup():
+            """
+            Restore settings from a JSON file upload or raw JSON body.
+            Mirrors xadarr-server's POST /api/integration/xadarr/settings/backup.
+            """
+            # Accept either multipart file upload or raw JSON body
+            data = None
+            if request.files.get("file"):
+                try:
+                    data = json.load(request.files["file"])
+                except Exception as exc:
+                    return jsonify({"error": f"Invalid JSON file: {exc}"}), 400
+            else:
+                data = request.get_json(silent=True, force=True)
+
+            if not data or not isinstance(data, dict):
+                return jsonify({"error": "Expected a JSON object"}), 400
+            ok = _save_settings(data)
+            if not ok:
+                return jsonify({"error": "Failed to write settings"}), 500
+            profiles = len(data.get("profiles") or [])
+            logger.info(f"[Xadarr] Settings restored from backup — {profiles} profile(s)")
+            return jsonify({"status": "restored", "profiles": profiles}), 200
+
+        # ── GET/POST/DELETE /watchlist ────────────────────────────────────────
+        @bp.route("/watchlist", methods=["GET"])
+        def get_watchlist():
+            """Return the watchlist array from the current settings blob."""
+            settings = _load_settings() or {}
+            return jsonify(settings.get("watchlist") or []), 200
+
+        @bp.route("/watchlist", methods=["POST"])
+        def add_watchlist_item():
+            """Add an item to the watchlist in the settings blob."""
+            item = request.get_json(silent=True, force=True)
+            if not item or not isinstance(item, dict):
+                return jsonify({"error": "Expected a JSON object"}), 400
+            with _LOCK:
+                settings = _load_settings() or {}
+                watchlist = settings.get("watchlist") or []
+                watchlist.append(item)
+                settings["watchlist"] = watchlist
+                _save_settings(settings)
+            return jsonify({"status": "added", "count": len(watchlist)}), 200
+
+        @bp.route("/watchlist/<media_type>/<int:media_id>", methods=["DELETE"])
+        def remove_watchlist_item(media_type: str, media_id: int):
+            """Remove a watchlist item by type and id."""
+            with _LOCK:
+                settings = _load_settings() or {}
+                watchlist = settings.get("watchlist") or []
+                before = len(watchlist)
+                watchlist = [
+                    w for w in watchlist
+                    if not (
+                        str(w.get("type", "")).lower() == media_type.lower()
+                        and int(w.get("id") or w.get("tmdbId") or 0) == media_id
+                    )
+                ]
+                settings["watchlist"] = watchlist
+                _save_settings(settings)
+            removed = before - len(watchlist)
+            return jsonify({"status": "removed", "removed": removed}), 200
+
         # ── GET/DELETE /history ───────────────────────────────────────────────
         @bp.route("/history", methods=["GET"])
         def get_history():
@@ -574,7 +665,35 @@ class XadarrIntegration(ServiceIntegration):
                 return send_from_directory(_STATIC_DIR, path)
             return send_from_directory(_STATIC_DIR, "index.html")
 
-        return [bp, ui_bp]
+        # ── Addon manifest blueprint ────────────────────────────────────────────
+        # Hosted at /api/addon/xadarr-bridge/manifest.json so the Xadarr app's
+        # addon manager can install it via:
+        #   http://192.168.254.205:5002/api/addon/xadarr-bridge
+        # The xadarr.episeerrSync.syncPrefix field tells CloudSyncRepository which
+        # API prefix to use, enabling Episeerr to serve as the sync backend.
+        addon_bp = Blueprint("xadarr_addon", __name__, url_prefix="/api/addon/xadarr-bridge")
+
+        @addon_bp.route("/manifest.json", methods=["GET"])
+        def addon_manifest():
+            host = request.host_url.rstrip("/")
+            return jsonify({
+                "id":          "episeerr.sync.bridge",
+                "name":        "Episeerr Sync Bridge",
+                "version":     "1.0.0",
+                "description": "Routes Xadarr settings sync and webhooks to this Episeerr instance",
+                "logo":        f"{host}/static/logo.png",
+                "types":       [],
+                "resources":   [],
+                "catalogs":    [],
+                "xadarr": {
+                    "extensions":   ["episeerr_sync"],
+                    "episeerr_sync": {
+                        "syncPrefix": "/api/integration/xadarr",
+                    },
+                },
+            }), 200
+
+        return [bp, ui_bp, addon_bp]
 
 
 # ── Module-level instance (auto-discovered by integrations/__init__.py) ───────
