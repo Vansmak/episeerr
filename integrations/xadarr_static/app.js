@@ -181,6 +181,7 @@ function xadarr() {
       this.loadAddons();
       this.loadIptv();
       this.loadTraktStatus();
+      if (section !== 'cameras') this.loadCameras();
     },
 
     // ── Tab switching ─────────────────────────────────────────────────────
