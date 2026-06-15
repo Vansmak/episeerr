@@ -432,7 +432,9 @@
     .sidebar-link-group-header i {
         font-size: 0.6rem;
     }
-</style></head>
+</style>
+{% block extra_head %}{% endblock %}
+</head>
 <body>
     <!-- Mobile Navbar (Hidden on Desktop) -->
     <div class="mobile-navbar">
@@ -492,11 +494,34 @@
                 <span>Movie Rules</span>
             </a>
 
-            <!-- Xadarr TV App -->
-            <a href="/xadarr/" class="sidebar-nav-item {% if request.path.startswith('/xadarr') %}active{% endif %}">
-                <i class="fas fa-tv"></i>
-                <span>Xadarr</span>
-            </a>
+            <!-- Xadarr -->
+            <div class="sidebar-section">
+                <div class="sidebar-section-header {% if not request.path.startswith('/xadarr') %}collapsed{% endif %}" id="xadarrSectionHeader">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <i class="fas fa-tv"></i>
+                        <span>Xadarr</span>
+                    </div>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="sidebar-submenu {% if request.path.startswith('/xadarr') %}show{% endif %}" id="xadarrSubmenu">
+                    <a href="/xadarr/discover" data-xadarr-section="discover" class="sidebar-rule-item {% if request.path == '/xadarr/discover' %}active{% endif %}">
+                        <i class="fas fa-compass me-2"></i>
+                        <span class="sidebar-rule-name">Discover</span>
+                    </a>
+                    <a href="/xadarr/search" data-xadarr-section="search" class="sidebar-rule-item {% if request.path == '/xadarr/search' %}active{% endif %}">
+                        <i class="fas fa-search me-2"></i>
+                        <span class="sidebar-rule-name">Search</span>
+                    </a>
+                    <a href="/xadarr/cameras" data-xadarr-section="cameras" class="sidebar-rule-item {% if request.path == '/xadarr/cameras' %}active{% endif %}">
+                        <i class="fas fa-video me-2"></i>
+                        <span class="sidebar-rule-name">Cameras</span>
+                    </a>
+                    <a href="/xadarr/settings" data-xadarr-section="settings" class="sidebar-rule-item {% if request.path == '/xadarr/settings' %}active{% endif %}">
+                        <i class="fas fa-sliders-h me-2"></i>
+                        <span class="sidebar-rule-name">Settings</span>
+                    </a>
+                </div>
+            </div>
 
             <div class="sidebar-divider"></div>
 
@@ -711,6 +736,34 @@ function initializeSidebar() {
             const isExpanded = systemSubmenu.classList.toggle('show');
             systemHeader.classList.toggle('collapsed', !isExpanded);
             localStorage.setItem('sidebar-system-expanded', isExpanded);
+        });
+    }
+
+    // Xadarr section — expanded when on /xadarr/* routes, otherwise respects localStorage
+    const xadarrHeader = document.getElementById('xadarrSectionHeader');
+    const xadarrSubmenu = document.getElementById('xadarrSubmenu');
+    if (xadarrHeader && xadarrSubmenu) {
+        const onXadarr = window.location.pathname.startsWith('/xadarr');
+        const savedExpanded = localStorage.getItem('sidebar-xadarr-expanded');
+        const expanded = onXadarr || savedExpanded === 'true';
+        if (expanded) {
+            xadarrSubmenu.classList.add('show');
+            xadarrHeader.classList.remove('collapsed');
+        }
+        xadarrHeader.addEventListener('click', () => {
+            const isExpanded = xadarrSubmenu.classList.toggle('show');
+            xadarrHeader.classList.toggle('collapsed', !isExpanded);
+            localStorage.setItem('sidebar-xadarr-expanded', isExpanded);
+        });
+
+        // Intercept xadarr section link clicks — SPA switch when embed is loaded
+        document.querySelectorAll('[data-xadarr-section]').forEach(link => {
+            link.addEventListener('click', e => {
+                if (window.xadarrGoto) {
+                    e.preventDefault();
+                    window.xadarrGoto(link.dataset.xadarrSection, link);
+                }
+            });
         });
     }
 

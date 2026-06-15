@@ -47,7 +47,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
-from flask import Blueprint, jsonify, request, send_from_directory, Response, stream_with_context, redirect
+from flask import Blueprint, jsonify, request, send_from_directory, Response, stream_with_context, redirect, render_template
 from integrations.base import ServiceIntegration
 from episeerr_utils import http as _http
 
@@ -885,6 +885,22 @@ class XadarrIntegration(ServiceIntegration):
 
         # ── UI blueprint (served at /xadarr) ───────────────────────────────────
         ui_bp = Blueprint("xadarr_ui", __name__, url_prefix="/xadarr")
+
+        @ui_bp.route("/discover")
+        def xadarr_embed_discover():
+            return render_template("xadarr_embed.html", section="discover")
+
+        @ui_bp.route("/search")
+        def xadarr_embed_search():
+            return render_template("xadarr_embed.html", section="search")
+
+        @ui_bp.route("/cameras")
+        def xadarr_embed_cameras():
+            return render_template("xadarr_embed.html", section="cameras")
+
+        @ui_bp.route("/settings")
+        def xadarr_embed_settings():
+            return render_template("xadarr_embed.html", section="settings")
 
         @ui_bp.route("/", defaults={"path": ""})
         @ui_bp.route("/<path:path>")

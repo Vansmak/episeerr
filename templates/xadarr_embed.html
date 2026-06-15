@@ -1,0 +1,720 @@
+{% extends "base.html" %}
+{% block title %}Xadarr — {{ section | title }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/xadarr/style.css">
+<style>
+  /* Fix Bootstrap/Xadarr class conflicts inside the embedded container */
+  .xadarr-embedded .modal { display: block; position: relative; z-index: auto; width: auto; height: auto; overflow: visible; outline: none; top: auto; left: auto; }
+  .xadarr-embedded .modal-backdrop { position: fixed; inset: 0; z-index: 150; }
+  /* Remove Bootstrap padding that would push content down */
+  .content-container { padding: 0 !important; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="xadarr-embed-root"
+     x-data="xadarr()"
+     x-init="embeddedInit('{{ section }}')"
+     :data-theme="theme"
+     class="xadarr-embedded">
+
+  <div id="app">
+
+    <!-- ── Toast overlay ──────────────────────────────────────────────────── -->
+    <div class="toast-container">
+      <template x-for="(toast, i) in toasts" :key="toast.id">
+        <div class="toast" :class="toast.cls">
+          <div class="toast-title" x-text="toast.title"></div>
+          <div class="toast-body" x-text="toast.body" x-show="toast.body"></div>
+        </div>
+      </template>
+    </div>
+
+    <!-- ── Rule picker modal ──────────────────────────────────────────────── -->
+    <div class="modal-backdrop" x-show="showRulePicker" x-cloak @click.self="showRulePicker=false">
+      <div class="modal">
+        <div class="modal-title">Assign Episeerr Rule</div>
+        <div class="text-sm text-muted mb-3" x-text="rulePickerItem?.title"></div>
+        <div class="rule-list">
+          <template x-for="rule in rules" :key="rule.id">
+            <div class="rule-item" :class="{selected: selectedRuleId===rule.id}"
+                 @click="selectedRuleId=rule.id">
+              <div class="rule-name" x-text="rule.name"></div>
+              <div class="rule-desc" x-show="rule.description" x-text="rule.description"></div>
+            </div>
+          </template>
+          <div class="empty-state" x-show="rules.length===0" style="padding:20px">
+            <span class="text-muted">No rules configured in Episeerr</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost btn-sm" @click="showRulePicker=false">Cancel</button>
+          <button class="btn btn-primary btn-sm" @click="assignRule()" :disabled="!selectedRuleId">Assign</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Detail sheet ──────────────────────────────────────────────────── -->
+    <div class="detail-backdrop" x-show="detailItem" x-cloak @click.self="closeDetail()">
+      <div class="detail-sheet" @click.stop>
+        <div class="detail-hero" x-show="detailItem?.backdropUrl"
+             :style="detailItem?.backdropUrl ? `background-image:url('${detailItem.backdropUrl}')` : ''">
+          <div class="detail-hero-gradient"></div>
+        </div>
+        <button class="detail-close" @click="closeDetail()">✕</button>
+
+        <div class="detail-body">
+          <div class="detail-poster-row">
+            <template x-if="detailItem?.image">
+              <img class="detail-poster" :src="detailItem.image" :alt="detailItem?.title" loading="lazy">
+            </template>
+            <div class="detail-meta-col">
+              <div class="detail-title" x-text="detailItem?.title"></div>
+              <div class="detail-meta-row">
+                <span class="hero-badge" x-text="detailItem?.mediaType==='show' ? 'TV' : 'MOVIE'"></span>
+                <span class="text-muted" x-text="detailItem?.year"></span>
+                <span x-show="detailItem?.rating" class="text-muted" x-text="'★ ' + (detailItem?.rating?.toFixed?.(1) || '')"></span>
+                <span x-show="detailItem?.runtime" class="text-muted" x-text="detailItem?.runtime + ' min'"></span>
+              </div>
+              <div class="detail-genres" x-show="detailItem?.genres?.length">
+                <template x-for="g in (detailItem?.genres || [])" :key="g">
+                  <span class="detail-genre-chip" x-text="g"></span>
+                </template>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <button class="btn btn-primary btn-sm"
+                        @click="toggleWatchlist(detailItem); detailItem.inWatchlist=!detailItem.inWatchlist"
+                        x-text="detailItem?.inWatchlist ? '✓ In Watchlist' : '+ Watchlist'"></button>
+                <button class="btn btn-secondary btn-sm" x-show="detailItem?.isPending"
+                        @click="closeDetail(); openRulePicker(detailItem)">Assign Rule</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-tagline" x-show="detailItem?.tagline" x-text="detailItem?.tagline"></div>
+          <p class="detail-overview" x-show="detailItem?.overview" x-text="detailItem?.overview"></p>
+
+          <div class="detail-cast" x-show="detailItem?.cast?.length">
+            <div class="detail-section-label">Cast</div>
+            <div class="detail-cast-list" x-text="(detailItem?.cast || []).join(' · ')"></div>
+          </div>
+
+          <div class="detail-loading" x-show="detailLoading">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Expanded row grid ─────────────────────────────────────────────── -->
+    <div class="expanded-backdrop" x-show="expandedRow" x-cloak @click.self="closeExpandedRow()">
+      <div class="expanded-panel" @click.stop>
+        <div class="expanded-panel-header">
+          <span class="expanded-panel-title" x-text="expandedRow?.title"></span>
+          <span class="text-muted text-sm" x-text="(expandedRow?.items?.length || 0) + ' items'"></span>
+          <button class="expanded-close" @click="closeExpandedRow()">✕</button>
+        </div>
+        <div class="expanded-grid">
+          <template x-for="item in (expandedRow?.items || [])" :key="'eg-'+item.id">
+            <div class="card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+              <template x-if="item.image">
+                <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                     @error="$el.style.display='none'">
+              </template>
+              <template x-if="!item.image">
+                <div class="card-poster-placeholder" x-text="item.title"></div>
+              </template>
+              <div class="card-info">
+                <div class="card-title" x-text="item.title"></div>
+                <div class="card-meta" x-text="item.year"></div>
+              </div>
+              <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                      @click.stop="toggleWatchlist(item)"
+                      x-text="item.inWatchlist ? '✓' : '+'" :title="item.inWatchlist?'Remove':'Add'"></button>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Camera fullscreen ──────────────────────────────────────────────── -->
+    <div class="camera-fullscreen" x-show="cameraFullscreen" x-cloak>
+      <video id="cameraVideo" autoplay playsinline muted
+             style="width:100%;height:100%;object-fit:contain;display:block;background:#000"
+             :poster="cameraFullscreen ? '/xadarr/api/cameras/snapshot/'+cameraFullscreen.name+'?t='+cameraNonce : ''">
+      </video>
+      <div class="camera-fullscreen-bar">
+        <button class="btn btn-ghost btn-sm" @click="closeCamera()">✕ Close</button>
+        <span class="font-bold" x-text="cameraFullscreen?.name" style="color:#fff"></span>
+        <span class="live-badge">LIVE</span>
+      </div>
+    </div>
+
+    <!-- ── Main (no Xadarr sidebar in embedded mode) ─────────────────────── -->
+    <div class="main"
+         @touchstart.passive="swipeStart($event)"
+         @touchend.passive="swipeEnd($event)">
+
+      <!-- ══ SEARCH ══════════════════════════════════════════════════════════ -->
+      <div class="tab-pane" :class="{active: activeTab==='search'}">
+
+        <div class="search-bar">
+          <div class="browse-bar" x-show="browseMode">
+            <button class="btn btn-secondary btn-sm" @click="clearBrowse()">← Back</button>
+            <span class="browse-bar-title" x-text="browseTitle"></span>
+          </div>
+          <div class="search-input-wrap" x-show="!browseMode">
+            <span class="search-icon">🔍</span>
+            <input type="text" placeholder="Search movies &amp; shows…"
+                   x-model="searchQuery"
+                   x-ref="searchInput"
+                   @input.debounce.380ms="doSearch()"
+                   @keydown.escape="searchQuery=''; searchResults=[]">
+          </div>
+        </div>
+
+        <div class="search-chips" x-show="!browseMode">
+          <button class="cat-chip" :class="{selected: searchTypeFilter==='all'}"    @click="setSearchType('all')">All</button>
+          <button class="cat-chip" :class="{selected: searchTypeFilter==='movies'}" @click="setSearchType('movies')">Movies</button>
+          <button class="cat-chip" :class="{selected: searchTypeFilter==='tv'}"     @click="setSearchType('tv')">TV Shows</button>
+          <template x-for="g in searchGenresForType()" :key="'sg-'+g.id">
+            <button class="cat-chip" :class="{selected: searchGenreId===g.id}"
+                    @click="setSearchGenre(g.id)" x-text="g.name"></button>
+          </template>
+        </div>
+
+        <div x-show="browseMode">
+          <div class="empty-state" x-show="browseLoading"><div class="spinner"></div></div>
+          <template x-if="!browseLoading">
+            <div class="browse-results-wrap">
+              <template x-if="browseMovies.length > 0">
+                <div>
+                  <div class="browse-section-hd" x-text="'Movies · ' + browseMovies.length"></div>
+                  <div class="browse-results-grid">
+                    <template x-for="item in browseMovies" :key="'bm-'+item.id">
+                      <div class="card browse-grid-card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+                        <template x-if="item.image">
+                          <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                               @error="$el.style.display='none'">
+                        </template>
+                        <template x-if="!item.image">
+                          <div class="card-poster-placeholder" x-text="item.title"></div>
+                        </template>
+                        <div class="card-info">
+                          <div class="card-title" x-text="item.title"></div>
+                          <div class="card-meta" x-text="item.year"></div>
+                        </div>
+                        <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                                @click.stop="toggleWatchlist(item)"
+                                x-text="item.inWatchlist ? '✓' : '+'" :title="item.inWatchlist?'Remove':'Add'"></button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <template x-if="browseShows.length > 0">
+                <div>
+                  <div class="browse-section-hd" x-text="'TV Shows · ' + browseShows.length"></div>
+                  <div class="browse-results-grid">
+                    <template x-for="item in browseShows" :key="'bs-'+item.id">
+                      <div class="card browse-grid-card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+                        <template x-if="item.image">
+                          <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                               @error="$el.style.display='none'">
+                        </template>
+                        <template x-if="!item.image">
+                          <div class="card-poster-placeholder" x-text="item.title"></div>
+                        </template>
+                        <div class="card-info">
+                          <div class="card-title" x-text="item.title"></div>
+                          <div class="card-meta" x-text="item.year"></div>
+                        </div>
+                        <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                                @click.stop="toggleWatchlist(item)"
+                                x-text="item.inWatchlist ? '✓' : '+'" :title="item.inWatchlist?'Remove':'Add'"></button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+              <div class="empty-state" x-show="browseMovies.length===0 && browseShows.length===0">
+                <span class="text-muted text-sm">No results for "<span x-text="browseTitle"></span>"</span>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <div x-show="!browseMode && searchQuery.length >= 2">
+          <div class="empty-state" x-show="searchLoading"><div class="spinner"></div></div>
+          <div class="catalogue-row" x-show="!searchLoading && searchResults.length > 0" style="margin-top:8px">
+            <div class="row-header">
+              <span class="row-title">Results for "<span x-text="searchQuery"></span>"</span>
+              <span class="text-muted text-sm" x-text="searchResults.length + ' found'"></span>
+            </div>
+            <div class="row-scroll">
+              <template x-for="item in searchResults" :key="'sr-'+item.id+item.mediaType">
+                <div class="card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+                  <template x-if="item.image">
+                    <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                         @error="$el.style.display='none'">
+                  </template>
+                  <template x-if="!item.image">
+                    <div class="card-poster-placeholder" x-text="item.title"></div>
+                  </template>
+                  <div class="card-info">
+                    <div class="card-title" x-text="item.title"></div>
+                    <div class="card-meta" x-text="[item.year, item.mediaType==='show'?'TV':'Movie'].filter(Boolean).join(' · ')"></div>
+                  </div>
+                  <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                          @click.stop="toggleWatchlist(item)"
+                          x-text="item.inWatchlist ? '✓' : '+'" :title="item.inWatchlist?'Remove':'Add'"></button>
+                </div>
+              </template>
+            </div>
+          </div>
+          <div class="empty-state" x-show="!searchLoading && searchResults.length===0">
+            <span class="icon">🔍</span>
+            <span>No results for "<span x-text="searchQuery"></span>"</span>
+          </div>
+        </div>
+
+        <div x-show="!browseMode && searchQuery.length < 2" class="rows-container" style="margin-top:4px">
+          <template x-for="cat in searchSuggestionCats()" :key="'sc-'+cat.id">
+            <div class="catalogue-row">
+              <div class="row-header"><span class="row-title" x-text="cat.title"></span></div>
+              <div class="row-scroll">
+                <template x-for="opt in catDisplayItems(cat)" :key="'ct-'+opt.id">
+                  <div class="collection-tile" @click="browseByTile(cat, opt)">
+                    <template x-if="opt.coverImage">
+                      <img class="collection-tile-img" :src="opt.coverImage" :alt="opt.name" loading="lazy"
+                           @error="$el.style.display='none'">
+                    </template>
+                    <div class="collection-tile-label" x-text="opt.name"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <div class="empty-state" x-show="searchDiscoverLoading"><div class="spinner"></div></div>
+          <template x-if="!searchDiscoverLoading">
+            <div>
+              <template x-for="row in searchDiscoverRows()" :key="row.id">
+                <div class="catalogue-row">
+                  <div class="row-header">
+                    <span class="row-title" x-text="row.title"></span>
+                    <button class="row-see-all" @click="openExpandedRow(row.title, row.items)">See all</button>
+                  </div>
+                  <div class="row-scroll">
+                    <template x-for="item in row.items" :key="'sdr-'+row.id+item.id">
+                      <div class="card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+                        <template x-if="item.image">
+                          <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                               @error="$el.style.display='none'">
+                        </template>
+                        <template x-if="!item.image">
+                          <div class="card-poster-placeholder" x-text="item.title"></div>
+                        </template>
+                        <div class="card-info">
+                          <div class="card-title" x-text="item.title"></div>
+                          <div class="card-meta" x-text="[item.year, item.mediaType==='show'?'TV':'Movie'].filter(Boolean).join(' · ')"></div>
+                        </div>
+                        <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                                @click.stop="toggleWatchlist(item)"
+                                x-text="item.inWatchlist ? '✓' : '+'" :title="item.inWatchlist?'Remove':'Add'"></button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+
+      </div><!-- search pane -->
+
+
+      <!-- ══ DISCOVER ═══════════════════════════════════════════════════════ -->
+      <div class="tab-pane" :class="{active: activeTab==='discover'}">
+        <div class="rows-container">
+
+          <div class="hero" x-show="heroItem && activeTab==='discover'">
+            <div class="hero-backdrop" :style="heroItem?.backdropUrl ? `background-image:url('${heroItem.backdropUrl}')` : ''"></div>
+            <div class="hero-gradient"></div>
+            <div class="hero-info">
+              <div class="hero-title" x-text="heroItem?.title"></div>
+              <div class="hero-meta">
+                <span class="hero-badge" x-text="heroItem?.mediaType==='show' ? 'TV' : 'MOVIE'"></span>
+                <span x-text="heroItem?.year"></span>
+              </div>
+              <div class="hero-actions">
+                <button class="btn btn-primary btn-sm" @click="toggleWatchlist(heroItem)"
+                        x-text="heroItem?.inWatchlist ? '✓ In Watchlist' : '+ Watchlist'"></button>
+              </div>
+            </div>
+          </div>
+
+          <template x-for="cat in catalogues.filter(c => c.placement === 'DISCOVER').sort((a,b) => (a.sortOrder||0)-(b.sortOrder||0))" :key="cat.id">
+            <div class="catalogue-row" x-show="discoverRowItems(cat).length > 0">
+              <div class="row-header">
+                <span class="row-title" x-text="cat.title"></span>
+                <button class="row-see-all" @click="openExpandedRow(cat.title, discoverRowItems(cat))">See all</button>
+              </div>
+              <div class="row-scroll">
+                <template x-for="item in discoverRowItems(cat)" :key="'d-'+cat.id+'-'+item.id">
+                  <div class="card" @mouseenter="hoverCard(item)" @click="openDetail(item)">
+                    <template x-if="item.image">
+                      <img class="card-poster" :src="item.image" :alt="item.title" loading="lazy"
+                           @error="$el.style.display='none'">
+                    </template>
+                    <template x-if="!item.image">
+                      <div class="card-poster-placeholder" x-text="item.title"></div>
+                    </template>
+                    <div class="card-info">
+                      <div class="card-title" x-text="item.title"></div>
+                      <div class="card-meta" x-text="item.year"></div>
+                    </div>
+                    <button class="card-wl-btn" :class="{'in-wl': item.inWatchlist}"
+                            @click.stop="toggleWatchlist(item)"
+                            x-text="item.inWatchlist ? '✓' : '+'"></button>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <div class="empty-state" x-show="!discoverLoaded">
+            <div class="spinner"></div>
+          </div>
+        </div>
+      </div><!-- discover pane -->
+
+
+      <!-- ══ CAMERAS ════════════════════════════════════════════════════════ -->
+      <div class="tab-pane" :class="{active: activeTab==='cameras'}">
+        <div class="cameras-container">
+
+          <div class="camera-no-frigate" x-show="!camerasFrigateConfigured">
+            <span class="icon">📷</span>
+            <strong>Frigate not configured</strong>
+            <span class="text-sm">Add a Frigate URL in Settings to enable cameras.</span>
+            <button class="btn btn-secondary btn-sm mt-2" @click="switchTab('settings'); settingsTab='integration'">Open Settings</button>
+          </div>
+
+          <div x-show="camerasFrigateConfigured">
+            <div class="camera-grid" x-show="cameras.length > 0">
+              <template x-for="cam in cameras" :key="cam.name">
+                <div class="camera-card" @click="openCamera(cam)">
+                  <img class="camera-snap" :src="cam.snapshotUrl+'?t='+cameraNonce"
+                       :alt="cam.name" @error="$el.src='/xadarr/api/cameras/snapshot/'+cam.name">
+                  <div class="camera-label">
+                    <span x-text="cam.name"></span>
+                    <span class="live-badge">LIVE</span>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div class="empty-state" x-show="cameras.length===0 && camerasFrigateConfigured">
+              <div class="spinner"></div>
+              <span>Loading cameras…</span>
+            </div>
+          </div>
+        </div>
+      </div><!-- cameras pane -->
+
+
+      <!-- ══ SETTINGS ═══════════════════════════════════════════════════════ -->
+      <div class="tab-pane" :class="{active: activeTab==='settings'}">
+        <div class="settings-container">
+
+          <div class="settings-section">
+            <div class="settings-section-title">Integration</div>
+
+            <div class="settings-row settings-url-row">
+              <div class="settings-label">
+                <div class="settings-label-title">Episeerr URL</div>
+                <div class="settings-label-sub">Used for rule picker and activity toasts</div>
+              </div>
+              <input type="url" placeholder="http://192.168.x.x:5002" x-model="settings.episeerr_url"
+                     @change="saveSetting('episeerr_url', settings.episeerr_url)">
+            </div>
+
+            <div class="settings-row settings-url-row">
+              <div class="settings-label">
+                <div class="settings-label-title">Frigate URL</div>
+                <div class="settings-label-sub">Enables Cameras tab and snapshot grid</div>
+              </div>
+              <input type="url" placeholder="http://192.168.x.x:5000" x-model="settings.frigate_url"
+                     @change="saveFrigateUrl()">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Playback Webhook</div>
+            <div class="settings-row">
+              <div class="settings-label"><div class="settings-label-title">Enabled</div></div>
+              <div class="settings-control">
+                <label class="toggle">
+                  <input type="checkbox" x-model="settings.webhook_enabled"
+                         @change="saveSetting('webhook_enabled', settings.webhook_enabled)">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="settings-row settings-url-row" x-show="settings.webhook_enabled">
+              <div class="settings-label"><div class="settings-label-title">Webhook URL</div></div>
+              <input type="url" placeholder="http://…" x-model="webhookUrlRaw"
+                     @change="saveWebhookUrl()">
+            </div>
+            <div class="settings-row" x-show="settings.webhook_enabled">
+              <div class="settings-label">
+                <div class="settings-label-title">Interval (seconds)</div>
+              </div>
+              <div class="settings-control">
+                <input type="number" class="settings-input-sm" x-model="settings.webhook_interval_seconds"
+                       @change="saveSetting('webhook_interval_seconds', settings.webhook_interval_seconds)"
+                       min="10" max="300">
+              </div>
+            </div>
+            <div class="settings-row">
+              <div class="settings-label"><div class="settings-label-title">Test Webhook</div></div>
+              <div class="settings-control">
+                <button class="btn btn-secondary btn-sm" @click="testWebhook()">Send Test</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Trakt</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <div class="settings-label-title">Connection</div>
+                <div class="settings-label-sub"
+                     x-text="traktStatus.connected ? 'Connected' : (traktStatus.hasClientId ? 'Not connected' : 'Client ID required')"></div>
+              </div>
+              <div class="settings-control">
+                <template x-if="traktStatus.connected">
+                  <button class="btn btn-ghost btn-sm" @click="disconnectTrakt()">Disconnect</button>
+                </template>
+                <template x-if="!traktStatus.connected && traktStatus.hasClientId">
+                  <a class="btn btn-primary btn-sm" href="/xadarr/api/trakt/connect">Connect</a>
+                </template>
+              </div>
+            </div>
+            <div class="settings-row settings-url-row">
+              <div class="settings-label">
+                <div class="settings-label-title">Client ID</div>
+                <div class="settings-label-sub">From trakt.tv/oauth/applications</div>
+              </div>
+              <input type="text" placeholder="Trakt Client ID"
+                     x-model="settings.trakt_client_id"
+                     @change="saveSetting('trakt_client_id', settings.trakt_client_id); loadTraktStatus()">
+            </div>
+            <div class="settings-row settings-url-row">
+              <div class="settings-label"><div class="settings-label-title">Client Secret</div></div>
+              <input type="password" placeholder="Trakt Client Secret"
+                     x-model="settings.trakt_client_secret"
+                     @change="saveSetting('trakt_client_secret', settings.trakt_client_secret)">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Home Servers</div>
+            <div x-show="servers.length > 0">
+              <template x-for="srv in servers" :key="srv.connectionId">
+                <div class="server-card">
+                  <span class="server-badge" x-text="srv.serverKind"></span>
+                  <div class="server-card-info">
+                    <template x-if="editingServerId === srv.connectionId">
+                      <input class="server-name-input"
+                        :id="'server-rename-' + srv.connectionId"
+                        x-model="editingServerName"
+                        @keydown.enter="commitRenameServer()"
+                        @keydown.escape="editingServerId = null"
+                        @blur="commitRenameServer()">
+                    </template>
+                    <template x-if="editingServerId !== srv.connectionId">
+                      <div class="server-card-name" title="Click to rename" style="cursor:pointer"
+                        @click="startRenameServer(srv)" x-text="srv.displayName || srv.serverName"></div>
+                    </template>
+                    <div class="server-card-url" x-text="srv.serverUrl"></div>
+                  </div>
+                  <button class="btn btn-ghost btn-xs" @click="reconnectServer(srv)" title="Re-authenticate">↺</button>
+                  <button class="btn btn-ghost btn-xs" @click="removeServer(srv.connectionId)">✕</button>
+                </div>
+              </template>
+            </div>
+            <button class="btn btn-secondary btn-sm mt-2" @click="showServerForm=!showServerForm; serverForm={kind:'JELLYFIN',url:'',username:'',password:'',token:''}">
+              <span x-text="showServerForm ? 'Cancel' : '+ Connect Server'"></span>
+            </button>
+            <div class="connect-form" x-show="showServerForm">
+              <div class="connect-form-row">
+                <label>Server Type</label>
+                <select x-model="serverForm.kind">
+                  <option value="JELLYFIN">Jellyfin</option>
+                  <option value="EMBY">Emby</option>
+                  <option value="PLEX">Plex</option>
+                </select>
+              </div>
+              <div class="connect-form-row">
+                <label>Server URL</label>
+                <input type="url" placeholder="http://192.168.x.x:8096" x-model="serverForm.url">
+              </div>
+              <template x-if="serverForm.kind !== 'PLEX'">
+                <div>
+                  <div class="connect-form-row">
+                    <label>Username</label>
+                    <input type="text" x-model="serverForm.username">
+                  </div>
+                  <div class="connect-form-row">
+                    <label>Password</label>
+                    <input type="password" x-model="serverForm.password">
+                  </div>
+                </div>
+              </template>
+              <template x-if="serverForm.kind === 'PLEX'">
+                <div class="connect-form-row">
+                  <label>Plex Token</label>
+                  <input type="text" x-model="serverForm.token">
+                </div>
+              </template>
+              <button class="btn btn-primary btn-sm" @click="connectServer()" :disabled="serverConnecting">
+                <span x-show="serverConnecting" class="spinner" style="width:14px;height:14px;border-width:2px"></span>
+                <span x-text="serverConnecting ? 'Connecting…' : 'Connect'"></span>
+              </button>
+              <span class="text-sm" style="color:var(--danger); margin-left:8px" x-text="serverError"></span>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">IPTV</div>
+            <div class="settings-row settings-url-row">
+              <div class="settings-label"><div class="settings-label-title">M3U Playlist URL</div></div>
+              <input type="url" placeholder="http://…/playlist.m3u" x-model="iptv.m3uUrl">
+            </div>
+            <div class="settings-row settings-url-row">
+              <div class="settings-label"><div class="settings-label-title">EPG XML URL</div></div>
+              <input type="url" placeholder="http://…/epg.xml" x-model="iptv.epgUrl">
+            </div>
+            <div class="mt-2">
+              <button class="btn btn-primary btn-sm" @click="saveIptv()">Save IPTV</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Addons</div>
+            <div x-show="addons.length > 0">
+              <template x-for="addon in addons" :key="addon.id">
+                <div class="addon-item">
+                  <img class="addon-logo" :src="addon.logo || ''" :alt="addon.name"
+                       @error="$el.style.visibility='hidden'">
+                  <div class="addon-info">
+                    <div class="addon-name" x-text="addon.name"></div>
+                    <div class="addon-ver" x-text="addon.version"></div>
+                  </div>
+                  <button class="btn btn-ghost btn-xs" @click="removeAddon(addon.id)">✕</button>
+                </div>
+              </template>
+            </div>
+            <div class="flex gap-2 mt-2">
+              <input type="url" placeholder="Stremio addon URL" x-model="addonUrlInput" style="flex:1">
+              <button class="btn btn-secondary btn-sm" @click="addAddon()">Install</button>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Catalogue Placement</div>
+            <p class="text-sm text-muted mb-3">Set where each catalogue appears. Use ↑↓ to reorder. Changes sync to TV on next app open.</p>
+            <div class="cat-list">
+              <template x-for="cat in catalogues.filter(c => !isSubItem(c))" :key="cat.id">
+                <div class="cat-item-wrap">
+                  <div class="cat-item">
+                    <div class="cat-reorder">
+                      <button class="cat-arrow" @click="moveCatalogueUp(cat.id)" :disabled="isFirstVisible(cat.id)" title="Move up">↑</button>
+                      <button class="cat-arrow" @click="moveCatalogueDown(cat.id)" :disabled="isLastVisible(cat.id)" title="Move down">↓</button>
+                    </div>
+                    <div class="cat-item-name">
+                      <div x-text="cat.title"></div>
+                      <div class="cat-item-sub" x-text="cat.sourceType || cat.kind"></div>
+                    </div>
+                    <select class="cat-placement-select" x-model="cat.placement" @change="saveCatalogues()">
+                      <option value="HOME">Home</option>
+                      <option value="DISCOVER">Discover</option>
+                      <option value="SEARCH">Search</option>
+                      <option value="HIDDEN">Hidden</option>
+                    </select>
+                  </div>
+                  <template x-if="isCatPicker(cat)">
+                    <div class="cat-chips-row">
+                      <template x-for="opt in availableItemsForCat(cat)" :key="opt.id">
+                        <button class="cat-chip" :class="{selected: catItemSelected(cat, opt.id)}"
+                                @click="toggleCatalogueItem(cat, opt.id)" x-text="opt.name"></button>
+                      </template>
+                    </div>
+                  </template>
+                </div>
+              </template>
+              <div class="empty-state" x-show="catalogues.length===0" style="padding:20px">
+                <span class="text-muted">No catalogues found — sync settings from TV app first</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">API Keys</div>
+            <div class="settings-row settings-url-row">
+              <div class="settings-label">
+                <div class="settings-label-title">TMDB API Key</div>
+                <div class="settings-label-sub">Required for trending and search</div>
+              </div>
+              <input type="text" placeholder="your-tmdb-api-key" x-model="settings.tmdb_api_key"
+                     @change="saveSetting('tmdb_api_key', settings.tmdb_api_key)">
+            </div>
+          </div>
+
+          <div class="settings-section">
+            <div class="settings-section-title">Watchlist API (LAN)</div>
+            <div class="settings-row">
+              <div class="settings-label">
+                <div class="settings-label-title">Enabled</div>
+                <div class="settings-label-sub">Expose GET /watchlist over LAN</div>
+              </div>
+              <div class="settings-control">
+                <label class="toggle">
+                  <input type="checkbox" x-model="settings.watchlist_api_enabled"
+                         @change="saveSetting('watchlist_api_enabled', settings.watchlist_api_enabled)">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- settings-container -->
+      </div><!-- settings pane -->
+
+    </div><!-- main -->
+  </div><!-- app -->
+
+</div><!-- xadarr-embed-root -->
+{% endblock %}
+
+{% block extra_js %}
+<script>window._XB="/xadarr"</script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="/xadarr/app.js"></script>
+<script>
+document.addEventListener('alpine:initialized', () => {
+    const root = document.getElementById('xadarr-embed-root');
+    window.xadarrGoto = (section, clickedLink) => {
+        Alpine.$data(root).switchTab(section);
+        history.pushState({}, '', '/xadarr/' + section);
+        document.querySelectorAll('[data-xadarr-section]').forEach(el => {
+            el.classList.toggle('active', el === clickedLink);
+        });
+    };
+});
+</script>
+{% endblock %}

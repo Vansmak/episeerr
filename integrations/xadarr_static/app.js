@@ -5,6 +5,7 @@ function xadarr() {
     // ── State ─────────────────────────────────────────────────────────────
     activeTab: 'home',
     theme: 'midnight',
+    embedded: false,
 
     // Home
     homeLoaded: false,
@@ -157,6 +158,28 @@ function xadarr() {
       this.loadEpiseerrPending();
       this.loadServers();
       this.loadAddons();
+      this.loadIptv();
+      this.loadTraktStatus();
+    },
+
+    // ── Embedded init (called when hosted inside Episeerr's chrome) ───────
+    async embeddedInit(section) {
+      this.embedded = true;
+      this.activeTab = section;
+      const savedTheme = localStorage.getItem('xadarr_theme') || 'midnight';
+      this.theme = savedTheme;
+      const sectionLoad =
+        section === 'discover' ? this.loadDiscover() :
+        section === 'search'   ? this.loadSearchDiscover() :
+        section === 'cameras'  ? this.loadCameras() :
+        Promise.resolve();
+      await Promise.all([this.loadSettings(), this.loadCatalogues(), sectionLoad]);
+      this.connectSSE();
+      this.loadHistory();
+      this.loadEpiseerrPending();
+      this.loadServers();
+      this.loadAddons();
+      this.loadIptv();
       this.loadTraktStatus();
     },
 
@@ -166,6 +189,7 @@ function xadarr() {
 
       if (tab === 'cameras') {
         this._cameraTimer = setInterval(() => { this.cameraNonce = Date.now(); }, 2000);
+        if (this.cameras.length === 0) this.loadCameras();
       } else {
         clearInterval(this._cameraTimer);
         this._cameraTimer = null;
@@ -183,11 +207,13 @@ function xadarr() {
       if (tab === 'tv' && !this.iptv.m3uUrl) {
         this.loadIptv();
       }
-      if (tab === 'settings' && this.servers.length === 0) {
-        this.loadServers();
+      if (tab === 'settings') {
+        if (this.servers.length === 0) {
+          this.loadServers();
+          this.loadAddons();
+          this.loadCatalogues();
+        }
         this.loadIptv();
-        this.loadAddons();
-        this.loadCatalogues();
       }
     },
 

@@ -1400,3 +1400,15 @@ img { display: block; }
 .mb-2 { margin-bottom: 8px; }
 .mb-3 { margin-bottom: 12px; }
 .w-full { width: 100%; }
+
+/* ── Embedded mode (inside Episeerr chrome) ─────────────────────────────── */
+.xadarr-embedded #app {
+  min-height: calc(100vh - 56px);
+  flex-direction: row;
+}
+.xadarr-embedded .sidebar { display: none !important; }
+.xadarr-embedded .main {
+  margin-left: 0 !important;
+  width: 100% !important;
+  min-height: calc(100vh - 56px);
+}
