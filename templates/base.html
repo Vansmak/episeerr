@@ -504,6 +504,10 @@
                     <i class="fas fa-chevron-down"></i>
                 </div>
                 <div class="sidebar-submenu {% if request.path.startswith('/xadarr') %}show{% endif %}" id="xadarrSubmenu">
+                    <a href="/xadarr/home" data-xadarr-section="home" class="sidebar-rule-item {% if request.path in ('/xadarr/', '/xadarr/home') %}active{% endif %}">
+                        <i class="fas fa-home me-2"></i>
+                        <span class="sidebar-rule-name">Home</span>
+                    </a>
                     <a href="/xadarr/discover" data-xadarr-section="discover" class="sidebar-rule-item {% if request.path == '/xadarr/discover' %}active{% endif %}">
                         <i class="fas fa-compass me-2"></i>
                         <span class="sidebar-rule-name">Discover</span>
@@ -689,6 +693,11 @@ function setTheme(theme) {
         document.documentElement.removeAttribute('data-theme');
     } else {
         document.documentElement.setAttribute('data-theme', theme);
+    }
+    // Live-sync to embedded Xadarr if present on this page
+    const xRoot = document.getElementById('xadarr-embed-root');
+    if (xRoot && window.Alpine) {
+        try { Alpine.$data(xRoot).theme = theme; } catch (e) {}
     }
 }
 
@@ -1453,6 +1462,46 @@ document.addEventListener('DOMContentLoaded', checkForNewRequests);
       }
     }
   });
+})();
+</script>
+<!-- ─── Dispatcharr failover toasts ──────────────────────────────────── -->
+<div id="dispatcharr-toast-container"
+     style="position:fixed;bottom:1.25rem;right:1.25rem;z-index:9999;display:flex;flex-direction:column-reverse;gap:0.5rem;pointer-events:none;"></div>
+<script>
+(function () {
+    function showFailoverToast(channelName) {
+        const container = document.getElementById('dispatcharr-toast-container');
+        const el = document.createElement('div');
+        el.style.cssText = 'background:#1e2328;border:1px solid #fd7e14;border-radius:6px;min-width:260px;overflow:hidden;pointer-events:auto;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+        const header = document.createElement('div');
+        header.style.cssText = 'background:#fd7e14;color:#fff;padding:0.45rem 0.75rem;display:flex;align-items:center;gap:0.5rem;font-size:0.83rem;font-weight:600;';
+        header.innerHTML = '<i class="fas fa-exclamation-triangle"></i><span style="flex:1;">Channel Failover</span>';
+        const close = document.createElement('button');
+        close.innerHTML = '&times;';
+        close.style.cssText = 'background:none;border:none;color:#fff;font-size:1.1rem;line-height:1;cursor:pointer;padding:0;';
+        close.onclick = () => el.remove();
+        header.appendChild(close);
+        const body = document.createElement('div');
+        body.style.cssText = 'padding:0.5rem 0.75rem;color:#e0e0e0;font-size:0.85rem;';
+        body.textContent = channelName;
+        el.appendChild(header);
+        el.appendChild(body);
+        container.appendChild(el);
+        setTimeout(() => el.remove(), 10000);
+    }
+
+    const es = new EventSource('/api/integration/dispatcharr/notification/events');
+    let connected = false;
+    es.onopen = () => { connected = true; };
+    es.onmessage = function (e) {
+        try {
+            const d = JSON.parse(e.data);
+            if (d.event === 'channel_failover') {
+                showFailoverToast(d.channel_name || 'Unknown channel');
+            }
+        } catch (_) {}
+    };
+    es.onerror = function () { if (!connected) es.close(); };
 })();
 </script>
 </body>

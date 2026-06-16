@@ -378,6 +378,19 @@ def _broadcast_player_state() -> None:
             _sse_queues.remove(q)
 
 
+def broadcast_episeerr_event(entry: dict) -> None:
+    payload = "event: episeerr\ndata: " + json.dumps(entry) + "\n\n"
+    with _sse_lock:
+        dead = []
+        for q in _sse_queues:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _sse_queues.remove(q)
+
+
 # ── JSON file helpers ─────────────────────────────────────────────────────────
 
 def _load_json(path: str, default):
@@ -886,6 +899,11 @@ class XadarrIntegration(ServiceIntegration):
         # ── UI blueprint (served at /xadarr) ───────────────────────────────────
         ui_bp = Blueprint("xadarr_ui", __name__, url_prefix="/xadarr")
 
+        @ui_bp.route("/")
+        @ui_bp.route("/home")
+        def xadarr_embed_home():
+            return render_template("xadarr_embed.html", section="home")
+
         @ui_bp.route("/discover")
         def xadarr_embed_discover():
             return render_template("xadarr_embed.html", section="discover")
@@ -902,12 +920,11 @@ class XadarrIntegration(ServiceIntegration):
         def xadarr_embed_settings():
             return render_template("xadarr_embed.html", section="settings")
 
-        @ui_bp.route("/", defaults={"path": ""})
         @ui_bp.route("/<path:path>")
         def serve_ui(path):
-            if path and os.path.exists(os.path.join(_STATIC_DIR, path)):
+            if os.path.exists(os.path.join(_STATIC_DIR, path)):
                 return send_from_directory(_STATIC_DIR, path)
-            return send_from_directory(_STATIC_DIR, "index.html")
+            return redirect("/xadarr/home")
 
         # ── Addon manifest blueprint ────────────────────────────────────────────
         # Hosted at /api/addon/xadarr-bridge/manifest.json so the Xadarr app's

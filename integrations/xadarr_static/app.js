@@ -166,8 +166,7 @@ function xadarr() {
     async embeddedInit(section) {
       this.embedded = true;
       this.activeTab = section;
-      const savedTheme = localStorage.getItem('xadarr_theme') || 'midnight';
-      this.theme = savedTheme;
+      this.theme = localStorage.getItem('episeerr-theme') || 'default';
       const sectionLoad =
         section === 'discover' ? this.loadDiscover() :
         section === 'search'   ? this.loadSearchDiscover() :
@@ -545,8 +544,8 @@ function xadarr() {
       const data = await fetch(BASE+'/api/settings').then(r => r.json()).catch(() => ({}));
       this.settings = data;
 
-      // Sync theme from blob (server saved it)
-      if (data.web_theme) {
+      // Sync theme from blob (server saved it) — in embedded mode Episeerr controls the theme
+      if (data.web_theme && !this.embedded) {
         this.theme = data.web_theme;
         localStorage.setItem('xadarr_theme', data.web_theme);
       }
@@ -995,11 +994,12 @@ function xadarr() {
 
     _pushEpiseerrToast(entry) {
       const typeMap = {
-        'episode.grabbed':    { cls: 'grab',  title: '📥 Grabbed' },
-        'episode.ready':      { cls: 'ready', title: '✅ Ready' },
-        'rule.triggered':     { cls: 'rule',  title: '⚡ Rule Triggered' },
-        'rule.assigned':      { cls: 'rule',  title: '✓ Rule Assigned' },
-        'watchlist.requested':{ cls: 'watch', title: '➕ Watchlist' },
+        'episode.grabbed':    { cls: 'grab',     title: '📥 Grabbed' },
+        'episode.ready':      { cls: 'ready',    title: '✅ Ready' },
+        'rule.triggered':     { cls: 'rule',     title: '⚡ Rule Triggered' },
+        'rule.assigned':      { cls: 'rule',     title: '✓ Rule Assigned' },
+        'watchlist.requested':{ cls: 'watch',    title: '➕ Watchlist' },
+        'channel.failover':   { cls: 'failover', title: '⚠ Failover' },
       };
       const mapped = typeMap[entry.event] || { cls: '', title: entry.event };
       this._showToast(mapped.title, entry.title, mapped.cls);

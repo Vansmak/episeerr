@@ -2,17 +2,17 @@
 
 ## What This Is
 
-Joe's personal production build of Episeerr. Includes everything in `dev` plus the Arvio TV app integration. Running as Docker container `episeerr` on port 5002.
+Joe's personal production build of Episeerr. Includes everything in `dev` plus the Xadarr TV app integration. Running as Docker container `episeerr` on port 5002.
 
 ## Branches
 
 | Branch | Directory | Purpose |
 |--------|-----------|---------|
-| `custom` | `~/projects/episeerr_custom` | **This** — production, includes Arvio |
-| `dev` | `~/projects/episeerr_dev` | Upstream features, no Arvio |
+| `custom` | `~/projects/episeerr_custom` | **This** — production, includes Xadarr |
+| `dev` | `~/projects/episeerr_dev` | Upstream features, no Xadarr |
 | `main` | merged from dev | Public Docker Hub releases |
 
-General improvements go to both `dev` and `custom`. Arvio-specific code stays in `custom` only.
+General improvements go to both `dev` and `custom`. Xadarr-specific code stays in `custom` only.
 
 ## Deploy
 
@@ -34,7 +34,8 @@ cd ~/projects/episeerr_custom && ./release_dev.sh custom
 | `movie_processor.py` | Radarr movie rules engine |
 | `media_processor.py` | Sonarr episode rule processing |
 | `settings_db.py` | SQLite helpers — `get_service()`, `save_service()` |
-| `integrations/arvio.py` | Arvio TV app — playback webhooks + settings sync (custom only) |
+| `integrations/xadarr.py` | Xadarr TV app — playback webhooks + settings sync + embedded web UI (custom only) |
+| `integrations/dispatcharr.py` | Dispatcharr IPTV — stream widget, webhook handler, maintenance trigger, failover toast |
 | `integrations/trakt.py` | Trakt — device code auth, watchlist poster cards, remove from Trakt |
 | `integrations/plex.py` | Plex — watchlist sync, autosync enabled check |
 | `integrations/__init__.py` | Auto-discovers integrations; `create_blueprint()` supports list return |
@@ -64,9 +65,13 @@ Services live in the `services` SQLite table (`enabled BOOLEAN DEFAULT 1`).
 
 `integrations/xadarr.py` — webhook receiver + settings sync + embedded web UI.
 
+**In Joe's setup, Episeerr is the Xadarr sync server.** The TV app connects directly to Episeerr — no separate xadarr-server in this path. (xadarr-server remains a valid alternative for other users.)
+
 - Webhook fires Sonarr rule processing when `progress_percent >= completion_threshold`
 - History only logs events at/above threshold + watchlist events
-- SSE player state at `/dashboard/player/events` for web UI live player
+- SSE stream at `/xadarr/api/player/events` — the TV app holds this connection for live player state and toast notifications
+- `broadcast_episeerr_event(entry: dict)` — module-level function; pushes a named `event: episeerr` SSE frame to all connected Xadarr clients, triggering `_pushEpiseerrToast` in the TV app. Used by `dispatcharr.py` to deliver the channel failover toast.
+- Toast event types handled by TV app: `episode.grabbed`, `episode.ready`, `rule.triggered`, `rule.assigned`, `watchlist.requested`, `channel.failover` (orange)
 
 ## Xadarr Embedded Web UI
 
@@ -93,6 +98,24 @@ Routes in `integrations/xadarr.py`:
 - `integration_configs[name]['enabled']` also from raw DB query
 - `toggleServiceEnabled(service, checked)` JS → `POST /api/toggle-service/<service>`
 
+## Dispatcharr Integration
+
+`integrations/dispatcharr.py` — live IPTV stream monitoring widget + webhook handler.
+
+**Webhook events handled** (`POST /api/integration/dispatcharr/webhook`):
+| Event | Action |
+|-------|--------|
+| `channel_start` / `channel_started` | Add stream to `_active_streams`, bg API sync after 1.5s |
+| `channel_stop` / `channel_stopped` | Remove stream from `_active_streams` |
+| `channel_failover` | Set `failover=True` on stream, push Episeerr web toast (SSE), push Xadarr TV toast via `broadcast_episeerr_event` |
+| `m3u_refreshed` | Run `scripts/dispatcharr/maintenance.sql` via `docker exec dispatcharr psql` |
+
+**Notification SSE** (`GET /api/integration/dispatcharr/notification/events`): Pushes `channel_failover` events to Episeerr web UI. `base.html` listens on this stream and shows an orange Bootstrap toast on any page.
+
+**Xadarr TV toast**: Dispatcharr's `channel_failover` handler imports and calls `broadcast_episeerr_event({"event": "channel.failover", "title": <channel_name>})` from `integrations.xadarr` — fires an `episeerr` SSE event to the TV app which shows the orange "⚠ Failover" toast.
+
+**Maintenance script**: `dispatcharr.py` reads `scripts/dispatcharr/maintenance.sql` from the host project tree and pipes it to `docker exec dispatcharr psql -U postgres -d dispatcharr`. Live source is `~/projects/episeerr_custom/scripts/dispatcharr/maintenance.sql`. Runs in ~270ms. (A copy also exists at `/home/joe/config/dispatcharr/scripts/maintenance.sql` but is **not** what runs.)
+
 ## Project Separation Policy
 
 Three separate projects — never mix code between them without explicit instruction:
@@ -100,19 +123,19 @@ Three separate projects — never mix code between them without explicit instruc
 **episeerr_dev** (`~/projects/episeerr_dev`)
 - Community/upstream Episeerr only
 - Bug fixes, general features, integrations useful to all users
-- No Arvio/Xadarr-specific code
+- No Xadarr-specific code
 - Promote to production via `./promote_dev.sh <version>`
 - Changes here eventually become `vansmak/episeerr:latest` on Docker Hub
 
 **episeerr_custom** (`~/projects/episeerr_custom`)
 - Joe's personal build only
-- Includes everything in dev PLUS Xadarr integration (replaces Arvio)
-- Xadarr is Joe's renamed fork of the Arvio Android TV app
-- `integrations/arvio.py` lives here only — never in episeerr_dev
+- Includes everything in dev PLUS Xadarr integration
+- Xadarr is Joe's renamed fork of the Arvio Android TV app; Episeerr is its sync server
+- `integrations/xadarr.py` lives here only — never in episeerr_dev
 - Deploy via `docker cp` to running `episeerr` container
 - Bake permanently via `./release_custom.sh`
 
 **Xadarr** (`~/projects/xadarr`)
-- Joe's personal Android TV app fork
-- Self-hosted sync server at `~/projects/xadarr/xadarr-server/` (xadarr-server container)
+- Joe's personal Android TV app fork (Kotlin/Jetpack Compose)
+- Joe uses Episeerr as his sync server; xadarr-server (`~/projects/xadarr/xadarr-server/`) is a valid alternative for other users
 - Never include Episeerr-specific hardcoding — webhook system is generic

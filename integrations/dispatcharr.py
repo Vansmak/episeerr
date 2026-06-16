@@ -26,13 +26,15 @@ Dispatcharr setup:
 
 import re
 import time
+import queue
+import json
 import threading
 import logging
 import requests
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response, stream_with_context
 from integrations.base import ServiceIntegration
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,21 @@ _lock = threading.Lock()
 _active_streams: Dict[str, Dict] = {}   # keyed by channel_id (UUID string)
 _last_sync:      Optional[datetime] = None
 
+_notif_lock   = threading.Lock()
+_notif_queues: List = []
+
+
+def _broadcast_notification(event: str, data: dict) -> None:
+    payload = "data: " + json.dumps({"event": event, **data}) + "\n\n"
+    with _notif_lock:
+        dead = []
+        for q in _notif_queues:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _notif_queues.remove(q)
 
 # ══════════════════════════════════════════════════════════════════
 #  Internal helpers
@@ -448,7 +465,7 @@ class DispatcharrIntegration(ServiceIntegration):
         headers = {"X-Api-Key": api_key, "Content-Type": "application/json"}
         base    = url.rstrip("/")
 
-        events_to_subscribe = ["channel_start", "channel_stop", "m3u_refreshed"]
+        events_to_subscribe = ["channel_start", "channel_stop", "m3u_refreshed", "channel_failover"]
 
         try:
             integration_id = existing_id
@@ -604,6 +621,27 @@ class DispatcharrIntegration(ServiceIntegration):
                 name = (removed or {}).get("channel_name", cid)
                 logger.info(f"[Dispatcharr] Stream stopped: {name!r} ({cid})")
 
+            elif event in ("channel_failover",):
+                name = (
+                    data.get("stream_name") or
+                    data.get("channel_name") or
+                    data.get("channelName") or
+                    data.get("name") or
+                    "Unknown"
+                )
+                with _lock:
+                    if cid in _active_streams:
+                        _active_streams[cid]["failover"] = True
+                logger.info(f"[Dispatcharr] Failover on: {name!r} ({cid})")
+                _broadcast_notification("channel_failover", {"channel_name": name, "channel_id": cid})
+                try:
+                    from integrations.xadarr import broadcast_episeerr_event
+                    broadcast_episeerr_event({"event": "channel.failover", "title": name})
+                except Exception as _exc:
+                    logger.debug(f"[Dispatcharr] Xadarr toast skipped: {_exc}")
+                if api_url and api_key:
+                    _bg_sync(api_url, api_key, delay=1.0)
+
             elif event in ("m3u_refresh", "m3u_refreshed"):
                 logger.info("[Dispatcharr] M3U refreshed — running maintenance script")
                 threading.Thread(
@@ -615,6 +653,31 @@ class DispatcharrIntegration(ServiceIntegration):
                 logger.debug(f"[Dispatcharr] Ignored unhandled event: {event!r}")
 
             return jsonify({"status": "ok"}), 200
+
+        # ── Notification SSE ──────────────────────────────────────
+        @bp.route("/notification/events", methods=["GET"])
+        def notification_events():
+            q = queue.Queue(maxsize=10)
+            with _notif_lock:
+                _notif_queues.append(q)
+            def generate():
+                try:
+                    while True:
+                        try:
+                            yield q.get(timeout=30)
+                        except queue.Empty:
+                            yield ": keepalive\n\n"
+                finally:
+                    with _notif_lock:
+                        try:
+                            _notif_queues.remove(q)
+                        except ValueError:
+                            pass
+            return Response(
+                stream_with_context(generate()),
+                mimetype="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
 
         # ── Dashboard widget HTML ─────────────────────────────────
         @bp.route("/widget")
