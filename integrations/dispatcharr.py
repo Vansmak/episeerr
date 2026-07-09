@@ -635,8 +635,9 @@ class DispatcharrIntegration(ServiceIntegration):
                 logger.info(f"[Dispatcharr] Failover on: {name!r} ({cid})")
                 _broadcast_notification("channel_failover", {"channel_name": name, "channel_id": cid})
                 try:
-                    from integrations.xadarr import broadcast_episeerr_event
+                    from integrations.xadarr import broadcast_episeerr_event, notify_xadarr_event
                     broadcast_episeerr_event({"event": "channel.failover", "title": name})
+                    notify_xadarr_event("channel.failover", {"title": name})
                 except Exception as _exc:
                     logger.debug(f"[Dispatcharr] Xadarr toast skipped: {_exc}")
                 if api_url and api_key:

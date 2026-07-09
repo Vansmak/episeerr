@@ -2246,6 +2246,115 @@ def get_sonarr_series():
         app.logger.error(f"Error fetching Sonarr series: {str(e)}")
         return []
 
+
+def _sonarr_headers():
+    cfg = get_sonarr_config()
+    if not cfg or not cfg.get('url') or not cfg.get('api_key'):
+        return None, None
+    return cfg, {'X-Api-Key': cfg['api_key'], 'Content-Type': 'application/json'}
+
+
+@app.route('/api/sonarr/series')
+def api_sonarr_all_series():
+    """Fetch every series from Sonarr, unfiltered — unlike get_sonarr_series()
+    (which hides 'watched'-tagged series), this always returns the full list
+    regardless of file/watched status. Used by the Xadarr Android TV app's
+    library browser so shows with zero downloaded episodes (fully watched +
+    cleaned up, or not yet grabbed) still show up."""
+    cfg, headers = _sonarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+    try:
+        base = cfg['url'].rstrip('/')
+        series_resp = http.get(f"{base}/api/v3/series", headers=headers, timeout=15)
+        series_resp.raise_for_status()
+        all_series = series_resp.json()
+
+        config = load_config()
+        series_to_rule = {}
+        for rule_name, rule_data in config.get('rules', {}).items():
+            for sid in rule_data.get('series', {}):
+                series_to_rule[str(sid)] = rule_name
+
+        result = []
+        for s in all_series:
+            poster = next(
+                (img['remoteUrl'] for img in s.get('images', []) if img.get('coverType') == 'poster'),
+                None
+            )
+            stats = s.get('statistics', {})
+            result.append({
+                'id': s['id'],
+                'title': s.get('title', ''),
+                'tvdbId': s.get('tvdbId'),
+                'year': s.get('year'),
+                'overview': s.get('overview', ''),
+                'status': s.get('status', ''),
+                'monitored': s.get('monitored', False),
+                'episodeFileCount': stats.get('episodeFileCount', 0),
+                'episodeCount': stats.get('episodeCount', 0),
+                'totalEpisodeCount': stats.get('totalEpisodeCount', 0),
+                'sizeOnDisk': stats.get('sizeOnDisk', 0),
+                'poster': poster,
+                'assigned_rule': series_to_rule.get(str(s['id'])),
+            })
+        result.sort(key=lambda x: x['title'].lower())
+        return jsonify({'success': True, 'series': result})
+    except Exception as e:
+        app.logger.error(f"Error fetching all Sonarr series: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sonarr/series-search', methods=['POST'])
+def api_sonarr_series_search():
+    """Trigger a Sonarr SeriesSearch command for one series. Used by the Xadarr
+    Android TV app's library browser (couch-triggered search, no Sonarr UI needed)."""
+    data = request.get_json(silent=True) or {}
+    series_id = data.get('series_id')
+    if not series_id:
+        return jsonify({'success': False, 'error': 'series_id required'}), 400
+
+    cfg, headers = _sonarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+
+    try:
+        base = cfg['url'].rstrip('/')
+        resp = http.post(
+            f"{base}/api/v3/command",
+            headers=headers,
+            json={'name': 'SeriesSearch', 'seriesId': int(series_id)},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error triggering Sonarr series search: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/sonarr/series/<int:series_id>', methods=['DELETE'])
+def api_sonarr_delete_series(series_id):
+    """Delete a series from Sonarr (and its files) — used by the Xadarr Android
+    TV app's "delete from library" library-browser action."""
+    cfg, headers = _sonarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
+
+    try:
+        base = cfg['url'].rstrip('/')
+        resp = http.delete(
+            f"{base}/api/v3/series/{series_id}?deleteFiles=true",
+            headers=headers,
+            timeout=15,
+        )
+        if not resp.ok:
+            return jsonify({'success': False, 'error': f'Sonarr delete failed: {resp.status_code}'}), 500
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error deleting Sonarr series {series_id}: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 # ============================================================================
 # WEB UI ROUTES
 # ============================================================================
@@ -2461,6 +2570,59 @@ def api_assign_movie_rule():
         return jsonify({'success': True, 'assigned_rule': rule_name or None})
     except Exception as e:
         app.logger.error(f"Error assigning movie rule: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/radarr/movie-search', methods=['POST'])
+def api_radarr_movie_search():
+    """Trigger a Radarr MoviesSearch command for one movie. Used by the Xadarr
+    Android TV app's library browser (couch-triggered search, no Radarr UI needed)."""
+    data = request.get_json(silent=True) or {}
+    movie_id = data.get('movie_id')
+    if not movie_id:
+        return jsonify({'success': False, 'error': 'movie_id required'}), 400
+
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+
+    try:
+        base = cfg['url'].rstrip('/')
+        resp = http.post(
+            f"{base}/api/v3/command",
+            headers=headers,
+            json={'name': 'MoviesSearch', 'movieIds': [int(movie_id)]},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error triggering Radarr movie search: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/radarr/movie/<int:movie_id>', methods=['DELETE'])
+def api_radarr_delete_movie(movie_id):
+    """Delete a movie from Radarr (and its files) — used by the Xadarr Android TV
+    app's "delete from library" library-browser action."""
+    cfg, headers = _radarr_headers()
+    if not cfg:
+        return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
+
+    try:
+        base = cfg['url'].rstrip('/')
+        movie_resp = http.get(f"{base}/api/v3/movie/{movie_id}", headers=headers, timeout=10)
+        if not movie_resp.ok:
+            return jsonify({'success': False, 'error': 'Movie not found'}), 404
+        movie = movie_resp.json()
+
+        from movie_processor import delete_movie
+        ok = delete_movie(movie, base, cfg['api_key'], 'remove_from_radarr')
+        if not ok:
+            return jsonify({'success': False, 'error': 'Radarr delete failed'}), 500
+        return jsonify({'success': True})
+    except Exception as e:
+        app.logger.error(f"Error deleting Radarr movie {movie_id}: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
@@ -5500,6 +5662,105 @@ def delete_request(request_id):
         return jsonify({"status": "error", "message": "Failed to delete request"}), 500
 
 
+def assign_rule_to_series(series_id, rule_name, series_title='', tmdb_id=None, remove_select_tag=True):
+    """Core "assign a rule to a series" logic — shared by the pending-request
+    flow (api_assign_pending_rule) and the direct library-browser flow
+    (api_assign_series, for an already-tracked series with no pending request).
+
+    Mutates config.json, syncs the episeerr_<rule> tag to Sonarr, optionally
+    strips the episeerr_select tag (harmless no-op if the series never had one),
+    monitors/searches episodes per the rule's settings, and fires the
+    rule.assigned webhook. Returns (success: bool, error: str | None).
+    """
+    config = load_config()
+    if rule_name not in config.get('rules', {}):
+        return False, f"Unknown rule: {rule_name}"
+
+    series_id_str = str(series_id)
+    target_rule = config['rules'][rule_name]
+    target_rule.setdefault('series', {})
+    if series_id_str not in target_rule['series']:
+        target_rule['series'][series_id_str] = {'activity_date': None}
+    save_config(config)
+
+    try:
+        episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
+    except Exception as e:
+        app.logger.warning(f"Tag sync failed for series {series_id}: {e}")
+
+    try:
+        sonarr_cfg = get_sonarr_config()
+        s_url = normalize_url(sonarr_cfg.get('url', ''))
+        s_key = sonarr_cfg.get('api_key', '')
+        s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
+
+        if remove_select_tag:
+            tag_resp = http.get(f"{s_url}/api/v3/tag", headers=s_headers)
+            if tag_resp.ok:
+                tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
+                select_id = tag_map.get('episeerr_select')
+                if select_id:
+                    sr = http.get(f"{s_url}/api/v3/series/{series_id}", headers=s_headers)
+                    if sr.ok:
+                        sd = sr.json()
+                        tags = [t for t in sd.get('tags', []) if t != select_id]
+                        sd['tags'] = tags
+                        http.put(f"{s_url}/api/v3/series", headers=s_headers, json=sd)
+
+        # Monitor episodes per rule then search
+        rule_cfg = config['rules'][rule_name]
+        get_type     = rule_cfg.get('get_type', 'episodes')
+        get_count    = rule_cfg.get('get_count', 1)
+        action       = rule_cfg.get('action_option', 'monitor')
+        always_have  = rule_cfg.get('always_have', '')
+
+        if always_have:
+            try:
+                import media_processor as _mp
+                _mp.process_always_have(int(series_id), always_have)
+            except Exception as e:
+                app.logger.error(f"always_have failed: {e}")
+
+        eps_resp = http.get(f"{s_url}/api/v3/episode?seriesId={series_id}", headers=s_headers)
+        if eps_resp.ok:
+            all_eps = eps_resp.json()
+            s1_eps  = sorted([e for e in all_eps if e.get('seasonNumber') == 1],
+                             key=lambda x: x.get('episodeNumber', 0))
+            if get_type == 'all':
+                to_monitor = [e['id'] for e in all_eps if e.get('seasonNumber', 0) >= 1]
+            elif get_type == 'seasons':
+                n = get_count or 1
+                to_monitor = [e['id'] for e in all_eps if 1 <= e.get('seasonNumber', 0) < 1 + n]
+            else:
+                n = get_count or 1
+                to_monitor = [e['id'] for e in s1_eps[:n]]
+
+            if to_monitor:
+                http.put(f"{s_url}/api/v3/episode/monitor", headers=s_headers,
+                         json={"episodeIds": to_monitor, "monitored": True})
+                app.logger.info(f"[API] Monitored {len(to_monitor)} eps for series {series_id}")
+                if action == 'search':
+                    http.post(f"{s_url}/api/v3/command", headers=s_headers,
+                              json={"name": "EpisodeSearch", "episodeIds": to_monitor})
+                    app.logger.info(f"[API] Triggered search for series {series_id}")
+    except Exception as e:
+        app.logger.error(f"Rule execution failed for series {series_id}: {e}", exc_info=True)
+
+    try:
+        from integrations.xadarr import fire_xadarr_webhook
+        fire_xadarr_webhook("rule.assigned", {
+            "title":      series_title,
+            "tmdb_id":    tmdb_id,
+            "rule":       rule_name,
+            "media_type": "show",
+        })
+    except Exception as e:
+        app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
+
+    app.logger.info(f"[API] Assigned rule '{rule_name}' to '{series_title}' (series_id={series_id})")
+    return True, None
+
+
 @app.route('/api/assign-pending-rule', methods=['POST'])
 def api_assign_pending_rule():
     """
@@ -5516,10 +5777,6 @@ def api_assign_pending_rule():
         if not tmdb_id or not rule_name:
             return jsonify({"success": False, "error": "tmdb_id and rule_name required"}), 400
 
-        config = load_config()
-        if rule_name not in config.get('rules', {}):
-            return jsonify({"success": False, "error": f"Unknown rule: {rule_name}"}), 400
-
         request_data = find_pending_request_by_tmdb(tmdb_id)
         if not request_data:
             return jsonify({"success": False, "error": "No pending request found for this series"}), 404
@@ -5531,99 +5788,59 @@ def api_assign_pending_rule():
         if not series_id:
             return jsonify({"success": False, "error": "Pending request has no series_id"}), 400
 
-        # Add to rule config
-        series_id_str = str(series_id)
-        target_rule = config['rules'][rule_name]
-        target_rule.setdefault('series', {})
-        if series_id_str not in target_rule['series']:
-            target_rule['series'][series_id_str] = {'activity_date': None}
-        save_config(config)
+        ok, err = assign_rule_to_series(series_id, rule_name, series_title=series_title, tmdb_id=tmdb_id)
+        if not ok:
+            return jsonify({"success": False, "error": err}), 400
 
-        # Sync rule tag + remove episeerr_select tag
-        try:
-            episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
-        except Exception as e:
-            app.logger.warning(f"Tag sync failed for series {series_id}: {e}")
-
-        try:
-            sonarr_cfg = get_sonarr_config()
-            s_url = normalize_url(sonarr_cfg.get('url', ''))
-            s_key = sonarr_cfg.get('api_key', '')
-            s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
-
-            # Remove episeerr_select tag
-            tag_resp = http.get(f"{s_url}/api/v3/tag", headers=s_headers)
-            if tag_resp.ok:
-                tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
-                select_id = tag_map.get('episeerr_select')
-                if select_id:
-                    sr = http.get(f"{s_url}/api/v3/series/{series_id}", headers=s_headers)
-                    if sr.ok:
-                        sd = sr.json()
-                        tags = [t for t in sd.get('tags', []) if t != select_id]
-                        sd['tags'] = tags
-                        http.put(f"{s_url}/api/v3/series", headers=s_headers, json=sd)
-
-            # Monitor episodes per rule then search
-            rule_cfg = config['rules'][rule_name]
-            get_type     = rule_cfg.get('get_type', 'episodes')
-            get_count    = rule_cfg.get('get_count', 1)
-            action       = rule_cfg.get('action_option', 'monitor')
-            always_have  = rule_cfg.get('always_have', '')
-
-            if always_have:
-                try:
-                    import media_processor as _mp
-                    _mp.process_always_have(int(series_id), always_have)
-                except Exception as e:
-                    app.logger.error(f"always_have failed: {e}")
-
-            eps_resp = http.get(f"{s_url}/api/v3/episode?seriesId={series_id}", headers=s_headers)
-            if eps_resp.ok:
-                all_eps = eps_resp.json()
-                s1_eps  = sorted([e for e in all_eps if e.get('seasonNumber') == 1],
-                                 key=lambda x: x.get('episodeNumber', 0))
-                if get_type == 'all':
-                    to_monitor = [e['id'] for e in all_eps if e.get('seasonNumber', 0) >= 1]
-                elif get_type == 'seasons':
-                    n = get_count or 1
-                    to_monitor = [e['id'] for e in all_eps if 1 <= e.get('seasonNumber', 0) < 1 + n]
-                else:
-                    n = get_count or 1
-                    to_monitor = [e['id'] for e in s1_eps[:n]]
-
-                if to_monitor:
-                    http.put(f"{s_url}/api/v3/episode/monitor", headers=s_headers,
-                             json={"episodeIds": to_monitor, "monitored": True})
-                    app.logger.info(f"[API] Monitored {len(to_monitor)} eps for series {series_id}")
-                    if action == 'search':
-                        http.post(f"{s_url}/api/v3/command", headers=s_headers,
-                                  json={"name": "EpisodeSearch", "episodeIds": to_monitor})
-                        app.logger.info(f"[API] Triggered search for series {series_id}")
-        except Exception as e:
-            app.logger.error(f"Rule execution failed for series {series_id}: {e}", exc_info=True)
-
-        # Delete pending request
         if request_id:
             delete_pending_request(request_id)
 
-        # Fire xadarr webhook
-        try:
-            from integrations.xadarr import fire_xadarr_webhook
-            fire_xadarr_webhook("rule.assigned", {
-                "title":      series_title,
-                "tmdb_id":    tmdb_id,
-                "rule":       rule_name,
-                "media_type": "show",
-            })
-        except Exception as e:
-            app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
-
-        app.logger.info(f"[API] Assigned rule '{rule_name}' to '{series_title}' (series_id={series_id})")
         return jsonify({"success": True, "rule": rule_name, "title": series_title})
 
     except Exception as e:
         app.logger.error(f"Error in assign-pending-rule: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/assign-series-rule', methods=['POST'])
+def api_assign_series_rule():
+    """
+    General-purpose rule assignment for an already-tracked series — unlike
+    api_assign_pending_rule, this does NOT require the series to be in the
+    pending-request queue. Used by the Xadarr Android TV app's full-library
+    browser (assign/change a rule on any Sonarr series, couch-only workflow).
+    Body: {"series_id": ..., "rule_name": "..."}
+    """
+    try:
+        data = request.get_json(silent=True) or {}
+        series_id = data.get('series_id')
+        rule_name = str(data.get('rule_name', '')).strip()
+
+        if not series_id or not rule_name:
+            return jsonify({"success": False, "error": "series_id and rule_name required"}), 400
+
+        cfg, headers = _sonarr_headers()
+        if not cfg:
+            return jsonify({"success": False, "error": "Sonarr not configured"}), 503
+
+        base = cfg['url'].rstrip('/')
+        sr = http.get(f"{base}/api/v3/series/{series_id}", headers=headers, timeout=10)
+        if not sr.ok:
+            return jsonify({"success": False, "error": "Series not found in Sonarr"}), 404
+        series_title = sr.json().get('title', '')
+
+        # An already-tracked series won't have the episeerr_select tag —
+        # skip that removal step, it's only relevant coming out of the pending queue.
+        ok, err = assign_rule_to_series(
+            series_id, rule_name, series_title=series_title, remove_select_tag=False
+        )
+        if not ok:
+            return jsonify({"success": False, "error": err}), 400
+
+        return jsonify({"success": True, "rule": rule_name, "title": series_title})
+
+    except Exception as e:
+        app.logger.error(f"Error in assign-series-rule: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 

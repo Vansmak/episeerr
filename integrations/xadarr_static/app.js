@@ -37,11 +37,10 @@ function xadarr() {
 
     // Cameras
     cameras: [],
-    camerasFrigateConfigured: false,
+    camerasNeolinkConfigured: false,
     cameraFullscreen: null,
     cameraNonce: Date.now(),
     _cameraTimer: null,
-    _hlsInstance: null,
 
     // History
     history: [],
@@ -211,8 +210,8 @@ function xadarr() {
         if (this.servers.length === 0) {
           this.loadServers();
           this.loadAddons();
-          this.loadCatalogues();
         }
+        this.loadCatalogues();
         this.loadIptv();
       }
     },
@@ -410,48 +409,80 @@ function xadarr() {
       this.browseShows = [];
     },
 
-    // ── Cameras ───────────────────────────────────────────────────────────
+    // ── Cameras (Neolink: WebSocket fMP4 + MediaSource) ────────────────────
     async loadCameras() {
       const data = await fetch(BASE+'/api/cameras/list').then(r => r.json()).catch(() => []);
       if (Array.isArray(data)) {
         this.cameras = data;
-        this.camerasFrigateConfigured = this.settings.frigate_url
+        this.camerasNeolinkConfigured = this.settings.neolink_url
           ? true
           : data.length > 0;
       } else {
-        this.camerasFrigateConfigured = false;
+        this.camerasNeolinkConfigured = false;
       }
     },
 
-    openCamera(cam) {
+    // Feeds WebSocket fMP4 fragments into a MediaSource SourceBuffer. Tries
+    // the camera's mainStream (best quality, often H265) first; if the
+    // browser can't decode that codec via MSE, falls back to subStream
+    // (H264, always MSE-compatible, lower resolution).
+    _connectCameraStream(cam, streamKind, tokenInfo) {
+      const video = document.getElementById('cameraVideo');
+      if (!video) return;
+      const wsUrl = `${tokenInfo.wsBase}/api/stream?path=/${cam.name}/${streamKind}&token=${tokenInfo.token}`;
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+      this._camWs = ws;
+      let sourceBuffer = null;
+      const queue = [];
+      const pump = () => {
+        if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) return;
+        sourceBuffer.appendBuffer(queue.shift());
+      };
+      ws.onmessage = (evt) => {
+        if (typeof evt.data === 'string') {
+          const init = JSON.parse(evt.data);
+          if (!window.MediaSource || !MediaSource.isTypeSupported(init.mime)) {
+            ws.close();
+            if (streamKind === 'mainStream') {
+              this._connectCameraStream(cam, 'subStream', tokenInfo);
+            }
+            return;
+          }
+          const mediaSource = new MediaSource();
+          this._camMediaSource = mediaSource;
+          video.src = URL.createObjectURL(mediaSource);
+          mediaSource.addEventListener('sourceopen', () => {
+            sourceBuffer = mediaSource.addSourceBuffer(init.mime);
+            this._camSourceBuffer = sourceBuffer;
+            sourceBuffer.addEventListener('updateend', pump);
+            pump();
+          }, { once: true });
+          video.play().catch(() => {});
+        } else {
+          queue.push(evt.data);
+          pump();
+        }
+      };
+    },
+
+    async openCamera(cam) {
       this.cameraFullscreen = cam;
       this.cameraNonce = Date.now();
-      if (this._cameraSnapTimer) clearInterval(this._cameraSnapTimer);
-      // Refresh poster snapshot every 3s while HLS loads / as fallback
-      this._cameraSnapTimer = setInterval(() => { this.cameraNonce = Date.now(); }, 3000);
+      const tokenInfo = await fetch(BASE+'/api/cameras/ws-token').then(r => r.json()).catch(() => null);
+      if (!tokenInfo || !tokenInfo.token) return;
       this.$nextTick(() => {
-        const video = document.getElementById('cameraVideo');
-        if (!video) return;
-        const frigateBase = (this.settings.frigate_url || '').replace(/\/+$/, '');
-        let go2rtcBase = frigateBase;
-        try { const u = new URL(frigateBase); u.port = '1984'; go2rtcBase = u.origin; } catch (_) {}
-        const hlsUrl = `${go2rtcBase}/api/${cam.name}/index.m3u8`;
-        if (window.Hls && Hls.isSupported()) {
-          if (this._hlsInstance) this._hlsInstance.destroy();
-          const hls = new Hls({ lowLatencyMode: true });
-          hls.loadSource(hlsUrl);
-          hls.attachMedia(video);
-          this._hlsInstance = hls;
-        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-          video.src = hlsUrl;
-        }
-        video.play().catch(() => {});
+        this._connectCameraStream(cam, 'mainStream', tokenInfo);
       });
     },
 
     closeCamera() {
-      if (this._hlsInstance) { this._hlsInstance.destroy(); this._hlsInstance = null; }
-      if (this._cameraSnapTimer) { clearInterval(this._cameraSnapTimer); this._cameraSnapTimer = null; }
+      if (this._camWs) { try { this._camWs.close(); } catch (_) {} this._camWs = null; }
+      if (this._camMediaSource && this._camMediaSource.readyState === 'open') {
+        try { this._camMediaSource.endOfStream(); } catch (_) {}
+      }
+      this._camMediaSource = null;
+      this._camSourceBuffer = null;
       const video = document.getElementById('cameraVideo');
       if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
       this.cameraFullscreen = null;
@@ -558,9 +589,9 @@ function xadarr() {
         this.webhookUrlRaw = data.webhook_url;
       }
 
-      // Check frigate
-      if (data.frigate_url) {
-        this.camerasFrigateConfigured = true;
+      // Check neolink
+      if (data.neolink_url) {
+        this.camerasNeolinkConfigured = true;
       }
     },
 
@@ -584,10 +615,16 @@ function xadarr() {
       });
     },
 
-    async saveFrigateUrl() {
-      const url = (this.settings.frigate_url || '').trim();
-      await this.saveSetting('frigate_url', url);
-      this.camerasFrigateConfigured = !!url;
+    async saveNeolinkSettings() {
+      const url = (this.settings.neolink_url || '').trim();
+      const username = (this.settings.neolink_username || '').trim();
+      const password = this.settings.neolink_password || '';
+      await fetch(BASE+'/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ neolink_url: url, neolink_username: username, neolink_password: password }),
+      });
+      this.camerasNeolinkConfigured = !!url;
       if (url) {
         this.loadCameras();
       }
@@ -629,6 +666,11 @@ function xadarr() {
     async connectServer() {
       this.serverConnecting = true;
       this.serverError = '';
+      if (this.serverForm.kind !== 'PLEX' && !this.serverForm.password) {
+        this.serverError = 'Password is required';
+        this.serverConnecting = false;
+        return;
+      }
       const body = {
         kind: this.serverForm.kind,
         url: this.serverForm.url,
@@ -1082,7 +1124,7 @@ function xadarr() {
       const dx = e.changedTouches[0].clientX - this.swipeStartX;
       const dy = e.changedTouches[0].clientY - this.swipeStartY;
       if (Math.abs(dx) < 80 || Math.abs(dx) < Math.abs(dy) * 2) return;
-      const tabs = ['search', 'home', 'discover', ...(this.camerasFrigateConfigured ? ['cameras'] : []), 'settings'];
+      const tabs = ['search', 'home', 'discover', ...(this.camerasNeolinkConfigured ? ['cameras'] : []), 'settings'];
       const i = tabs.indexOf(this.activeTab);
       if (i === -1) return;
       if (dx < 0 && i < tabs.length - 1) this.switchTab(tabs[i + 1]);

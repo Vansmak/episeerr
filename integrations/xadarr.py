@@ -21,6 +21,12 @@ Dashboard API (also under /api/integration/xadarr):
     GET        /dashboard/player/state
     GET        /dashboard/player/events  ← SSE stream
 
+Generic notifications (top-level /api, not nested under /api/integration/xadarr —
+must match {sync_server}/api/notify/recent, which is what NotificationPollManager
+on the TV app actually polls):
+    POST /api/notify         ← generic notification push (title/message/type/source)
+    GET  /api/notify/recent  ← polled by NotificationPollManager for on-device toasts
+
 Dashboard UI (prefix: /xadarr):
     GET /         ← SPA index.html
     GET /static/* ← JS / CSS
@@ -44,7 +50,9 @@ import logging
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from flask import Blueprint, jsonify, request, send_from_directory, Response, stream_with_context, redirect, render_template
@@ -266,10 +274,59 @@ def _xw_log_webhook(entry: dict) -> None:
     _save_json(_WEBHOOK_LOG_FILE, log[:100])
 
 
-def _xw_frigate_url(blob: dict = None) -> str:
+NEOLINK_RECORDINGS_DIR = Path(os.environ.get("NEOLINK_RECORDINGS_DIR", "/neolink-recordings"))
+
+_neolink_token_cache = {"token": None, "fetched_at": 0.0}
+
+
+def _get_neolink_config(blob: dict = None) -> dict:
     if blob is None:
         blob = _load_json(_SETTINGS_FILE, {})
-    return blob.get("frigate_url", "").rstrip("/")
+    return {
+        "url": blob.get("neolink_url", "").rstrip("/"),
+        "username": blob.get("neolink_username", ""),
+        "password": blob.get("neolink_password", ""),
+    }
+
+
+def _neolink_login(cfg: dict) -> Optional[str]:
+    try:
+        r = _http.post(
+            f"{cfg['url']}/api/auth/login",
+            json={"username": cfg["username"], "password": cfg["password"]},
+            timeout=8,
+        )
+        r.raise_for_status()
+        token = r.json().get("token")
+        if token:
+            _neolink_token_cache["token"] = token
+            _neolink_token_cache["fetched_at"] = time.time()
+        return token
+    except Exception as e:
+        logger.warning(f"[neolink] login failed: {e}")
+        return None
+
+
+def _neolink_token(cfg: dict, force_refresh: bool = False) -> Optional[str]:
+    stale = (time.time() - _neolink_token_cache["fetched_at"]) > 3600
+    if force_refresh or not _neolink_token_cache["token"] or stale:
+        return _neolink_login(cfg)
+    return _neolink_token_cache["token"]
+
+
+def _neolink_get(cfg: dict, path: str, timeout: int = 8):
+    """GET against Neolink's API, re-logging in once on a 401."""
+    token = _neolink_token(cfg)
+    if not token:
+        return None
+    r = _http.get(f"{cfg['url']}{path}", headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+    if r.status_code == 401:
+        token = _neolink_token(cfg, force_refresh=True)
+        if not token:
+            return None
+        r = _http.get(f"{cfg['url']}{path}", headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+    r.raise_for_status()
+    return r
 
 
 def _xw_detect_server(server_url: str) -> str:
@@ -334,7 +391,13 @@ def _get_xadarr_server_url() -> Optional[str]:
 
 
 def fire_xadarr_webhook(event: str, payload: dict) -> None:
-    """POST an event to xadarr-server's inbound webhook in a background thread."""
+    """POST an event to xadarr-server's inbound webhook in a background thread.
+
+    Always stores locally first so the on-device toast poll sees the event even
+    when no separate xadarr-server is configured (the common case for Episeerr
+    users, who sync directly against this Episeerr instance)."""
+    notify_xadarr_event(event, payload)
+
     server_url = _get_xadarr_server_url()
     if not server_url:
         return
@@ -389,6 +452,80 @@ def broadcast_episeerr_event(entry: dict) -> None:
                 dead.append(q)
         for q in dead:
             _sse_queues.remove(q)
+
+
+# ── Generic notification queue ────────────────────────────────────────────────
+# Mirrors xadarr-server's /api/notify implementation so on-device toast polling
+# (NotificationPollManager, 60s poll of {sync_server}/api/notify/recent) works
+# the same way whether a device's configured sync server is Episeerr or
+# xadarr-server. Needed for users who don't run Episeerr at all — this endpoint
+# is backend-agnostic, not Episeerr-specific.
+#
+# File-backed, not an in-memory list: Episeerr runs under gunicorn with
+# multiple worker processes (each its own Python memory), so a POST landing on
+# one worker and a poll GET landing on another would see nothing with a plain
+# in-process deque — confirmed empty on first deploy. A shared JSON file (same
+# pattern as _HISTORY_FILE/_WEBHOOK_LOG_FILE elsewhere in this module) is
+# visible to every worker.
+
+_NOTIFICATIONS_FILE = os.path.join(_DATA_DIR, "xadarr_notifications.json")
+
+_XADARR_EVENT_TYPE_MAP = {
+    "episode.grabbed": "grab",
+    "episode.ready": "ready",
+    "rule.triggered": "info",
+    "rule.assigned": "info",
+    "watchlist.requested": "info",
+    "channel.failover": "warning",
+}
+
+
+def _make_notification(source: str, title: str, message: Optional[str], notif_type: str) -> dict:
+    return {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "source": source,
+        "title": title,
+        "message": message or "",
+        "type": notif_type,
+    }
+
+
+def _store_notification(entry: dict) -> None:
+    with _LOCK:
+        notifications = _load_json(_NOTIFICATIONS_FILE, [])
+        notifications.insert(0, entry)
+        _save_json(_NOTIFICATIONS_FILE, notifications[:100])
+    payload = "event: notification\ndata: " + json.dumps(entry) + "\n\n"
+    with _sse_lock:
+        dead = []
+        for q in _sse_queues:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                dead.append(q)
+        for q in dead:
+            _sse_queues.remove(q)
+
+
+def notify_xadarr_event(event: str, payload: dict) -> None:
+    """Store an Episeerr-originated event (grab/ready/rule/watchlist/failover)
+    into the generic notification queue so it shows as an on-device toast —
+    independent of fire_xadarr_webhook, which only fires when a separate
+    xadarr-server instance is configured under Services."""
+    title = str(payload.get("title") or "Unknown")
+    season = payload.get("season")
+    episode = payload.get("episode")
+    message = payload.get("rule") or (
+        f"S{season:02d}E{episode:02d}" if season and episode else None
+    )
+    entry = _make_notification(
+        source="Episeerr",
+        title=title,
+        message=message,
+        notif_type=_XADARR_EVENT_TYPE_MAP.get(event, "info"),
+    )
+    _store_notification(entry)
 
 
 # ── JSON file helpers ─────────────────────────────────────────────────────────
@@ -496,6 +633,12 @@ def _trigger_rule_processing(title: str, tmdb_id: str, season, episode) -> None:
             logger.info(f"[Xadarr] Rule processing complete for '{title}' S{season}E{episode}")
             if result.stdout:
                 logger.debug(f"[Xadarr] media_processor stdout: {result.stdout[:500]}")
+            fire_xadarr_webhook("rule.triggered", {
+                "title": title,
+                "season": season,
+                "episode": episode,
+                "rule": final_rule,
+            })
 
     except Exception as exc:
         logger.error(f"[Xadarr] _trigger_rule_processing error: {exc}", exc_info=True)
@@ -810,6 +953,21 @@ class XadarrIntegration(ServiceIntegration):
 
             return jsonify({"status": "received"}), 200
 
+        # ── Compat: old /api/integration/arvio/* URLs ────────────────────────
+        arvio_bp = Blueprint("arvio_compat", __name__, url_prefix="/api/integration/arvio")
+
+        @arvio_bp.route("/webhook", methods=["POST"])
+        def arvio_webhook_compat():
+            return webhook()
+
+        @arvio_bp.route("/status", methods=["GET"])
+        def arvio_status_compat():
+            return status()
+
+        @arvio_bp.route("/settings", methods=["GET", "PUT"])
+        def arvio_settings_compat():
+            return settings() if request.method == "GET" else save_settings()
+
         # ── GET /settings/backup ─────────────────────────────────────────────
         @bp.route("/settings/backup", methods=["GET"])
         def download_settings_backup():
@@ -919,6 +1077,10 @@ class XadarrIntegration(ServiceIntegration):
         @ui_bp.route("/settings")
         def xadarr_embed_settings():
             return render_template("xadarr_embed.html", section="settings")
+
+        @ui_bp.route("/webhook", methods=["POST"])
+        def xadarr_short_webhook():
+            return webhook()
 
         @ui_bp.route("/<path:path>")
         def serve_ui(path):
@@ -1065,7 +1227,10 @@ class XadarrIntegration(ServiceIntegration):
                 safe = {k: v for k, v in conn.items() if k not in ("accessToken", "accountToken")}
                 return jsonify({"ok": True, "connection": safe})
             except Exception as exc:
-                return jsonify({"error": str(exc)}), 500
+                msg = str(exc)
+                if "401" in msg:
+                    return jsonify({"error": "Authentication failed — wrong username or password"}), 400
+                return jsonify({"error": msg}), 500
 
         @web_bp.route("/setup/servers/<connection_id>", methods=["PATCH"])
         def web_rename_server(connection_id):
@@ -1553,19 +1718,20 @@ class XadarrIntegration(ServiceIntegration):
             except Exception:
                 return "Image not found", 404
 
-        # ── Cameras (Frigate) ─────────────────────────────────────────────────
+        # ── Cameras (Neolink) ────────────────────────────────────────────────
         @web_bp.route("/cameras/list", methods=["GET"])
         def web_cameras_list():
             blob = _xw_blob()
-            frigate_url = _xw_frigate_url(blob)
-            if not frigate_url:
+            cfg = _get_neolink_config(blob)
+            if not cfg["url"]:
                 return jsonify([])
             try:
-                r = _http.get(f"{frigate_url}/api/config", timeout=8)
-                r.raise_for_status()
+                r = _neolink_get(cfg, "/api/cameras")
+                if r is None:
+                    return jsonify({"error": "neolink auth failed"}), 502
                 cameras = [
-                    {"name": name, "snapshotUrl": f"/xadarr/api/cameras/snapshot/{name}"}
-                    for name in r.json().get("cameras", {}).keys()
+                    {"name": cam["name"], "snapshotUrl": f"/xadarr/api/cameras/snapshot/{cam['name']}"}
+                    for cam in r.json()
                 ]
                 return jsonify(cameras)
             except Exception as exc:
@@ -1573,15 +1739,36 @@ class XadarrIntegration(ServiceIntegration):
 
         @web_bp.route("/cameras/snapshot/<camera_name>", methods=["GET"])
         def web_camera_snapshot(camera_name):
-            frigate_url = _xw_frigate_url()
-            if not frigate_url:
-                return "Frigate not configured", 503
+            # Neolink has no live-snapshot endpoint; serve the most recent event's
+            # thumbnail instead (folders are named so lexical sort == chronological).
+            cam_dir = NEOLINK_RECORDINGS_DIR / camera_name
+            if not cam_dir.is_dir():
+                return "No recordings for camera", 404
             try:
-                r = _http.get(f"{frigate_url}/api/{camera_name}/latest.jpg", timeout=5)
-                r.raise_for_status()
-                return Response(r.content, content_type=r.headers.get("Content-Type", "image/jpeg"))
+                for date_dir in sorted((d for d in cam_dir.iterdir() if d.is_dir()), reverse=True):
+                    detections_dir = date_dir / "detections"
+                    if not detections_dir.is_dir():
+                        continue
+                    for event_dir in sorted((d for d in detections_dir.iterdir() if d.is_dir()), reverse=True):
+                        if (event_dir / "thumb.jpg").exists():
+                            resp = send_from_directory(str(event_dir), "thumb.jpg", mimetype="image/jpeg")
+                            resp.headers["Cache-Control"] = "no-cache"
+                            return resp
+                return "No thumbnail available", 404
             except Exception as exc:
                 return str(exc), 502
+
+        @web_bp.route("/cameras/ws-token", methods=["GET"])
+        def web_cameras_ws_token():
+            blob = _xw_blob()
+            cfg = _get_neolink_config(blob)
+            if not cfg["url"]:
+                return jsonify({"error": "neolink not configured"}), 503
+            token = _neolink_token(cfg)
+            if not token:
+                return jsonify({"error": "neolink auth failed"}), 502
+            ws_base = cfg["url"].replace("https://", "wss://").replace("http://", "ws://")
+            return jsonify({"token": token, "wsBase": ws_base})
 
         # ── Episeerr integration ───────────────────────────────────────────────
         @web_bp.route("/episeerr/pending", methods=["GET"])
@@ -1697,7 +1884,350 @@ class XadarrIntegration(ServiceIntegration):
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
-        return [bp, ui_bp, addon_bp, dc_bp, web_bp]
+        # ── Sonarr proxy helpers ──────────────────────────────────────────────
+        def _sonarr_series_status():
+            """Return episode statuses for a series season via Sonarr API."""
+            import requests as _req
+            from settings_db import get_sonarr_config
+            tvdb_id = request.args.get("tvdbId", "")
+            season  = request.args.get("season",  "")
+            if not tvdb_id or not season:
+                return jsonify({"error": "tvdbId and season are required"}), 400
+            try:
+                season_num = int(season)
+            except ValueError:
+                return jsonify({"error": "season must be an integer"}), 400
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key    = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"error": "Sonarr not configured"}), 503
+            headers = {"X-Api-Key": api_key}
+            try:
+                # Resolve TVDB ID → Sonarr series ID
+                r = _req.get(f"{sonarr_url}/api/v3/series?tvdbId={tvdb_id}", headers=headers, timeout=10)
+                r.raise_for_status()
+                series_list = r.json()
+                if not series_list:
+                    return jsonify({"episodes": {}})
+                series_id = series_list[0]["id"]
+
+                # Fetch episodes for this season
+                r = _req.get(
+                    f"{sonarr_url}/api/v3/episode?seriesId={series_id}&seasonNumber={season_num}",
+                    headers=headers, timeout=10
+                )
+                r.raise_for_status()
+                episodes = r.json()
+
+                # Fetch queue to find downloading episodes
+                r = _req.get(f"{sonarr_url}/api/v3/queue?seriesId={series_id}&pageSize=100", headers=headers, timeout=10)
+                r.raise_for_status()
+                queue_records = r.json().get("records", [])
+                queued = {}  # episode_id → progress %
+                for rec in queue_records:
+                    ep_id = rec.get("episodeId")
+                    if ep_id is None:
+                        continue
+                    size     = rec.get("size", 0) or 0
+                    left     = rec.get("sizeleft", size) or size
+                    progress = round((1 - left / size) * 100, 1) if size > 0 else 0.0
+                    queued[ep_id] = progress
+
+                result = {}
+                for ep in episodes:
+                    ep_num  = ep.get("episodeNumber")
+                    ep_id   = ep.get("id")
+                    has_file    = ep.get("hasFile", False)
+                    monitored   = ep.get("monitored", False)
+                    air_date    = ep.get("airDateUtc") or ep.get("airDate") or ""
+                    from datetime import datetime, timezone
+                    aired = False
+                    if air_date:
+                        try:
+                            aired = datetime.fromisoformat(air_date.replace("Z", "+00:00")) <= datetime.now(timezone.utc)
+                        except Exception:
+                            aired = True
+                    if ep_id in queued:
+                        status = "queued"
+                        progress = queued[ep_id]
+                    elif has_file:
+                        status = "available"
+                        progress = 0.0
+                    elif aired:
+                        # "missing" regardless of Sonarr's own `monitored` flag —
+                        # Episeerr's rules often only monitor the next N episodes at
+                        # a time, but a manual search here is a deliberate user
+                        # override, not automatic RSS/indexer monitoring, so an
+                        # aired-but-unmonitored episode should still be searchable
+                        # instead of silently showing no badge at all.
+                        status = "missing"
+                        progress = 0.0
+                    elif monitored:
+                        status = "monitored"
+                        progress = 0.0
+                    else:
+                        status = "unmonitored"
+                        progress = 0.0
+                    result[str(ep_num)] = {"status": status, "progress": progress}
+                return jsonify({"episodes": result})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        def _sonarr_episode_search():
+            """Trigger a Sonarr episode search by TVDB ID + season + episode number."""
+            import requests as _req
+            from settings_db import get_sonarr_config
+            data     = request.get_json(silent=True) or {}
+            tvdb_id  = str(data.get("tvdbId", ""))
+            season   = data.get("season")
+            episode  = data.get("episode")
+            if not tvdb_id or season is None or episode is None:
+                return jsonify({"success": False, "error": "tvdbId, season, episode are required"}), 400
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key    = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"success": False, "error": "Sonarr not configured"}), 503
+            headers = {"X-Api-Key": api_key}
+            try:
+                r = _req.get(f"{sonarr_url}/api/v3/series?tvdbId={tvdb_id}", headers=headers, timeout=10)
+                r.raise_for_status()
+                series_list = r.json()
+                if not series_list:
+                    return jsonify({"success": False, "error": "Series not found in Sonarr"})
+                series_id = series_list[0]["id"]
+                r = _req.get(
+                    f"{sonarr_url}/api/v3/episode?seriesId={series_id}&seasonNumber={season}",
+                    headers=headers, timeout=10
+                )
+                r.raise_for_status()
+                eps = [e for e in r.json() if e.get("episodeNumber") == episode]
+                if not eps:
+                    return jsonify({"success": False, "error": "Episode not found"})
+                ep_id = eps[0]["id"]
+                # Manually searching an episode Sonarr isn't currently monitoring
+                # (Episeerr's rules often only monitor the next N episodes at a time)
+                # still needs monitored=True, or Sonarr's import decision-making can
+                # skip a release it otherwise finds — this is a deliberate user
+                # override of that monitoring state, not a bypass of it.
+                if not eps[0].get("monitored", False):
+                    _req.put(
+                        f"{sonarr_url}/api/v3/episode/monitor",
+                        json={"episodeIds": [ep_id], "monitored": True},
+                        headers=headers, timeout=10
+                    )
+                r = _req.post(
+                    f"{sonarr_url}/api/v3/command",
+                    json={"name": "EpisodeSearch", "episodeIds": [ep_id]},
+                    headers=headers, timeout=10
+                )
+                r.raise_for_status()
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        def _sonarr_episode_delete():
+            """Delete one episode's file by TVDB ID + season + episode number —
+            couch-triggered "remove this episode" from the Xadarr Details screen,
+            same resolution steps as _sonarr_episode_search."""
+            import requests as _req
+            from settings_db import get_sonarr_config
+            data     = request.get_json(silent=True) or {}
+            tvdb_id  = str(data.get("tvdbId", ""))
+            season   = data.get("season")
+            episode  = data.get("episode")
+            if not tvdb_id or season is None or episode is None:
+                return jsonify({"success": False, "error": "tvdbId, season, episode are required"}), 400
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key    = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"success": False, "error": "Sonarr not configured"}), 503
+            headers = {"X-Api-Key": api_key}
+            try:
+                r = _req.get(f"{sonarr_url}/api/v3/series?tvdbId={tvdb_id}", headers=headers, timeout=10)
+                r.raise_for_status()
+                series_list = r.json()
+                if not series_list:
+                    return jsonify({"success": False, "error": "Series not found in Sonarr"})
+                series_id = series_list[0]["id"]
+                r = _req.get(
+                    f"{sonarr_url}/api/v3/episode?seriesId={series_id}&seasonNumber={season}",
+                    headers=headers, timeout=10
+                )
+                r.raise_for_status()
+                eps = [e for e in r.json() if e.get("episodeNumber") == episode]
+                if not eps:
+                    return jsonify({"success": False, "error": "Episode not found"})
+                episode_file_id = eps[0].get("episodeFileId")
+                if not episode_file_id:
+                    return jsonify({"success": False, "error": "Episode has no file"}), 400
+                r = _req.delete(
+                    f"{sonarr_url}/api/v3/episodeFile/{episode_file_id}",
+                    headers=headers, timeout=15
+                )
+                if not r.ok:
+                    return jsonify({"success": False, "error": f"Sonarr delete failed: {r.status_code}"}), 500
+                return jsonify({"success": True})
+            except Exception as e:
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        def _sonarr_calendar():
+            """Upcoming episodes across all monitored series, for the Xadarr Upcoming row."""
+            import requests as _req
+            from datetime import datetime, timedelta, timezone
+            from settings_db import get_sonarr_config
+            days = int(request.args.get("days", "180"))
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"error": "Sonarr not configured"}), 503
+            headers = {"X-Api-Key": api_key}
+            start = datetime.now(timezone.utc).date().isoformat()
+            end = (datetime.now(timezone.utc) + timedelta(days=days)).date().isoformat()
+            try:
+                # Default (monitored-only) calendar: a show with messy/partial
+                # monitoring state (some episodes downloaded out of order, most
+                # unmonitored) should not surface a stale "next" episode just because
+                # unmonitored=true widened the query. Sonarr's own monitored flag on
+                # the episode is the simplest, most honest signal for "this is really
+                # coming up next" for a show Joe is tracking.
+                r = _req.get(
+                    f"{sonarr_url}/api/v3/calendar?start={start}&end={end}&includeSeries=true",
+                    headers=headers, timeout=15,
+                )
+                r.raise_for_status()
+                entries = []
+                for ep in r.json():
+                    series = ep.get("series") or {}
+                    if not series.get("monitored", False):
+                        continue
+                    if ep.get("hasFile", False):
+                        continue
+                    season_num = ep.get("seasonNumber", 0)
+                    if season_num == 0:
+                        continue
+                    series_id = series.get("id")
+                    # Sonarr's own cached cover - matches what Sonarr's UI shows for this
+                    # series. More reliable than the `images[].remoteUrl` TheTVDB gives
+                    # back in the calendar payload, which has been seen returning
+                    # mismatched artwork for some series.
+                    poster = (
+                        f"{sonarr_url}/api/v3/mediacover/{series_id}/poster.jpg?apikey={api_key}"
+                        if series_id else None
+                    )
+                    entries.append({
+                        "seriesId": series_id,
+                        "tvdbId": series.get("tvdbId"),
+                        "title": series.get("title", ""),
+                        "season": season_num,
+                        "episode": ep.get("episodeNumber", 0),
+                        "episodeTitle": ep.get("title", ""),
+                        "airDate": ep.get("airDateUtc") or ep.get("airDate") or "",
+                        "poster": poster,
+                    })
+                return jsonify({"episodes": entries})
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+        # ── /api/episeerr/* aliases ───────────────────────────────────────────
+        # The TV app routes Episeerr calls through $SYNC_SERVER_URL/api/episeerr/*.
+        # xadarr-server proxies those to Episeerr's real endpoints; when Episeerr is
+        # the sync server (Joe's setup) the app hits Episeerr directly at these paths.
+        # Forward to the same Flask view functions the main app registers.
+        alias_bp = Blueprint("xadarr_api_alias", __name__, url_prefix="/api")
+
+        @alias_bp.route("/episeerr/pending", methods=["GET"])
+        def alias_episeerr_pending():
+            return get_pending()
+
+        @alias_bp.route("/episeerr/rules", methods=["GET"])
+        def alias_episeerr_rules():
+            import flask
+            fn = flask.current_app.view_functions.get("api_rules_list")
+            if fn:
+                return fn()
+            # Fallback: build the expected {"rules": [...]} format inline
+            try:
+                from episeerr import load_config
+                config = load_config()
+                rules = config.get("rules", {})
+                rules_list = [
+                    {
+                        "name": k,
+                        "display_name": k.replace("_", " ").title(),
+                        "series_count": len(v.get("series", {})),
+                    }
+                    for k, v in sorted(rules.items())
+                ]
+                return jsonify({"rules": rules_list})
+            except Exception:
+                return jsonify({"rules": []})
+
+        @alias_bp.route("/episeerr/assign", methods=["POST"])
+        def alias_episeerr_assign():
+            import flask
+            fn = flask.current_app.view_functions.get("api_assign_pending_rule")
+            if fn:
+                return fn()
+            return jsonify({"success": False, "error": "assign endpoint unavailable"}), 503
+
+        @alias_bp.route("/episeerr/assign-series", methods=["POST"])
+        def alias_episeerr_assign_series():
+            """Direct rule assignment for an already-tracked series (library
+            browser), bypassing the pending-request requirement of /assign."""
+            import flask
+            fn = flask.current_app.view_functions.get("api_assign_series_rule")
+            if fn:
+                return fn()
+            return jsonify({"success": False, "error": "assign-series endpoint unavailable"}), 503
+
+        @alias_bp.route("/sonarr/series-status", methods=["GET"])
+        def alias_sonarr_series_status():
+            return _sonarr_series_status()
+
+        @alias_bp.route("/sonarr/episode-search", methods=["POST"])
+        def alias_sonarr_episode_search():
+            return _sonarr_episode_search()
+
+        @alias_bp.route("/sonarr/episode-delete", methods=["POST"])
+        def alias_sonarr_episode_delete():
+            return _sonarr_episode_delete()
+
+        @alias_bp.route("/sonarr/calendar", methods=["GET"])
+        def alias_sonarr_calendar():
+            return _sonarr_calendar()
+
+        # ── Generic notifications (polled by NotificationPollManager at
+        # {sync_server}/api/notify/recent — a top-level path, not nested under
+        # /api/integration/xadarr, so these belong on alias_bp not bp) ─────────
+        @alias_bp.route("/notify", methods=["POST"])
+        def post_notify():
+            data = request.get_json(force=True, silent=True) or {}
+            title = str(data.get("title") or "").strip()
+            if not title:
+                return jsonify({"ok": False, "error": "title required"}), 400
+            entry = _make_notification(
+                source=str(data.get("source") or "Unknown").strip(),
+                title=title,
+                message=str(data.get("message") or "").strip() or None,
+                notif_type=str(data.get("type") or "info").strip(),
+            )
+            _store_notification(entry)
+            return jsonify({"ok": True, "id": entry["id"]})
+
+        @alias_bp.route("/notify/recent", methods=["GET"])
+        def get_notify_recent():
+            limit = min(int(request.args.get("limit", 20)), 100)
+            since = request.args.get("since", "")
+            items = _load_json(_NOTIFICATIONS_FILE, [])
+            if since:
+                items = [n for n in items if n.get("timestamp", "") > since]
+            return jsonify(items[:limit])
+
+        return [bp, ui_bp, addon_bp, dc_bp, web_bp, arvio_bp, alias_bp]
 
 
 # ── Module-level instance (auto-discovered by integrations/__init__.py) ───────

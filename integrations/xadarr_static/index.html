@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Xadarr</title>
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="xadarr()" x-init="init()" :data-theme="theme">
@@ -166,7 +165,7 @@
       <div class="sidebar-nav-item" :class="{active: activeTab==='discover'}" @click="switchTab('discover');mobileSidebarOpen=false">Discover</div>
       <div class="sidebar-nav-item" :class="{active: activeTab==='tv'}"       @click="switchTab('tv');mobileSidebarOpen=false">TV</div>
       <div class="sidebar-nav-item" :class="{active: activeTab==='cameras'}"  @click="switchTab('cameras');mobileSidebarOpen=false"
-           x-show="camerasFrigateConfigured">Cameras</div>
+           x-show="camerasNeolinkConfigured">Cameras</div>
       <div class="sidebar-nav-item" :class="{active: activeTab==='settings'}" @click="switchTab('settings');mobileSidebarOpen=false">Settings</div>
     </nav>
 
@@ -540,7 +539,7 @@
         </div>
 
         <!-- Cameras row -->
-        <div class="catalogue-row" x-show="camerasFrigateConfigured && cameras.length > 0"
+        <div class="catalogue-row" x-show="camerasNeolinkConfigured && cameras.length > 0"
              :style="'order:'+catOrder('cameras')">
           <div class="row-header">
             <span class="row-title">Cameras</span>
@@ -678,14 +677,14 @@
     <div class="tab-pane" :class="{active: activeTab==='cameras'}">
       <div class="cameras-container">
 
-        <div class="camera-no-frigate" x-show="!camerasFrigateConfigured">
+        <div class="camera-no-neolink" x-show="!camerasNeolinkConfigured">
           <span class="icon">📷</span>
-          <strong>Frigate not configured</strong>
-          <span class="text-sm">Add a Frigate URL in Settings to enable cameras.</span>
+          <strong>Neolink not configured</strong>
+          <span class="text-sm">Add a Neolink URL in Settings to enable cameras.</span>
           <button class="btn btn-secondary btn-sm mt-2" @click="switchTab('settings'); settingsTab='integration'">Open Settings</button>
         </div>
 
-        <div x-show="camerasFrigateConfigured">
+        <div x-show="camerasNeolinkConfigured">
           <div class="camera-grid" x-show="cameras.length > 0">
             <template x-for="cam in cameras" :key="cam.name">
               <div class="camera-card" @click="openCamera(cam)">
@@ -699,7 +698,7 @@
             </template>
           </div>
 
-          <div class="empty-state" x-show="cameras.length===0 && camerasFrigateConfigured">
+          <div class="empty-state" x-show="cameras.length===0 && camerasNeolinkConfigured">
             <div class="spinner"></div>
             <span>Loading cameras…</span>
           </div>
@@ -784,11 +783,45 @@
 
           <div class="settings-row settings-url-row">
             <div class="settings-label">
-              <div class="settings-label-title">Frigate URL</div>
+              <div class="settings-label-title">Neolink URL</div>
               <div class="settings-label-sub">Enables Cameras tab and snapshot grid</div>
             </div>
-            <input type="url" placeholder="http://192.168.x.x:5000" x-model="settings.frigate_url"
-                   @change="saveFrigateUrl()">
+            <input type="url" placeholder="http://192.168.x.x:8655" x-model="settings.neolink_url"
+                   @change="saveNeolinkSettings()">
+          </div>
+
+          <div class="settings-row settings-url-row">
+            <div class="settings-label">
+              <div class="settings-label-title">Neolink Username</div>
+            </div>
+            <input type="text" placeholder="admin" x-model="settings.neolink_username"
+                   @change="saveNeolinkSettings()">
+          </div>
+
+          <div class="settings-row settings-url-row">
+            <div class="settings-label">
+              <div class="settings-label-title">Neolink Password</div>
+            </div>
+            <input type="password" x-model="settings.neolink_password"
+                   @change="saveNeolinkSettings()">
+          </div>
+
+          <div class="settings-row settings-url-row">
+            <div class="settings-label">
+              <div class="settings-label-title">Home Assistant URL</div>
+              <div class="settings-label-sub">Enables the Smart Home status screen</div>
+            </div>
+            <input type="url" placeholder="http://192.168.x.x:8123" x-model="settings.ha_url"
+                   @change="saveSetting('ha_url', settings.ha_url)">
+          </div>
+
+          <div class="settings-row settings-url-row">
+            <div class="settings-label">
+              <div class="settings-label-title">Home Assistant Token</div>
+              <div class="settings-label-sub">Long-lived access token from your HA profile</div>
+            </div>
+            <input type="password" placeholder="Long-lived access token" x-model="settings.ha_token"
+                   @change="saveSetting('ha_token', settings.ha_token)">
           </div>
         </div>
 
