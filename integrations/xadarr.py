@@ -1770,6 +1770,26 @@ class XadarrIntegration(ServiceIntegration):
             ws_base = cfg["url"].replace("https://", "wss://").replace("http://", "ws://")
             return jsonify({"token": token, "wsBase": ws_base})
 
+        def _serve_neolink_event_asset(event_id: str, filename: str, mimetype: str):
+            # event ids look like "camera~YYYY-MM-DD~HHMMSS-hash", matching the
+            # on-disk layout recordings/<camera>/<date>/detections/<HHMMSS-hash>/
+            parts = event_id.split("~")
+            if len(parts) != 3:
+                return "Bad event id", 400
+            camera, date, event_folder = parts
+            event_dir = NEOLINK_RECORDINGS_DIR / camera / date / "detections" / event_folder
+            if not (event_dir / filename).exists():
+                return "Not found", 404
+            return send_from_directory(str(event_dir), filename, mimetype=mimetype)
+
+        @web_bp.route("/cameras/events/<event_id>/thumb.jpg", methods=["GET"])
+        def web_camera_event_thumb(event_id):
+            return _serve_neolink_event_asset(event_id, "thumb.jpg", "image/jpeg")
+
+        @web_bp.route("/cameras/events/<event_id>/clip.mp4", methods=["GET"])
+        def web_camera_event_clip(event_id):
+            return _serve_neolink_event_asset(event_id, "clip.mp4", "video/mp4")
+
         # ── Episeerr integration ───────────────────────────────────────────────
         @web_bp.route("/episeerr/pending", methods=["GET"])
         def web_episeerr_pending():
@@ -2138,6 +2158,29 @@ class XadarrIntegration(ServiceIntegration):
         # the sync server (Joe's setup) the app hits Episeerr directly at these paths.
         # Forward to the same Flask view functions the main app registers.
         alias_bp = Blueprint("xadarr_api_alias", __name__, url_prefix="/api")
+
+        # The TV app builds camera/snapshot/clip URLs against $SYNC_SERVER_URL/api/cameras/*
+        # directly (matching xadarr-server's own top-level route convention, not web_bp's
+        # /xadarr/api/* prefix) — alias them the same way as the /episeerr/* routes above.
+        @alias_bp.route("/cameras/list", methods=["GET"])
+        def alias_cameras_list():
+            return web_cameras_list()
+
+        @alias_bp.route("/cameras/snapshot/<camera_name>", methods=["GET"])
+        def alias_camera_snapshot(camera_name):
+            return web_camera_snapshot(camera_name)
+
+        @alias_bp.route("/cameras/events/<event_id>/thumb.jpg", methods=["GET"])
+        def alias_camera_event_thumb(event_id):
+            return web_camera_event_thumb(event_id)
+
+        @alias_bp.route("/cameras/events/<event_id>/clip.mp4", methods=["GET"])
+        def alias_camera_event_clip(event_id):
+            return web_camera_event_clip(event_id)
+
+        @alias_bp.route("/cameras/ws-token", methods=["GET"])
+        def alias_cameras_ws_token():
+            return web_cameras_ws_token()
 
         @alias_bp.route("/episeerr/pending", methods=["GET"])
         def alias_episeerr_pending():
