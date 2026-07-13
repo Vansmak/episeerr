@@ -48,12 +48,14 @@ import json
 import queue
 import logging
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from urllib.parse import urlparse
 
 from flask import Blueprint, jsonify, request, send_from_directory, Response, stream_with_context, redirect, render_template
 from integrations.base import ServiceIntegration
@@ -66,13 +68,36 @@ logger = logging.getLogger(__name__)
 _DATA_DIR      = os.path.join(os.getcwd(), "data")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "xadarr_settings.json")
 _HISTORY_FILE  = os.path.join(_DATA_DIR, "xadarr_history.json")
+_TRAKT_OUTBOX_FILE = os.path.join(_DATA_DIR, "xadarr_trakt_outbox.json")
 
 # ── Rule-processing dedup ─────────────────────────────────────────────────────
 # Prevents triggering Sonarr rule processing more than once per watch session.
 # Key: "{tmdb_id}:{season}:{episode}" or "{tmdb_id}:movie"
 # Value: unix timestamp of when processing was triggered.
-_processed_episodes: Dict[str, float] = {}
+#
+# File-backed, not a plain dict (2026-07-13 fix) — same reason _NOTIFICATIONS_FILE
+# is file-backed (see comment near _store_notification): Episeerr runs under
+# gunicorn with multiple worker processes, each its own Python memory. The
+# progress webhook fires every ~30s during playback; whichever worker happens to
+# handle each request has no way to know another worker already marked an
+# episode processed, so every worker that sees a post-threshold progress ping
+# independently re-triggered rule processing and re-fired the "rule.triggered"
+# toast for the same episode all watch-session long (Joe: "watching Masters of
+# the Air and getting way too many toasts about s1e2").
+_PROCESSED_EPISODES_FILE = os.path.join(_DATA_DIR, "xadarr_processed_episodes.json")
 _processed_lock = threading.Lock()
+
+
+def _processed_episodes_load() -> Dict[str, float]:
+    return _load_json(_PROCESSED_EPISODES_FILE, {})
+
+
+def _processed_episodes_save(data: Dict[str, float]) -> None:
+    # Prune entries older than 24h so this file doesn't grow forever — dedup
+    # only needs to survive a single watch session, not accumulate across days.
+    cutoff = time.time() - 86400
+    pruned = {k: v for k, v in data.items() if v >= cutoff}
+    _save_json(_PROCESSED_EPISODES_FILE, pruned)
 
 _COMPLETION_THRESHOLD_DEFAULT = 85  # fallback if service config is missing
 _STATIC_DIR       = os.path.join(os.path.dirname(__file__), "xadarr_static")
@@ -218,6 +243,201 @@ def _xw_mark_watchlist(items: list) -> list:
     return items
 
 
+def _xw_trakt_refresh_token(blob: dict) -> Optional[str]:
+    """Refresh this dashboard's own Trakt connection (traktTokens/trakt_client_id
+    in the blob — separate from integrations/trakt.py's own connection) and
+    persist the new tokens into the given (already-loaded) blob. Returns the
+    new access token, or None if there's nothing to refresh with or the
+    refresh call itself fails.
+    """
+    tokens = (blob.get("traktTokens") or {}).get(_XW_PROFILE, {})
+    refresh_token = tokens.get("refreshToken")
+    client_id = blob.get("trakt_client_id", "")
+    client_secret = blob.get("trakt_client_secret", "")
+    if not refresh_token or not client_id or not client_secret:
+        return None
+    try:
+        r = _http.post(
+            "https://api.trakt.tv/oauth/token",
+            json={
+                "refresh_token": refresh_token, "client_id": client_id,
+                "client_secret": client_secret, "grant_type": "refresh_token",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        tok = r.json()
+        new_tokens = {
+            "accessToken": tok.get("access_token"),
+            "refreshToken": tok.get("refresh_token"),
+            "expiresAt": int(time.time() * 1000) + tok.get("expires_in", 0) * 1000,
+        }
+        blob.setdefault("traktTokens", {})[_XW_PROFILE] = new_tokens
+        return new_tokens["accessToken"]
+    except Exception as exc:
+        logger.warning(f"[Xadarr] Trakt token refresh failed: {exc}")
+        return None
+
+
+def _xw_trakt_request(blob: dict, method: str, path: str, json_body: dict = None):
+    """Authenticated call against this dashboard's own Trakt connection
+    (traktTokens/trakt_client_id in the blob — separate from
+    integrations/trakt.py's own connection), refreshing reactively on a 401
+    rather than trusting the stored expiresAt (observed holding a stale value
+    in the wrong units — seconds vs. ms — for tokens saved by an older build;
+    proactively refreshing on every call hits Trakt's aggressive refresh-
+    endpoint rate limit fast). Raises on any failure, including "not
+    connected" — callers decide whether to swallow or propagate.
+    """
+    tokens = (blob.get("traktTokens") or {}).get(_XW_PROFILE, {})
+    access_token = tokens.get("accessToken")
+    if not access_token:
+        raise RuntimeError("Trakt not connected")
+    client_id = blob.get("trakt_client_id", "")
+
+    def _call(token: str):
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "trakt-api-key": client_id,
+            "trakt-api-version": "2",
+            "Content-Type": "application/json",
+        }
+        if method == "GET":
+            return _http.get(f"https://api.trakt.tv/{path}", headers=headers, timeout=10)
+        return _http.post(f"https://api.trakt.tv/{path}", json=json_body, headers=headers, timeout=10)
+
+    r = _call(access_token)
+    if r.status_code == 401:
+        refreshed = _xw_trakt_refresh_token(blob)
+        if refreshed:
+            r = _call(refreshed)
+    r.raise_for_status()
+    return r
+
+
+def _xw_trakt_outbox_load() -> list:
+    return _load_json(_TRAKT_OUTBOX_FILE, [])
+
+
+def _xw_trakt_outbox_enqueue(tmdb_id: int, media_type: str, add: bool) -> None:
+    items = _xw_trakt_outbox_load()
+    items.append({
+        "tmdbId": tmdb_id, "mediaType": media_type, "add": add,
+        "queuedAt": int(time.time() * 1000),
+    })
+    _save_json(_TRAKT_OUTBOX_FILE, items)
+
+
+def _xw_flush_trakt_outbox(blob: dict) -> None:
+    """Retry any watchlist pushes that failed at the time of the original
+    add/remove. Runs opportunistically on every watchlist GET (mirrors the
+    native app's own outbox, which flushes on its periodic/reconnect Trakt
+    sync) — makes this dashboard's Trakt push as reliable as the app's, which
+    matters once Trakt is treated as the cross-surface source of truth: a
+    push that's silently lost here is indistinguishable from a real removal
+    once anything reconciles against Trakt.
+    """
+    items = _xw_trakt_outbox_load()
+    if not items:
+        return
+    remaining = []
+    for item in items:
+        try:
+            key = "movies" if item.get("mediaType") == "movie" else "shows"
+            body = {key: [{"ids": {"tmdb": item.get("tmdbId")}}]}
+            path = "sync/watchlist" if item.get("add") else "sync/watchlist/remove"
+            _xw_trakt_request(blob, "POST", path, body)
+        except Exception as exc:
+            logger.warning(f"[Xadarr] Trakt outbox retry failed for {item}: {exc}")
+            remaining.append(item)
+    if len(remaining) != len(items):
+        _save_json(_TRAKT_OUTBOX_FILE, remaining)
+
+
+def _xw_trakt_watchlist_push(blob: dict, tmdb_id: int, media_type: str, add: bool) -> None:
+    """Push a watchlist add/remove to Trakt. Never raises — a Trakt failure
+    here must not block the local watchlist write, same as the native Xadarr
+    app's toggleWatchlist()/TraktOutboxRepository. Unlike a plain best-effort
+    attempt, a failure here is queued (see _xw_trakt_outbox_enqueue) and
+    retried on the next watchlist load instead of being silently dropped.
+    """
+    key = "movies" if media_type == "movie" else "shows"
+    body = {key: [{"ids": {"tmdb": tmdb_id}}]}
+    path = "sync/watchlist" if add else "sync/watchlist/remove"
+    try:
+        _xw_trakt_request(blob, "POST", path, body)
+    except Exception as exc:
+        logger.warning(
+            f"[Xadarr] Trakt watchlist {'add' if add else 'remove'} failed for tmdb={tmdb_id}: {exc}"
+        )
+        _xw_trakt_outbox_enqueue(tmdb_id, media_type, add)
+
+
+def _xw_reconcile_watchlist_with_trakt(blob: dict) -> list:
+    """Make watchlistByProfile match Trakt's real watchlist exactly — Trakt is
+    the single source of truth, this blob is a cache. Adds anything Trakt has
+    that's missing locally (fetching title/poster from TMDB), drops anything
+    local that Trakt no longer has. Never raises; if Trakt can't be reached
+    (not connected, network error) returns the local list untouched rather
+    than risk wiping it out over a transient failure.
+
+    Safe to run unconditionally now that _xw_flush_trakt_outbox is called
+    first on the same request — a push that failed at add/remove time gets
+    one more chance to reach Trakt before this treats "not on Trakt" as
+    ground truth. (Previously reverted 2026-07-11: reconciling against Trakt
+    while pushes could be silently and permanently lost resurrected watchlist
+    items the user had deliberately removed.)
+    """
+    try:
+        r = _xw_trakt_request(blob, "GET", "sync/watchlist?extended=full")
+        trakt_items = r.json()
+    except Exception as exc:
+        logger.warning(f"[Xadarr] Trakt watchlist fetch failed, skipping reconcile: {exc}")
+        return _xw_watchlist(blob)
+
+    trakt_keys = set()
+    for entry in trakt_items:
+        media_type = "movie" if entry.get("type") == "movie" else "show"
+        obj = entry.get("movie") or entry.get("show") or {}
+        tmdb_id = (obj.get("ids") or {}).get("tmdb")
+        if tmdb_id:
+            trakt_keys.add((media_type, tmdb_id))
+
+    local = _xw_watchlist(blob)
+    kept = [
+        w for w in local
+        if (_xw_norm_media(w.get("mediaType", "movie")), int(w.get("tmdbId") or w.get("id") or 0)) in trakt_keys
+    ]
+    local_keys = {
+        (_xw_norm_media(w.get("mediaType", "movie")), int(w.get("tmdbId") or w.get("id") or 0))
+        for w in local
+    }
+    missing = trakt_keys - local_keys
+    changed = len(kept) != len(local)
+
+    for media_type, tmdb_id in missing:
+        endpoint = "/movie/" if media_type == "movie" else "/tv/"
+        tmdb_data = _xw_tmdb(endpoint + str(tmdb_id)) or {}
+        kept.insert(0, {
+            "tmdbId": tmdb_id,
+            "title": tmdb_data.get("title") or tmdb_data.get("name") or "",
+            "mediaType": media_type,
+            "posterPath": ("https://image.tmdb.org/t/p/w342" + tmdb_data["poster_path"])
+                if tmdb_data.get("poster_path") else "",
+            "backdropPath": ("https://image.tmdb.org/t/p/w780" + tmdb_data["backdrop_path"])
+                if tmdb_data.get("backdrop_path") else "",
+            "addedAt": int(time.time() * 1000),
+            "sourceOrder": 0,
+        })
+        changed = True
+
+    if changed:
+        _xw_set_watchlist(blob, kept)
+        _xw_save_blob(blob)
+    return kept
+
+
 def _xw_tmdb(path: str, params: dict = None):
     blob = _load_json(_SETTINGS_FILE, {})
     key = blob.get("tmdb_api_key", "")
@@ -277,6 +497,47 @@ def _xw_log_webhook(entry: dict) -> None:
 NEOLINK_RECORDINGS_DIR = Path(os.environ.get("NEOLINK_RECORDINGS_DIR", "/neolink-recordings"))
 
 _neolink_token_cache = {"token": None, "fetched_at": 0.0}
+
+# Neolink has no live-snapshot API (only event thumbnails), so camera grid tiles
+# would otherwise show a stale frame from whenever the last motion event fired.
+# Grab a real current frame off Neolink's RTSP restream via ffmpeg instead, cached
+# briefly per camera so rapid repeat requests (grid re-render, polling) don't each
+# spawn their own ffmpeg process.
+_SNAPSHOT_CACHE_DIR = Path(tempfile.gettempdir()) / "xadarr_camera_snapshots"
+_SNAPSHOT_TTL_SECONDS = 15
+
+
+def _neolink_live_snapshot(camera_name: str, cfg: dict) -> Optional[bytes]:
+    host = urlparse(cfg["url"]).hostname if cfg.get("url") else None
+    if not host:
+        return None
+    _SNAPSHOT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    cache_path = _SNAPSHOT_CACHE_DIR / f"{camera_name}.jpg"
+    try:
+        if cache_path.exists() and (time.time() - cache_path.stat().st_mtime) < _SNAPSHOT_TTL_SECONDS:
+            return cache_path.read_bytes()
+    except Exception:
+        pass
+    rtsp_url = f"rtsp://{host}:8654/{camera_name}/subStream"
+    tmp_path = cache_path.with_suffix(".jpg.tmp")
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-rtsp_transport", "tcp", "-i", rtsp_url,
+             "-frames:v", "1", "-q:v", "4", "-f", "mjpeg", str(tmp_path)],
+            capture_output=True, timeout=6,
+        )
+        if result.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 0:
+            tmp_path.replace(cache_path)
+            return cache_path.read_bytes()
+    except Exception as e:
+        logger.warning(f"[neolink] live snapshot grab failed for {camera_name}: {e}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    # Stale cache beats no image at all.
+    try:
+        return cache_path.read_bytes() if cache_path.exists() else None
+    except Exception:
+        return None
 
 
 def _get_neolink_config(blob: dict = None) -> dict:
@@ -572,6 +833,21 @@ def _save_settings(data: dict) -> bool:
             return False
 
 
+def _default_home_layout() -> dict:
+    """
+    Default home_layout.hero/footer for a profile with nothing stored yet.
+    Mirrors HomeLayoutRepository on the TV app and xadarr-server's
+    _default_home_layout() — same "homeLayoutByProfile" blob key so a change
+    on either sync backend round-trips identically. Rows/nav already have
+    homes (catalogsByProfile / navSectionsByProfile) — this is only for the
+    two zones that didn't.
+    """
+    return {
+        "hero": {"type": "live_resume", "actions": ["watch", "guide"]},
+        "footer": {"type": "apps_catalog"},
+    }
+
+
 def _get_completion_threshold() -> float:
     try:
         from settings_db import get_service
@@ -812,6 +1088,21 @@ class XadarrIntegration(ServiceIntegration):
             data = _load_settings()
             if data is None:
                 return jsonify({"error": "No settings saved yet"}), 404
+            # One-time backfill: a profile with no stored homeLayoutByProfile
+            # entry gets the default persisted, matching xadarr-server. Not
+            # load-bearing for the TV app (it defaults locally too) — just
+            # keeps the on-disk blob complete for direct inspection.
+            profiles = data.get("profiles") or []
+            if profiles:
+                by_profile = data.setdefault("homeLayoutByProfile", {})
+                changed = False
+                for profile in profiles:
+                    pid = profile.get("id")
+                    if pid and pid not in by_profile:
+                        by_profile[pid] = _default_home_layout()
+                        changed = True
+                if changed:
+                    _save_settings(data)
             return jsonify(data), 200
 
         # ── PUT /settings ─────────────────────────────────────────────────────
@@ -846,6 +1137,50 @@ class XadarrIntegration(ServiceIntegration):
                             incoming_ps["homeServerConnectionJson"] = existing_conn
                     except Exception:
                         pass
+            # Preserve traktTokens per profile if the incoming blob omits a
+            # profile's token. Trakt refresh tokens are single-use — whichever
+            # device refreshes first rotates it, and any other device still
+            # holding the old refresh token gets a 401 on its next refresh
+            # attempt and clears its own local copy. Without this guard, that
+            # device's very next settings push (for any unrelated change)
+            # would wipe the still-valid, just-rotated token this server
+            # already has, forcing every device to re-authenticate. Only a
+            # profile the client explicitly disconnected (traktDisconnectedProfileIds)
+            # is allowed to clear the stored token.
+            existing_trakt_tokens = existing.get("traktTokens") or {}
+            if existing_trakt_tokens:
+                incoming_trakt_tokens = body.setdefault("traktTokens", {})
+                disconnected_ids = set(body.get("traktDisconnectedProfileIds") or [])
+                for pid, existing_token in existing_trakt_tokens.items():
+                    if not isinstance(existing_token, dict) or not existing_token.get("accessToken"):
+                        continue
+                    if pid in disconnected_ids:
+                        continue
+                    incoming_token = incoming_trakt_tokens.get(pid)
+                    if not isinstance(incoming_token, dict) or not incoming_token.get("accessToken"):
+                        incoming_trakt_tokens[pid] = existing_token
+            # Preserve neolink_username/neolink_password if the incoming blob omits them.
+            # The TV app's Neolink URL field is a single string with no separate
+            # username/password inputs — it only round-trips credentials it can
+            # decompose out of that field, which are never set locally. Without this,
+            # every settings push from a device wipes the credentials entered via the
+            # web dashboard's separate URL/Username/Password rows within seconds.
+            if not (body.get("neolink_username") or "").strip():
+                existing_user = (existing.get("neolink_username") or "").strip()
+                if existing_user:
+                    body["neolink_username"] = existing_user
+            if not (body.get("neolink_password") or "").strip():
+                existing_pass = (existing.get("neolink_password") or "").strip()
+                if existing_pass:
+                    body["neolink_password"] = existing_pass
+            # Preserve homeLayoutByProfile per profile if the incoming blob omits
+            # it — an old (pre-home_layout) client's PUT is a full overwrite and
+            # would otherwise silently wipe hero/footer config set from another device.
+            existing_home_layout = existing.get("homeLayoutByProfile") or {}
+            if existing_home_layout:
+                incoming_home_layout = body.setdefault("homeLayoutByProfile", {})
+                for pid, layout in existing_home_layout.items():
+                    incoming_home_layout.setdefault(pid, layout)
             ok = _save_settings(body)
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500
@@ -918,22 +1253,32 @@ class XadarrIntegration(ServiceIntegration):
                 if event == "start":
                     # New watch session — reset dedup so this episode can be processed again
                     with _processed_lock:
-                        _processed_episodes.pop(ep_key, None)
+                        data = _processed_episodes_load()
+                        if data.pop(ep_key, None) is not None:
+                            _processed_episodes_save(data)
                     logger.debug(f"[Xadarr] Reset dedup for {ep_key}")
 
                 elif event in ("progress", "stop", "finish"):
-                    with _processed_lock:
-                        already_processed = ep_key in _processed_episodes
+                    threshold = _get_completion_threshold()
+                    logger.debug(
+                        f"[Xadarr] {event.upper()} {ep_key} at {progress}% "
+                        f"(threshold={threshold}%)"
+                    )
+                    if progress >= threshold:
+                        # Check-and-mark atomically under the lock, *before* triggering —
+                        # not after — so a second worker landing here (even moments
+                        # later, while _trigger_rule_processing's subprocess call is
+                        # still running) sees the mark and skips instead of racing in.
+                        with _processed_lock:
+                            data = _processed_episodes_load()
+                            already_processed = ep_key in data
+                            if not already_processed:
+                                data[ep_key] = time.time()
+                                _processed_episodes_save(data)
 
-                    if already_processed:
-                        logger.debug(f"[Xadarr] {ep_key} already processed this session — skipping")
-                    else:
-                        threshold = _get_completion_threshold()
-                        logger.debug(
-                            f"[Xadarr] {event.upper()} {ep_key} at {progress}% "
-                            f"(threshold={threshold}%)"
-                        )
-                        if progress >= threshold:
+                        if already_processed:
+                            logger.debug(f"[Xadarr] {ep_key} already processed this session — skipping")
+                        else:
                             logger.info(
                                 f"[Xadarr] Threshold reached for {title}{ep_info} "
                                 f"({progress}% >= {threshold}%) — triggering rule processing"
@@ -944,12 +1289,10 @@ class XadarrIntegration(ServiceIntegration):
                                 season=season,
                                 episode=episode,
                             )
-                            with _processed_lock:
-                                _processed_episodes[ep_key] = time.time()
-                        else:
-                            logger.debug(
-                                f"[Xadarr] Below threshold ({progress}% < {threshold}%) — not processing"
-                            )
+                    else:
+                        logger.debug(
+                            f"[Xadarr] Below threshold ({progress}% < {threshold}%) — not processing"
+                        )
 
             return jsonify({"status": "received"}), 200
 
@@ -1416,7 +1759,9 @@ class XadarrIntegration(ServiceIntegration):
         @web_bp.route("/media/watchlist", methods=["GET"])
         def web_get_watchlist():
             blob = _xw_blob()
-            return jsonify(_xw_watchlist_to_web(_xw_watchlist(blob)))
+            _xw_flush_trakt_outbox(blob)
+            items = _xw_reconcile_watchlist_with_trakt(blob)
+            return jsonify(_xw_watchlist_to_web(items))
 
         @web_bp.route("/media/watchlist", methods=["POST"])
         def web_add_watchlist():
@@ -1450,6 +1795,7 @@ class XadarrIntegration(ServiceIntegration):
                 }
                 wl.insert(0, new_item)
                 _xw_set_watchlist(blob, wl)
+                _xw_trakt_watchlist_push(blob, tmdb_id, media_type, add=True)
                 _xw_save_blob(blob)
             return jsonify({"ok": True})
 
@@ -1458,6 +1804,7 @@ class XadarrIntegration(ServiceIntegration):
             blob = _xw_blob()
             wl = [w for w in _xw_watchlist(blob) if int(w.get("tmdbId") or w.get("id") or 0) != item_id]
             _xw_set_watchlist(blob, wl)
+            _xw_trakt_watchlist_push(blob, item_id, _xw_norm_media(media_type), add=False)
             _xw_save_blob(blob)
             return jsonify({"ok": True})
 
@@ -1739,8 +2086,15 @@ class XadarrIntegration(ServiceIntegration):
 
         @web_bp.route("/cameras/snapshot/<camera_name>", methods=["GET"])
         def web_camera_snapshot(camera_name):
-            # Neolink has no live-snapshot endpoint; serve the most recent event's
-            # thumbnail instead (folders are named so lexical sort == chronological).
+            cfg = _get_neolink_config(_xw_blob())
+            live = _neolink_live_snapshot(camera_name, cfg) if cfg["url"] else None
+            if live:
+                resp = Response(live, mimetype="image/jpeg")
+                resp.headers["Cache-Control"] = "no-cache"
+                return resp
+            # Live RTSP grab failed (camera offline, ffmpeg missing, etc.) — fall
+            # back to the most recent event's thumbnail (folders are named so
+            # lexical sort == chronological).
             cam_dir = NEOLINK_RECORDINGS_DIR / camera_name
             if not cam_dir.is_dir():
                 return "No recordings for camera", 404

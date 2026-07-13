@@ -2276,6 +2276,32 @@ def api_sonarr_all_series():
             for sid in rule_data.get('series', {}):
                 series_to_rule[str(sid)] = rule_name
 
+        # Most-recent-import date per series, for the Xadarr library browser's
+        # "new episodes added" sort. One bulk history call rather than a
+        # per-series query — same endpoint/pattern as the recent_stats block
+        # above, just paged wider and grouped instead of counted.
+        last_episode_added: dict[int, str] = {}
+        try:
+            history_resp = http.get(
+                f"{base}/api/v3/history",
+                headers=headers,
+                params={'page': 1, 'pageSize': 1000, 'sortKey': 'date', 'sortDirection': 'descending'},
+                timeout=15,
+            )
+            if history_resp.ok:
+                for record in history_resp.json().get('records', []):
+                    if record.get('eventType') != 'downloadFolderImported':
+                        continue
+                    sid = record.get('seriesId')
+                    date = record.get('date')
+                    if sid is None or not date:
+                        continue
+                    # Records are already sorted newest-first, so the first date seen
+                    # per series is its most recent import.
+                    last_episode_added.setdefault(sid, date)
+        except Exception as e:
+            app.logger.warning(f"Could not get Sonarr import history: {str(e)}")
+
         result = []
         for s in all_series:
             poster = next(
@@ -2297,8 +2323,18 @@ def api_sonarr_all_series():
                 'sizeOnDisk': stats.get('sizeOnDisk', 0),
                 'poster': poster,
                 'assigned_rule': series_to_rule.get(str(s['id'])),
+                'lastEpisodeAdded': last_episode_added.get(s['id']),
             })
+        # Newest import first; series with no import history (never downloaded,
+        # or older than the history page above covers) fall to the back,
+        # alphabetical among themselves. The Xadarr app re-sorts this list
+        # client-side blending in local watch-recency, but this is a sane
+        # order for any other consumer of this endpoint. Three stable passes,
+        # least-significant key first, since Python's sort has no native
+        # multi-key-with-mixed-None-handling one-liner here.
         result.sort(key=lambda x: x['title'].lower())
+        result.sort(key=lambda x: x['lastEpisodeAdded'] or '', reverse=True)
+        result.sort(key=lambda x: x['lastEpisodeAdded'] is None)
         return jsonify({'success': True, 'series': result})
     except Exception as e:
         app.logger.error(f"Error fetching all Sonarr series: {e}")
