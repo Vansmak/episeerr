@@ -769,6 +769,36 @@ def _store_notification(entry: dict) -> None:
             _sse_queues.remove(q)
 
 
+_NOTIFY_DEDUP_FILE = os.path.join(_DATA_DIR, "xadarr_notify_dedup.json")
+_notify_dedup_lock = threading.Lock()
+_NOTIFY_DEDUP_COOLDOWN = 1800  # 30 min
+_NOTIFY_DEDUP_EVENTS = {"episode.grabbed", "episode.ready"}
+
+
+def _notify_dedup_should_fire(event: str, key: str) -> bool:
+    # rule.triggered already has its own per-session dedup (_PROCESSED_EPISODES_FILE
+    # above). grabbed/ready toasts had none — confirmed 2026-07-13/14 that Sonarr
+    # re-fires its Grab webhook for the SAME episode many times in a short burst
+    # when a release keeps failing to import (Masters of the Air, then Lioness
+    # S1E2: 6 grabs in ~8 minutes, Joe: "too many toast messages"). Collapse
+    # repeats within a cooldown window into one toast rather than suppressing
+    # forever — a genuinely still-stuck download should resurface occasionally,
+    # not vanish.
+    if event not in _NOTIFY_DEDUP_EVENTS:
+        return True
+    with _notify_dedup_lock:
+        data = _load_json(_NOTIFY_DEDUP_FILE, {})
+        now = time.time()
+        data = {k: v for k, v in data.items() if now - v < 86400}
+        last = data.get(key)
+        if last is not None and now - last < _NOTIFY_DEDUP_COOLDOWN:
+            _save_json(_NOTIFY_DEDUP_FILE, data)
+            return False
+        data[key] = now
+        _save_json(_NOTIFY_DEDUP_FILE, data)
+        return True
+
+
 def notify_xadarr_event(event: str, payload: dict) -> None:
     """Store an Episeerr-originated event (grab/ready/rule/watchlist/failover)
     into the generic notification queue so it shows as an on-device toast —
@@ -777,6 +807,10 @@ def notify_xadarr_event(event: str, payload: dict) -> None:
     title = str(payload.get("title") or "Unknown")
     season = payload.get("season")
     episode = payload.get("episode")
+
+    if not _notify_dedup_should_fire(event, f"{event}:{title}:{season}:{episode}"):
+        return
+
     message = payload.get("rule") or (
         f"S{season:02d}E{episode:02d}" if season and episode else None
     )

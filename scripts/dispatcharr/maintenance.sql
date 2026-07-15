@@ -668,6 +668,31 @@ BEGIN
   DELETE FROM dispatcharr_channels_channel                 WHERE id         = ANY(_dead);
 END $$;
 
+-- Renumber stream order per channel: Titan (m3u_account_id 11) first, then
+-- Direct (13), then anything else. Fixes order collisions left by the merge
+-- above — moved-in streams keep whatever order they had on their original
+-- single-provider channel (almost always 0), so a merged channel could end
+-- up with two+ streams tied at order=0 and no defined failover priority.
+WITH ranked AS (
+  SELECT cs.id,
+    ROW_NUMBER() OVER (
+      PARTITION BY cs.channel_id
+      ORDER BY
+        CASE s.m3u_account_id WHEN 11 THEN 0 WHEN 13 THEN 1 ELSE 2 END,
+        cs."order", cs.id
+    ) - 1 AS new_order
+  FROM dispatcharr_channels_channelstream cs
+  JOIN dispatcharr_channels_stream s ON s.id = cs.stream_id
+  WHERE cs.channel_id IN (
+    SELECT id FROM dispatcharr_channels_channel
+    WHERE auto_created = true AND channel_group_id IN (SELECT id FROM _merge_groups)
+  )
+)
+UPDATE dispatcharr_channels_channelstream cs
+SET "order" = r.new_order
+FROM ranked r
+WHERE cs.id = r.id;
+
 SELECT COUNT(*) AS part9a_channels_after_consolidation
 FROM dispatcharr_channels_channel c
 JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
