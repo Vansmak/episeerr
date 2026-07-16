@@ -78,7 +78,20 @@
                                 </div>
                             </div>
 
-                            <div class="col-md-6">
+                            <div class="col-md-3">
+                                <div class="mb-3">
+                                    <label for="missingBackfillMaxAge" class="form-label">
+                                        Backfill Max Age (days)
+                                    </label>
+                                    <input type="number" class="form-control" id="missingBackfillMaxAge"
+                                           name="missing_backfill_max_age_days" min="0" max="365" value="7">
+                                    <small class="form-text text-muted">
+                                        Only backfill episodes aired within this window (0 = no cap)
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="col-md-3">
                                 <label class="form-label">Cleanup Options</label>
                                 
                                 <div class="form-check form-switch mb-2">
@@ -327,6 +340,9 @@ async function loadGlobalSettings() {
             document.getElementById('missingBackfillHours').value =
                 (globalSettings.missing_backfill_hours !== undefined && globalSettings.missing_backfill_hours !== null)
                     ? globalSettings.missing_backfill_hours : 4;
+            document.getElementById('missingBackfillMaxAge').value =
+                (globalSettings.missing_backfill_max_age_days !== undefined && globalSettings.missing_backfill_max_age_days !== null)
+                    ? globalSettings.missing_backfill_max_age_days : 7;
             document.getElementById('dryRunMode').checked = 
                 globalSettings.dry_run_mode || false;
             document.getElementById('autoAssignNewSeries').checked = 
@@ -364,6 +380,7 @@ async function saveGlobalSettings(event) {
         global_storage_min_gb: formData.get('global_storage_min_gb') || null,
         cleanup_interval_hours: parseInt(formData.get('cleanup_interval_hours')) || 6,
         missing_backfill_hours: formData.get('missing_backfill_hours') === '' ? 4 : (parseFloat(formData.get('missing_backfill_hours')) || 0),
+        missing_backfill_max_age_days: formData.get('missing_backfill_max_age_days') === '' ? 7 : (parseFloat(formData.get('missing_backfill_max_age_days')) || 0),
         dry_run_mode: formData.has('dry_run_mode'),
         auto_assign_new_series: formData.has('auto_assign_new_series'),
         

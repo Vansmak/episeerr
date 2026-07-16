@@ -1510,6 +1510,7 @@ def load_global_settings():
                 'global_storage_min_gb': None,
                 'cleanup_interval_hours': 6,
                 'missing_backfill_hours': 4,
+                'missing_backfill_max_age_days': 7,
                 'dry_run_mode': True,
                 'auto_assign_new_series': False,
                 
@@ -1525,6 +1526,7 @@ def load_global_settings():
             'global_storage_min_gb': None,
             'cleanup_interval_hours': 6,
             'missing_backfill_hours': 4,
+            'missing_backfill_max_age_days': 7,
             'dry_run_mode': True,
             'auto_assign_new_series': False,
             'notifications_enabled': False,

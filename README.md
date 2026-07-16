@@ -1020,11 +1020,14 @@ The missing episode backfill closes that gap: on a schedule (default: every 4 ho
 - Monitored
 - Missing (no file)
 - Already aired (at least 30 minutes ago)
+- Recent — aired within the max-age window (default: last 7 days)
 
 **Notes:**
 - Only applies to rules with action **search** — for *monitor* rules, episodes stay monitored-only by design.
-- Configure the interval in Scheduler Admin → "Missing Episode Backfill (hours)" (`missing_backfill_hours` in global settings; `0` disables it). The `MISSING_BACKFILL_HOURS` env var sets the default.
-- Future episodes are never searched, so the delay-profile hold that prevents unwanted full-season grabs stays intact.
+- Configure in Scheduler Admin → "Missing Episode Backfill (hours)" (`missing_backfill_hours` in global settings; `0` disables it) and "Backfill Max Age (days)" (`missing_backfill_max_age_days`; `0` removes the cap). The `MISSING_BACKFILL_HOURS` / `MISSING_BACKFILL_MAX_AGE_DAYS` env vars set the defaults.
+- The max-age cap is what keeps the backfill scoped to *newly aired* episodes: episodes whose files Episeerr's own cleanup deleted (cleanup leaves them monitored), or the aired back catalog of a fully-monitored series added to a rule, are older than the window and are **not** re-searched.
+- Future episodes are never searched, so adding a series to a rule still doesn't grab upcoming seasons; note the backfill *does* intentionally bypass the delay-profile hold for recent aired episodes — that is the point.
+- The backfill ignores **Global Dry Run Mode**: dry run gates *deletions*, while the backfill only triggers searches (it never deletes anything). Set the interval to `0` to disable it instead.
 
 ---
 

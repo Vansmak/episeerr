@@ -1011,24 +1011,35 @@ def search_episodes(series_id, episode_ids, headers):
 # no file, and have already aired.
 
 MISSING_BACKFILL_AIR_BUFFER_MINUTES = 30
+MISSING_BACKFILL_MAX_AGE_DAYS = 7
 
-def select_missing_aired_episodes(episodes, buffer_minutes=MISSING_BACKFILL_AIR_BUFFER_MINUTES, now_utc=None):
+def select_missing_aired_episodes(episodes, buffer_minutes=MISSING_BACKFILL_AIR_BUFFER_MINUTES,
+                                  max_age_days=MISSING_BACKFILL_MAX_AGE_DAYS, now_utc=None):
     """Select episodes eligible for the missing-episode backfill.
 
     An episode qualifies when it is monitored, has no file, and its
     airDateUtc is at least ``buffer_minutes`` in the past (small buffer so we
-    do not search for an episode seconds after it airs).
+    do not search for an episode seconds after it airs) but no more than
+    ``max_age_days`` old. The recency cap keeps the backfill scoped to
+    "newly aired episodes of shows you are current on": without it, episodes
+    whose files Episeerr's own cleanup deleted (cleanup deletes files but
+    leaves episodes monitored) or a fully-monitored back catalog would be
+    re-searched forever.
 
     :param episodes: List of Sonarr episode dicts
     :param buffer_minutes: Minimum minutes since airDateUtc
-    :param now_utc: Override "now" (naive UTC datetime) for testing
+    :param max_age_days: Maximum days since airDateUtc (0 disables the cap)
+    :param now_utc: Override "now" (datetime, naive treated as UTC) for testing
     :return: List of qualifying episode dicts
     """
-    from datetime import timedelta
+    from datetime import timedelta, timezone
 
     if now_utc is None:
-        now_utc = datetime.utcnow()
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
     cutoff = now_utc - timedelta(minutes=buffer_minutes)
+    oldest = now_utc - timedelta(days=max_age_days) if max_age_days and max_age_days > 0 else None
 
     selected = []
     for ep in episodes:
@@ -1040,12 +1051,15 @@ def select_missing_aired_episodes(episodes, buffer_minutes=MISSING_BACKFILL_AIR_
         if not air_date_str:
             continue  # unaired / TBA episodes have no airDateUtc
         try:
-            air_date = datetime.fromisoformat(air_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
+            air_date = datetime.fromisoformat(air_date_str.replace('Z', '+00:00')).astimezone(timezone.utc)
         except (ValueError, TypeError):
             logger.warning(f"Backfill: could not parse airDateUtc '{air_date_str}' for episode {ep.get('id')}")
             continue
-        if air_date <= cutoff:
-            selected.append(ep)
+        if air_date > cutoff:
+            continue  # not aired yet (or within the post-air buffer)
+        if oldest is not None and air_date < oldest:
+            continue  # older than the backfill window - not a "stay current" gap
+        selected.append(ep)
     return selected
 
 
@@ -1067,6 +1081,17 @@ def run_missing_episode_backfill():
     if not SONARR_URL or not SONARR_API_KEY:
         logger.warning("Backfill: Sonarr not configured, skipping")
         return
+
+    try:
+        default_max_age_days = float(os.getenv('MISSING_BACKFILL_MAX_AGE_DAYS', str(MISSING_BACKFILL_MAX_AGE_DAYS)))
+    except ValueError:
+        default_max_age_days = float(MISSING_BACKFILL_MAX_AGE_DAYS)
+    try:
+        global_settings = media_processor.load_global_settings()
+        max_age_days = float(global_settings.get('missing_backfill_max_age_days', default_max_age_days))
+    except Exception as e:
+        logger.warning(f"Backfill: could not load global settings ({e}), using {default_max_age_days}-day age cap")
+        max_age_days = default_max_age_days
 
     headers = get_sonarr_headers()
     total_series = 0
@@ -1095,7 +1120,7 @@ def run_missing_episode_backfill():
                     logger.warning(f"Backfill: failed to get episodes for series {sid} (status {resp.status_code}), skipping")
                     continue
 
-                missing = select_missing_aired_episodes(resp.json())
+                missing = select_missing_aired_episodes(resp.json(), max_age_days=max_age_days)
                 if not missing:
                     continue
 

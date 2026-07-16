@@ -1119,13 +1119,19 @@ class OCDarrScheduler:
         except ValueError:
             default_backfill_hours = 4.0
         try:
+            default_backfill_max_age_days = float(os.getenv('MISSING_BACKFILL_MAX_AGE_DAYS', '7'))
+        except ValueError:
+            default_backfill_max_age_days = 7.0
+        try:
             import media_processor
             global_settings = media_processor.load_global_settings()
             self.cleanup_interval_hours = global_settings.get('cleanup_interval_hours', 6)
             self.missing_backfill_hours = float(global_settings.get('missing_backfill_hours', default_backfill_hours))
+            self.missing_backfill_max_age_days = float(global_settings.get('missing_backfill_max_age_days', default_backfill_max_age_days))
         except:
             self.cleanup_interval_hours = 6  # Fallback
             self.missing_backfill_hours = default_backfill_hours
+            self.missing_backfill_max_age_days = default_backfill_max_age_days
     
     def start_scheduler(self):
         if self.running:
@@ -1217,6 +1223,7 @@ class OCDarrScheduler:
             "type": "global_storage_gate",
             "interval_hours": self.cleanup_interval_hours,
             "missing_backfill_hours": self.missing_backfill_hours,
+            "missing_backfill_max_age_days": self.missing_backfill_max_age_days,
             "last_missing_backfill": datetime.fromtimestamp(self.last_missing_backfill).strftime("%Y-%m-%d %H:%M:%S") if self.last_missing_backfill else "Never",
             "last_cleanup": datetime.fromtimestamp(self.last_cleanup).strftime("%Y-%m-%d %H:%M:%S") if self.last_cleanup else "Never",
             "next_cleanup": next_cleanup
@@ -4478,8 +4485,9 @@ def update_global_settings():
         cleanup_interval_hours = data.get('cleanup_interval_hours', 6)
         dry_run_mode = data.get('dry_run_mode', False)
         auto_assign_new_series = data.get('auto_assign_new_series', False)
-        # Preserve the current value if the client did not send the field
+        # Preserve the current values if the client did not send the fields
         missing_backfill_hours = data.get('missing_backfill_hours', current_settings.get('missing_backfill_hours', 4))
+        missing_backfill_max_age_days = data.get('missing_backfill_max_age_days', current_settings.get('missing_backfill_max_age_days', 7))
         
         
         # NEW: Notification settings
@@ -4496,6 +4504,7 @@ def update_global_settings():
             'global_storage_min_gb': storage_min_gb,
             'cleanup_interval_hours': int(cleanup_interval_hours),
             'missing_backfill_hours': float(missing_backfill_hours) if missing_backfill_hours is not None else 4,
+            'missing_backfill_max_age_days': float(missing_backfill_max_age_days) if missing_backfill_max_age_days is not None else 7,
             'dry_run_mode': bool(dry_run_mode),
             'auto_assign_new_series': bool(auto_assign_new_series),
 
