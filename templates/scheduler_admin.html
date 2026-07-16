@@ -65,7 +65,20 @@
                                 </div>
                             </div>
                             
-                            <div class="col-md-9">
+                            <div class="col-md-3">
+                                <div class="mb-3">
+                                    <label for="missingBackfillHours" class="form-label">
+                                        Missing Episode Backfill (hours)
+                                    </label>
+                                    <input type="number" class="form-control" id="missingBackfillHours"
+                                           name="missing_backfill_hours" min="0" max="168" value="4">
+                                    <small class="form-text text-muted">
+                                        Search aired, monitored, missing episodes of managed series (0 = disabled)
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6">
                                 <label class="form-label">Cleanup Options</label>
                                 
                                 <div class="form-check form-switch mb-2">
@@ -309,8 +322,11 @@ async function loadGlobalSettings() {
             // Populate form
             document.getElementById('globalStorageGate').value = 
                 globalSettings.global_storage_min_gb || '';
-            document.getElementById('cleanupInterval').value = 
+            document.getElementById('cleanupInterval').value =
                 globalSettings.cleanup_interval_hours || 6;
+            document.getElementById('missingBackfillHours').value =
+                (globalSettings.missing_backfill_hours !== undefined && globalSettings.missing_backfill_hours !== null)
+                    ? globalSettings.missing_backfill_hours : 4;
             document.getElementById('dryRunMode').checked = 
                 globalSettings.dry_run_mode || false;
             document.getElementById('autoAssignNewSeries').checked = 
@@ -347,6 +363,7 @@ async function saveGlobalSettings(event) {
     const settings = {
         global_storage_min_gb: formData.get('global_storage_min_gb') || null,
         cleanup_interval_hours: parseInt(formData.get('cleanup_interval_hours')) || 6,
+        missing_backfill_hours: formData.get('missing_backfill_hours') === '' ? 4 : (parseFloat(formData.get('missing_backfill_hours')) || 0),
         dry_run_mode: formData.has('dry_run_mode'),
         auto_assign_new_series: formData.has('auto_assign_new_series'),
         

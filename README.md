@@ -1010,6 +1010,24 @@ Watch E5 → Get E6, E7 → Keep E5 → Delete E1-E4
 
 ---
 
+### 🔎 Missing Episode Backfill
+
+**Weekly shows stay current even when you're caught up.**
+
+Episeerr holds automatic (RSS) grabs for managed series with a Sonarr delay profile, and normally relies on watch-event searches to grab episodes. But if you're fully caught up on an airing show, no watch event fires when a new episode airs — so it would never download.
+
+The missing episode backfill closes that gap: on a schedule (default: every 4 hours) it checks every series assigned to a rule and triggers a Sonarr search for episodes that are:
+- Monitored
+- Missing (no file)
+- Already aired (at least 30 minutes ago)
+
+**Notes:**
+- Only applies to rules with action **search** — for *monitor* rules, episodes stay monitored-only by design.
+- Configure the interval in Scheduler Admin → "Missing Episode Backfill (hours)" (`missing_backfill_hours` in global settings; `0` disables it). The `MISSING_BACKFILL_HOURS` env var sets the default.
+- Future episodes are never searched, so the delay-profile hold that prevents unwanted full-season grabs stays intact.
+
+---
+
 ### 💾 Storage Management
 
 **Automatic cleanup based on time and viewing activity.**

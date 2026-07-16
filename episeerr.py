@@ -1109,16 +1109,23 @@ class OCDarrScheduler:
         self.running = False
         self.last_cleanup = 0
         self.last_aired_check = 0
+        self.last_missing_backfill = 0
         self.update_interval_from_settings()
-    
+
     def update_interval_from_settings(self):
         """Update cleanup interval from global settings."""
+        try:
+            default_backfill_hours = float(os.getenv('MISSING_BACKFILL_HOURS', '4'))
+        except ValueError:
+            default_backfill_hours = 4.0
         try:
             import media_processor
             global_settings = media_processor.load_global_settings()
             self.cleanup_interval_hours = global_settings.get('cleanup_interval_hours', 6)
+            self.missing_backfill_hours = float(global_settings.get('missing_backfill_hours', default_backfill_hours))
         except:
             self.cleanup_interval_hours = 6  # Fallback
+            self.missing_backfill_hours = default_backfill_hours
     
     def start_scheduler(self):
         if self.running:
@@ -1151,6 +1158,19 @@ class OCDarrScheduler:
                     except Exception as aired_err:
                         print(f"Aired not downloaded check error: {aired_err}")
                     self.last_aired_check = current_time
+
+                # Missing-episode backfill: the episeerr delay profile blocks
+                # Sonarr's automatic (RSS) grabs for managed series, so newly
+                # aired episodes of caught-up shows need a periodic search.
+                if self.missing_backfill_hours > 0:
+                    hours_since_backfill = (current_time - self.last_missing_backfill) / 3600
+                    if hours_since_backfill >= self.missing_backfill_hours:
+                        print("🔎 Starting scheduled missing episode backfill...")
+                        try:
+                            episeerr_utils.run_missing_episode_backfill()
+                        except Exception as backfill_err:
+                            print(f"Missing episode backfill error: {backfill_err}")
+                        self.last_missing_backfill = current_time
 
                 time.sleep(600)  # Check every 10 minutes
             except Exception as e:
@@ -1196,6 +1216,8 @@ class OCDarrScheduler:
             "status": "running",
             "type": "global_storage_gate",
             "interval_hours": self.cleanup_interval_hours,
+            "missing_backfill_hours": self.missing_backfill_hours,
+            "last_missing_backfill": datetime.fromtimestamp(self.last_missing_backfill).strftime("%Y-%m-%d %H:%M:%S") if self.last_missing_backfill else "Never",
             "last_cleanup": datetime.fromtimestamp(self.last_cleanup).strftime("%Y-%m-%d %H:%M:%S") if self.last_cleanup else "Never",
             "next_cleanup": next_cleanup
         }
@@ -4451,10 +4473,13 @@ def update_global_settings():
         import media_processor
         
         data = request.json
+        current_settings = media_processor.load_global_settings()
         storage_min_gb = data.get('global_storage_min_gb')
         cleanup_interval_hours = data.get('cleanup_interval_hours', 6)
         dry_run_mode = data.get('dry_run_mode', False)
         auto_assign_new_series = data.get('auto_assign_new_series', False)
+        # Preserve the current value if the client did not send the field
+        missing_backfill_hours = data.get('missing_backfill_hours', current_settings.get('missing_backfill_hours', 4))
         
         
         # NEW: Notification settings
@@ -4470,6 +4495,7 @@ def update_global_settings():
         settings = {
             'global_storage_min_gb': storage_min_gb,
             'cleanup_interval_hours': int(cleanup_interval_hours),
+            'missing_backfill_hours': float(missing_backfill_hours) if missing_backfill_hours is not None else 4,
             'dry_run_mode': bool(dry_run_mode),
             'auto_assign_new_series': bool(auto_assign_new_series),
 

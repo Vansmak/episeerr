@@ -1509,6 +1509,7 @@ def load_global_settings():
             default_settings = {
                 'global_storage_min_gb': None,
                 'cleanup_interval_hours': 6,
+                'missing_backfill_hours': 4,
                 'dry_run_mode': True,
                 'auto_assign_new_series': False,
                 
@@ -1523,6 +1524,7 @@ def load_global_settings():
         return {
             'global_storage_min_gb': None,
             'cleanup_interval_hours': 6,
+            'missing_backfill_hours': 4,
             'dry_run_mode': True,
             'auto_assign_new_series': False,
             'notifications_enabled': False,

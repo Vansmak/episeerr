@@ -1000,6 +1000,134 @@ def search_episodes(series_id, episode_ids, headers):
         logger.error(f"Error searching for episodes: {str(e)}", exc_info=True)
         return False
 
+# ============================================================
+# MISSING EPISODE BACKFILL
+# ============================================================
+# Episeerr holds automatic (RSS) grabs for managed series via a Sonarr delay
+# profile bound to the episeerr tags. EpisodeSearch commands bypass the delay
+# profile, but they only fire on watch events - so a user who is caught up on
+# a currently-airing show never receives newly aired episodes. This periodic
+# backfill closes that gap: it searches for episodes that are monitored, have
+# no file, and have already aired.
+
+MISSING_BACKFILL_AIR_BUFFER_MINUTES = 30
+
+def select_missing_aired_episodes(episodes, buffer_minutes=MISSING_BACKFILL_AIR_BUFFER_MINUTES, now_utc=None):
+    """Select episodes eligible for the missing-episode backfill.
+
+    An episode qualifies when it is monitored, has no file, and its
+    airDateUtc is at least ``buffer_minutes`` in the past (small buffer so we
+    do not search for an episode seconds after it airs).
+
+    :param episodes: List of Sonarr episode dicts
+    :param buffer_minutes: Minimum minutes since airDateUtc
+    :param now_utc: Override "now" (naive UTC datetime) for testing
+    :return: List of qualifying episode dicts
+    """
+    from datetime import timedelta
+
+    if now_utc is None:
+        now_utc = datetime.utcnow()
+    cutoff = now_utc - timedelta(minutes=buffer_minutes)
+
+    selected = []
+    for ep in episodes:
+        if not ep.get('monitored', False):
+            continue
+        if ep.get('hasFile', False):
+            continue
+        air_date_str = ep.get('airDateUtc')
+        if not air_date_str:
+            continue  # unaired / TBA episodes have no airDateUtc
+        try:
+            air_date = datetime.fromisoformat(air_date_str.replace('Z', '+00:00')).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            logger.warning(f"Backfill: could not parse airDateUtc '{air_date_str}' for episode {ep.get('id')}")
+            continue
+        if air_date <= cutoff:
+            selected.append(ep)
+    return selected
+
+
+def run_missing_episode_backfill():
+    """Search Sonarr for monitored, missing, already-aired episodes of rule-managed series.
+
+    Only series assigned to rules with action_option 'search' are searched -
+    for 'monitor' rules the user explicitly chose not to auto-search.
+    Never raises: any failure is logged and skipped so the scheduler thread
+    stays alive.
+    """
+    try:
+        import media_processor  # lazy import (media_processor imports this module)
+        config = media_processor.load_config()
+    except Exception as e:
+        logger.error(f"Backfill: could not load config: {e}")
+        return
+
+    if not SONARR_URL or not SONARR_API_KEY:
+        logger.warning("Backfill: Sonarr not configured, skipping")
+        return
+
+    headers = get_sonarr_headers()
+    total_series = 0
+    total_searched = 0
+
+    for rule_name, rule in config.get('rules', {}).items():
+        series_map = rule.get('series', {}) or {}
+        if not series_map:
+            continue
+        action_option = rule.get('action_option', 'monitor')
+        if action_option != 'search':
+            logger.info(f"⏭️ Backfill: rule '{rule_name}' action is '{action_option}' - not searching its {len(series_map)} series")
+            continue
+
+        for series_id in series_map:
+            total_series += 1
+            try:
+                sid = int(series_id)
+                resp = http.get(
+                    f"{SONARR_URL}/api/v3/episode",
+                    headers=headers,
+                    params={'seriesId': sid},
+                    timeout=30
+                )
+                if not resp.ok:
+                    logger.warning(f"Backfill: failed to get episodes for series {sid} (status {resp.status_code}), skipping")
+                    continue
+
+                missing = select_missing_aired_episodes(resp.json())
+                if not missing:
+                    continue
+
+                series_title = f"series {sid}"
+                try:
+                    series_resp = http.get(f"{SONARR_URL}/api/v3/series/{sid}", headers=headers, timeout=30)
+                    if series_resp.ok:
+                        series_title = series_resp.json().get('title', series_title)
+                except Exception:
+                    pass
+
+                episode_ids = [ep['id'] for ep in missing]
+                ep_labels = ', '.join(
+                    f"S{ep.get('seasonNumber', 0):02d}E{ep.get('episodeNumber', 0):02d}" for ep in missing
+                )
+                logger.info(f"🔎 Backfill: '{series_title}' (rule '{rule_name}') has {len(missing)} aired monitored episode(s) without a file: {ep_labels}")
+
+                if search_episodes(sid, episode_ids, headers):
+                    total_searched += len(episode_ids)
+                    logger.info(f"✓ Backfill: triggered search for {len(episode_ids)} episode(s) of '{series_title}'")
+                else:
+                    logger.warning(f"Backfill: search command failed for '{series_title}'")
+            except Exception as e:
+                logger.error(f"Backfill: error processing series {series_id}: {e}")
+                continue
+
+    if total_searched:
+        logger.info(f"✅ Missing episode backfill complete: searched {total_searched} episode(s) across {total_series} managed series")
+    else:
+        logger.info(f"✓ Missing episode backfill complete: nothing to search ({total_series} managed series checked)")
+
+
 def get_series_episodes(series_id, season_number, headers):
     """
     Get all episodes for a specific series and season.
