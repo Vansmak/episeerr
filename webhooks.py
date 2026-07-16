@@ -192,23 +192,13 @@ def process_sonarr_webhook():
                 if default_rule_name not in config['rules']:
                     return jsonify({"status": "error", "message": f"Default rule '{default_rule_name}' missing"}), 500
 
-                series_id_str = str(series_id)
-                target_rule = config['rules'][default_rule_name]
-                target_rule.setdefault('series', {})
-                series_dict = target_rule['series']
-
-                if series_id_str not in series_dict:
-                    from episeerr import save_config
-                    series_dict[series_id_str] = {'activity_date': None}
-                    save_config(config)
-                    try:
-                        episeerr_utils.sync_rule_tag_to_sonarr(series_id, default_rule_name)
-                    except Exception as e:
-                        current_app.logger.error(f"Auto-assign tag sync failed: {e}")
-                    current_app.logger.info(f"Auto-assigned to default rule '{default_rule_name}'")
-
-                # Set assigned_rule and continue to processing
+                # Set assigned_rule and continue to processing. The assignment
+                # is persisted by the common "Add to config + sync tag" block
+                # further down, which runs AFTER unmonitor_series() - persisting
+                # here (before unmonitoring) could leave a fully-monitored
+                # series assigned to a rule if unmonitoring fails.
                 assigned_rule = default_rule_name
+                current_app.logger.info(f"Auto-assigning to default rule '{default_rule_name}'")
             else:
                 # ONLY return if auto-assign is OFF
                 current_app.logger.info("No episeerr tags + auto-assign off → no action")
@@ -218,7 +208,15 @@ def process_sonarr_webhook():
         # We have action → unmonitor + cleanup tags + cancel downloads
         # ────────────────────────────────────────────────────────────────
         current_app.logger.info(f"Unmonitoring episodes for {series_title}")
-        episeerr_utils.unmonitor_series(series_id, headers)
+        if not episeerr_utils.unmonitor_series(series_id, headers):
+            # Do NOT persist a rule assignment for a series that is still fully
+            # monitored: a later search (rule processing or the missing-episode
+            # backfill) would grab the entire aired season/back catalog.
+            current_app.logger.error(
+                f"Failed to unmonitor {series_title} - aborting webhook processing "
+                f"so the rule assignment is not persisted while all episodes are still monitored"
+            )
+            return jsonify({"status": "error", "message": "Failed to unmonitor series; not persisting rule assignment"}), 502
 
         # Remove ONLY episeerr_select/episeerr_default/episeerr_delay (keep rule tags)
         updated_tags = []
