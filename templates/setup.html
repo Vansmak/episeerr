@@ -90,6 +90,19 @@
                                 <small class="form-text text-muted">Optional HTTPS URL for remote access (Cloudflare tunnel, etc.)</small>
                             </div>
 
+                            <!-- Quality Profile -->
+                            <div class="mb-3">
+                                <label for="sonarr-default_quality_profile_id" class="form-label">Preferred Quality Profile</label>
+                                <select class="form-select quality-profiles-select"
+                                        id="sonarr-default_quality_profile_id"
+                                        name="sonarr-default_quality_profile_id"
+                                        data-service="sonarr"
+                                        data-saved="{{ sonarr_quality_profile_id or '' }}">
+                                    <option value="">— Loading profiles… —</option>
+                                </select>
+                                <small class="form-text text-muted">Used for all automatic adds (Trakt sync, Plex watchlist, etc.)</small>
+                            </div>
+
                             <!-- Iframe Option -->
                             <div class="mb-3">
                                 <div class="form-check">
@@ -102,7 +115,7 @@
                                     </small>
                                 </div>
                             </div>
-                            
+
                             <div class="d-flex justify-content-between">
                                 <button type="button" class="btn btn-secondary" onclick="testConnection('sonarr')">
                                     <i class="fas fa-plug me-1"></i>Test Connection
@@ -251,6 +264,14 @@
                                         {% for option in field.options %}
                                         <option value="{{ option.value }}" {% if saved_val == option.value %}selected{% endif %}>{{ option.label }}</option>
                                         {% endfor %}
+                                    </select>
+                                    {% elif field.type == 'profiles' %}
+                                    <select class="form-select quality-profiles-select"
+                                        name="{{ integration.service_name }}-{{ field.name }}"
+                                        data-service="{{ integration.service_name }}"
+                                        data-saved="{{ integration_configs[integration.service_name].saved_values.get(field.name, '') | default('') }}"
+                                        {% if field.required %}required{% endif %}>
+                                        <option value="">— Loading profiles… —</option>
                                     </select>
                                     {% else %}
                                     <input type="{{ field.type }}"
@@ -470,12 +491,44 @@ function toggleServiceEnabled(service, enabled) {
     });
 }
 
+async function loadQualityProfiles(serviceName, selectEl) {
+    try {
+        const resp = await fetch(`/api/${serviceName}/quality-profiles`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const profiles = data.profiles || data;
+        const savedId = String(selectEl.dataset.saved || '');
+        selectEl.innerHTML = '<option value="">— No preference (use first) —</option>';
+        profiles.forEach(function(p) {
+            const opt = document.createElement('option');
+            opt.value = String(p.id);
+            opt.textContent = p.name;
+            if (savedId && String(p.id) === savedId) opt.selected = true;
+            selectEl.appendChild(opt);
+        });
+    } catch(e) {
+        selectEl.innerHTML = '<option value="">— Could not load profiles —</option>';
+    }
+}
+
 // Load media server and optional integrations on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadCustomLinks();
     loadMediaServer();
     loadOptionalIntegrations();
-    
+
+    // Pre-populate quality profile dropdowns for already-visible collapses
+    document.querySelectorAll('.quality-profiles-select').forEach(function(sel) {
+        loadQualityProfiles(sel.dataset.service, sel);
+    });
+
+    // Re-populate when a setup card is expanded (service may not have been connected yet)
+    document.addEventListener('show.bs.collapse', function(e) {
+        e.target.querySelectorAll('.quality-profiles-select').forEach(function(sel) {
+            loadQualityProfiles(sel.dataset.service, sel);
+        });
+    });
+
     // Jellyfin method toggle
     const pollingRadio = document.getElementById('jellyfin-polling');
     const progressRadio = document.getElementById('jellyfin-progress');

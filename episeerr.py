@@ -1,4 +1,4 @@
-__version__ = "3.7.9"
+__version__ = "3.7.10"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -411,6 +411,7 @@ def setup():
         sonarr_apikey=sonarr['api_key'] if sonarr else None,
         sonarr_alternate_url=sonarr_config.get('alternate_url', ''),
         sonarr_open_in_iframe=sonarr_config.get('open_in_iframe', False),
+        sonarr_quality_profile_id=sonarr_config.get('default_quality_profile_id') or '',
         tmdb_enabled=tmdb_enabled,
         tmdb_connected=tmdb is not None,
         tmdb_apikey=tmdb['api_key'] if tmdb else None,
@@ -651,12 +652,17 @@ def save_service_config(service):
             apikey = data.get('sonarr-apikey')
             open_in_iframe = data.get('sonarr-open_in_iframe', False)
             alternate_url = data.get('sonarr-alternate_url') or None
+            quality_profile_id = data.get('sonarr-default_quality_profile_id') or None
 
             if not url or not apikey:
                 return jsonify({'status': 'error', 'message': 'URL and API key required'}), 400
 
             save_service('sonarr', 'default', url, apikey,
-                         config={'alternate_url': alternate_url, 'open_in_iframe': open_in_iframe})
+                         config={
+                             'alternate_url': alternate_url,
+                             'open_in_iframe': open_in_iframe,
+                             'default_quality_profile_id': quality_profile_id,
+                         })
             auto_add_quick_link('Sonarr', url,
                                 'https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png',
                                 open_in_iframe, alternate_url)
@@ -2577,7 +2583,8 @@ def sonarr_add_series():
         if not quality_profiles or not root_folders:
             return jsonify({'success': False,
                             'error': 'Sonarr has no quality profiles or root folders configured'}), 503
-        quality_profile_id = quality_profiles[0]['id']
+        from settings_db import get_preferred_quality_profile
+        quality_profile_id = get_preferred_quality_profile('sonarr', quality_profiles)
         root_folder_path   = root_folders[0]['path']
 
         # Add to Sonarr (unmonitored — selection page controls what actually downloads)
@@ -2662,7 +2669,8 @@ def sonarr_prepare_series():
             return jsonify({'success': False,
                             'error': 'Sonarr has no quality profiles or root folders configured'}), 503
 
-        quality_profile_id = quality_profiles[0]['id']
+        from settings_db import get_preferred_quality_profile
+        quality_profile_id = get_preferred_quality_profile('sonarr', quality_profiles)
         root_folder_path = root_folders[0]['path']
 
         # Store pending request — series_id left None, Sonarr add deferred to confirmation

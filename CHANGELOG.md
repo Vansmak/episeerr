@@ -1,5 +1,27 @@
 # Changelog
 
+## v3.7.10
+
+### ✨ Configurable Quality Profiles
+
+Sonarr and Radarr now have a **Preferred Quality Profile** dropdown in setup, replacing the old "enter the numeric ID" text field for Radarr and adding the option for Sonarr entirely.
+
+- Setup page auto-populates the dropdown from the live Sonarr/Radarr API; no need to look up profile IDs
+- Selected profile is used by all automatic adds: Trakt sync, Plex watchlist sync, Discover adds, and manual series prep
+- Falls back to the first available profile if none is saved, with a log warning
+
+### 🎨 Black & Gold Theme
+
+New `data-theme="black-gold"` — pure black background with rich gold accents. Available in the sidebar theme switcher. Gold frame touches on cards, nav bar, modals, and sidebar border.
+
+### 🐛 Bug Fixes
+
+- **Trakt watchlist "Added" badge never progressed to "Available"** — items added to Sonarr/Radarr by Trakt sync were permanently stored as `added_to_sonarr`/`added_to_radarr` in the sync file, and `get_watchlist_with_status` used that stored status without ever rechecking. Fixed: when the stored status is `added_to_radarr`, a live Radarr check verifies `hasFile`; for `added_to_sonarr`, checks `episodeFileCount > 0`. Badge automatically promotes to "Available" on the next dashboard load after the file lands. (`integrations/trakt.py`)
+- **Keep Rule real-time deletions ignored both global and rule-level dry-run** — `delete_episodes_immediately()`, used by the webhook-triggered "episodes leaving keep block" and season-finale cleanup paths, deleted episode files straight from Sonarr with no dry-run check at all (unlike the scheduled Grace/Dormant cleanup path, which already checked both flags). Enabling dry run no longer stopped these deletions when triggered by a watch webhook. Fixed: it now checks global `dry_run_mode` and the rule's `dry_run` flag and queues the deletion for approval instead of deleting live, matching the scheduled cleanup path. (`media_processor.py`)
+- **Caught-up airing shows never received newly aired episodes** — `episeerr_default` was bound as one of the three "control tags" on the Sonarr delay profile alongside the genuinely transient `episeerr_select`/`episeerr_delay`, but it's actually the shipped `default` rule's own permanent tag, same as `episeerr_one_at_a_time` or any custom rule tag. Any series left on the `default` rule therefore had its automatic/RSS grabs held forever instead of just during initial processing: once a user caught up on an airing show, no watch event ever fired again to trigger Episeerr's own search, so newly aired episodes silently never downloaded. A coupled bug in `validate_series_tag()`/`reconcile_series_drift()` also misread a correctly-tagged `episeerr_default` series as having no tag at all, causing a redundant tag-restore loop on every reconciliation pass. Fixed: `default` is no longer special-cased and now behaves like every other rule (temporary hold only during initial select/processing, normal RSS afterward). Self-heals existing installs on next restart. (`episeerr_utils.py`)
+
+---
+
 ## v3.7.7
 
 ### ✨ Trakt Integration

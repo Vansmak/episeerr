@@ -7,6 +7,7 @@
 .text-theme-solar       { color: #fbbf24; }     /* Solar yellow */
 .text-theme-cyber       { color: #ff00ff; }     /* Neon magenta */
 .text-theme-arctic      { color: #3b82f6; }     /* Arctic blue */
+.text-theme-gold        { color: #d4af37; }     /* Black & Gold */
 
 /* === Base / Default Theme === */
 :root {
@@ -197,6 +198,70 @@
     --shadow-light: rgba(224, 64, 224, 0.15);
     --shadow-dark: rgba(0, 0, 0, 0.6);
     --brand-color: #e040e0;
+}
+
+/* Black & Gold */
+:root[data-theme="black-gold"] {
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-card: #111111;
+    --header-bg: #0a0a0a;
+    --sidebar-bg: #050505;
+    --sidebar-header-bg: #000000;
+    --nav-text: #8a7a5a;
+    --nav-hover-bg: #1a1500;
+    --nav-hover-text: #f5e6a3;
+    --nav-active-bg: #1f1800;
+    --nav-active-text: #d4af37;
+    --text-primary: #f5f5f0;
+    --text-secondary: #9a9080;
+    --accent-primary: #d4af37;
+    --accent-secondary: #b8962e;
+    --accent-success: #4caf50;
+    --accent-error: #f44336;
+    --accent-warning: #ff9800;
+    --border-color: rgba(212, 175, 55, 0.28);
+    --glass-bg: rgba(17, 17, 17, 0.9);
+    --shadow-light: rgba(212, 175, 55, 0.12);
+    --shadow-dark: rgba(0, 0, 0, 0.7);
+    --brand-color: #d4af37;
+}
+
+/* Black & Gold — thin gold frame touches */
+[data-theme="black-gold"] .stat-pill {
+    border: 1px solid rgba(212, 175, 55, 0.28) !important;
+}
+[data-theme="black-gold"] .stat-pill:hover {
+    border-color: rgba(212, 175, 55, 0.5) !important;
+}
+[data-theme="black-gold"] .ocdarr-banner {
+    border-bottom: 1px solid rgba(212, 175, 55, 0.35);
+}
+[data-theme="black-gold"] .navbar {
+    border-bottom: 1px solid rgba(212, 175, 55, 0.35) !important;
+}
+[data-theme="black-gold"] .card {
+    border: 1px solid rgba(212, 175, 55, 0.22);
+}
+[data-theme="black-gold"] .card:hover {
+    border-color: rgba(212, 175, 55, 0.45);
+    box-shadow: 0 8px 32px rgba(212, 175, 55, 0.08);
+}
+[data-theme="black-gold"] .card-header {
+    border-bottom: 1px solid rgba(212, 175, 55, 0.3);
+}
+[data-theme="black-gold"] .modal-content {
+    border: 1px solid rgba(212, 175, 55, 0.3);
+}
+[data-theme="black-gold"] .modal-header {
+    border-bottom: 1px solid rgba(212, 175, 55, 0.25);
+}
+[data-theme="black-gold"] .clickable-card:hover {
+    border: 1px solid rgba(212, 175, 55, 0.4);
+}
+[data-theme="black-gold"] aside.episeerr-sidebar,
+[data-theme="black-gold"] #episeerrSidebar {
+    border-right: 1px solid rgba(212, 175, 55, 0.2);
 }
 
 /* Arctic Chill */

@@ -795,12 +795,13 @@ class PlexIntegration(ServiceIntegration):
             
             quality_profile = sync_config.get('tv_quality_profile')
             root_folder = sync_config.get('tv_root_folder')
-            
+
             # Get defaults if not specified
             if not quality_profile:
                 profiles_resp = http.get(f"{sonarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
                 if profiles_resp.ok and profiles_resp.json():
-                    quality_profile = profiles_resp.json()[0]['id']
+                    from settings_db import get_preferred_quality_profile
+                    quality_profile = get_preferred_quality_profile('sonarr', profiles_resp.json())
             
             if not root_folder:
                 folders_resp = http.get(f"{sonarr_url}/api/v3/rootfolder", headers=headers, timeout=10)
@@ -894,12 +895,13 @@ class PlexIntegration(ServiceIntegration):
             
             quality_profile = sync_config.get('movie_quality_profile')
             root_folder = sync_config.get('movie_root_folder')
-            
+
             # Get defaults if not specified
             if not quality_profile:
                 profiles_resp = http.get(f"{radarr_url}/api/v3/qualityprofile", headers=headers, timeout=10)
                 if profiles_resp.ok and profiles_resp.json():
-                    quality_profile = profiles_resp.json()[0]['id']
+                    from settings_db import get_preferred_quality_profile
+                    quality_profile = get_preferred_quality_profile('radarr', profiles_resp.json())
             
             if not root_folder:
                 folders_resp = http.get(f"{radarr_url}/api/v3/rootfolder", headers=headers, timeout=10)

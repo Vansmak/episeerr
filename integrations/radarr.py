@@ -139,11 +139,10 @@ class RadarrIntegration(ServiceIntegration):
             },
             {
                 'name': 'default_quality_profile_id',
-                'label': 'Default Quality Profile ID',
-                'type': 'text',
-                'placeholder': '1',
+                'label': 'Preferred Quality Profile',
+                'type': 'profiles',
                 'required': False,
-                'help_text': 'Numeric ID from Radarr Settings → Profiles'
+                'help_text': 'Used for all automatic adds (Trakt sync, Plex watchlist, etc.)'
             }
         ]
 
