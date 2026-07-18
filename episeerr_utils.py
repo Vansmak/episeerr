@@ -26,9 +26,26 @@ _retry = Retry(
     allowed_methods=["GET", "PUT"],   # status-code retries only for idempotent methods
     raise_on_status=False,
 )
+
+# Many call sites across the codebase (get_sonarr_series, etc.) don't pass an
+# explicit timeout=. Without one, a *arr host that's unreachable at the network
+# level (not just refusing connections) hangs on the OS TCP connect timeout
+# (100s+) instead of failing fast - long enough for gunicorn's 30s worker
+# timeout to SIGKILL the worker mid-request rather than the call ever raising
+# a catchable exception. Default every request through this session to 10s
+# (matching the timeout the explicit call sites already use) unless the caller
+# overrides it.
+class TimeoutHTTPAdapter(HTTPAdapter):
+    DEFAULT_TIMEOUT = 10
+
+    def send(self, request, **kwargs):
+        if kwargs.get('timeout') is None:
+            kwargs['timeout'] = self.DEFAULT_TIMEOUT
+        return super().send(request, **kwargs)
+
 http = requests.Session()
-http.mount("http://",  HTTPAdapter(max_retries=_retry))
-http.mount("https://", HTTPAdapter(max_retries=_retry))
+http.mount("http://",  TimeoutHTTPAdapter(max_retries=_retry))
+http.mount("https://", TimeoutHTTPAdapter(max_retries=_retry))
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ============================================================
