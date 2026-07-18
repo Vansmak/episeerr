@@ -19,16 +19,42 @@ load_dotenv()
 # Retries on connection errors and 5xx responses (backoff: 1s, 2s, 4s).
 # POST/DELETE are only retried on connection-level failures (not on bad status
 # codes) to avoid double-writes; GET/PUT retry on status codes too.
+#
+# connect=1 caps connection-level retries (unreachable host, refused, DNS
+# failure) independently of total: a host that's actually unreachable won't
+# start responding on attempt 3 just because it didn't on attempt 1, so
+# retrying it 3x like a transient 5xx just stacks timeouts - measured 46s
+# worst case (4 attempts x 10s + backoff) with connect uncapped, which blows
+# past gunicorn's 30s worker timeout and gets the worker SIGKILLed instead of
+# ever raising a catchable exception. connect=1 bounds that to ~21s.
 _retry = Retry(
     total=3,
+    connect=1,
     backoff_factor=1,          # sleeps: 1s, 2s, 4s
     status_forcelist=[429, 500, 502, 503, 504],
     allowed_methods=["GET", "PUT"],   # status-code retries only for idempotent methods
     raise_on_status=False,
 )
+
+# Many call sites across the codebase (get_sonarr_series, etc.) don't pass an
+# explicit timeout=. Without one, a *arr host that's unreachable at the network
+# level (not just refusing connections) hangs on the OS TCP connect timeout
+# (100s+) instead of failing fast - long enough for gunicorn's 30s worker
+# timeout to SIGKILL the worker mid-request rather than the call ever raising
+# a catchable exception. Default every request through this session to 10s
+# (matching the timeout the explicit call sites already use) unless the caller
+# overrides it.
+class TimeoutHTTPAdapter(HTTPAdapter):
+    DEFAULT_TIMEOUT = 10
+
+    def send(self, request, **kwargs):
+        if kwargs.get('timeout') is None:
+            kwargs['timeout'] = self.DEFAULT_TIMEOUT
+        return super().send(request, **kwargs)
+
 http = requests.Session()
-http.mount("http://",  HTTPAdapter(max_retries=_retry))
-http.mount("https://", HTTPAdapter(max_retries=_retry))
+http.mount("http://",  TimeoutHTTPAdapter(max_retries=_retry))
+http.mount("https://", TimeoutHTTPAdapter(max_retries=_retry))
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ============================================================
