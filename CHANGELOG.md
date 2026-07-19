@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- **Dry-run queueing for Keep Rule and Grace/Dormant cleanup silently dropped every episode** — `delete_episodes_immediately()` and `delete_episodes_in_sonarr_with_logging()` tried to resolve the episode info needed to queue an approval via Sonarr's `episodefile.episodeIds` field, which isn't reliably populated. Every episode was logged as skipped and never reached the pending-approval queue, so dry run stopped deletions but left nothing to review. Fixed: both now use the episode data their callers already have instead of re-deriving it from Sonarr. Same fix as episeerr_dev v3.7.12. (`media_processor.py`, upstream #35)
+
+---
+
 ## Unreleased — Custom Branch Created (2026-05-22)
 
 ### 🔧 Personal Custom Build
