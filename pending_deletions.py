@@ -267,27 +267,44 @@ def approve_deletions(episode_ids, sonarr_delete_func):
         # Delete episodes in batches per series (MORE EFFICIENT!)
         for series_title, episodes in episodes_by_series.items():
             try:
-                # Collect all episode file IDs for this series
-                episode_file_ids = []
+                # Build the episode dicts delete_episodes_immediately() expects
+                # (id, episodeFileId, seasonNumber, episodeNumber, title), and
+                # grab the series_id off any one of them — they're all the same
+                # series since we grouped by series_title above.
+                series_id = None
+                episode_list = []
                 for episode in episodes:
                     episode_data = episode['episode_data']
                     episode_file_id = episode_data.get('episodeFile', {}).get('id')
-                    if episode_file_id:
-                        episode_file_ids.append(episode_file_id)
-                    else:
+                    if not episode_file_id:
                         errors.append(f"No file ID for episode {episode['episode_id']}")
-                
-                if episode_file_ids:
-                    # ONE DELETE CALL FOR ALL EPISODES IN THIS SERIES
-                    logger.info(f"Deleting {len(episode_file_ids)} episodes from {series_title} in batch")
-                    sonarr_delete_func(episode_file_ids, False, series_title)
-                    deleted_count += len(episode_file_ids)
-                    
+                        continue
+                    if series_id is None:
+                        series_id = episode_data.get('seriesId')
+                    episode_list.append({
+                        'id': episode_data.get('id'),
+                        'episodeFileId': episode_file_id,
+                        'seasonNumber': episode_data.get('seasonNumber'),
+                        'episodeNumber': episode_data.get('episodeNumber'),
+                        'title': episode_data.get('title'),
+                    })
+
+                if episode_list:
+                    # ONE DELETE CALL FOR ALL EPISODES IN THIS SERIES.
+                    # rule_dry_run is forced False: approving from the pending
+                    # queue is the explicit human confirmation to delete now,
+                    # regardless of the dry-run setting that queued it.
+                    logger.info(f"Deleting {len(episode_list)} episodes from {series_title} in batch")
+                    sonarr_delete_func(episode_list, series_id, series_title,
+                                        reason="Approved from pending deletions",
+                                        rule_dry_run=False)
+                    deleted_count += len(episode_list)
+
                     # Log individual episodes
                     for episode in episodes:
                         episode_data = episode['episode_data']
                         logger.info(f"✓ Deleted: {series_title} S{episode_data['seasonNumber']:02d}E{episode_data['episodeNumber']:02d}")
-                    
+
             except Exception as e:
                 error_msg = f"Failed to delete episodes from {series_title}: {str(e)}"
                 errors.append(error_msg)
