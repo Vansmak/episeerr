@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.15
+
+### 🐛 Bug Fixes
+
+- **Approving a queued deletion did nothing — "Successfully deleted 0 episode(s)", episode reappears in the queue next cleanup run** — regression from v3.7.12's dry-run fix. `pending_deletions.approve_deletions()` still called `delete_episodes_immediately()` with its old positional shape (`episode_file_ids, False, series_title`), which doesn't match the new signature (`episodes, series_id, series_title, ...`). Since `episodes` was expected to be a list of dicts but got bare file-ID ints, the first `.get()` call raised immediately — silently swallowed by the batch's exception handler, so nothing was deleted and no real error surfaced. Fixed: `approve_deletions()` now builds proper episode dicts and calls the current signature, explicitly forcing `rule_dry_run=False` since approving from the queue is the explicit confirmation to delete regardless of the dry-run setting that queued it. (`pending_deletions.py`, #35)
+
+---
+
 ## v3.7.14
 
 ### 🐛 Bug Fixes
