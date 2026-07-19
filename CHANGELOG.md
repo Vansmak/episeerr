@@ -1,5 +1,16 @@
 # Changelog
 
+## v3.7.13
+
+### 🐛 Bug Fixes
+
+- **Service enable/disable toggles on the Setup page silently did nothing for most services** — `POST /api/toggle-service/<service>` ran a bare `UPDATE` that assumed a `services` row already existed. Anyone who configured a service (Sonarr, Radarr, Jellyfin, Plex, Tautulli, Emby) via env vars instead of saving it through the Setup UI had no row for the toggle to update, so it 404'd and the checkbox silently snapped back — looking exactly like the toggle didn't work. Fixed: the toggle now seeds a row from that service's existing env-var config when none exists yet. (`episeerr.py`, #82)
+- **Disabling a service didn't actually stop it from running if env vars were also set** — `get_service()` returns `None` both when a row doesn't exist *and* when a row exists but is disabled, and every `get_<service>_config()` helper treated `None` as "fall back to env vars" either way. So toggling a service off only changed the Setup page's badge; anything reading its config directly (webhooks, dashboard, movie/media processors) kept using the env-var config regardless. Fixed: added `is_service_disabled()` and each getter now checks it before falling back to env vars, so an explicit disable is actually honored. (`settings_db.py`)
+- **Sonarr toggle didn't take effect until clicking Save** — `SONARR_URL`/`SONARR_API_KEY` are loaded once into module-level globals at startup and were only refreshed by the existing Save flow's `reload_module_configs()` call. Toggling updated the DB but not the live in-memory connection. Fixed: the toggle route now calls `reload_module_configs()` too. (`episeerr.py`, #82)
+- **Re-enabling a service left its badge stuck on "Disabled"** — `toggleServiceEnabled()` only had a code path to set the "Disabled" badge, none to restore it on re-enable. Fixed: a successful enable now reloads the page, which recomputes the real Connected/Not Connected/Disabled state server-side. (`templates/setup.html`)
+
+---
+
 ## v3.7.12
 
 ### 🐛 Bug Fixes
