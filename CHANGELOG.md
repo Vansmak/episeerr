@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.14
+
+### 🐛 Bug Fixes
+
+- **Config changes (Sonarr URL/key, service toggles) only ever took effect for about half of requests, randomly, until a full restart** — the container ran 2 gunicorn worker processes, each with its own Python memory. `reload_module_configs()` (used by Save and by the service toggle) only reloads modules in whichever single worker handled that request; the other worker kept serving stale `SONARR_URL`/`SONARR_API_KEY` until it happened to reload independently, which without a second config change never happens. Since gunicorn round-robins requests across workers, this looked like intermittent failures (e.g. the Xadarr library browser's Sonarr-backed Shows tab going empty while Movies kept working) that a full restart always "fixed" by resetting both workers to the same state. Fixed: switched from 2 sync workers to 1 worker with 8 threads (`gthread`), so there's only one process/memory space — no more divergence — while still handling concurrent requests (including long-lived SSE streams) without blocking. (`Dockerfile`)
+
+---
+
 ## v3.7.13
 
 ### 🐛 Bug Fixes
