@@ -1301,22 +1301,23 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                 ]
 
                 if episodes_to_delete:
-                    episode_file_ids = [
-                        ep['episodeFileId'] for ep in episodes_to_delete
-                        if 'episodeFileId' in ep
+                    episodes_with_files = [
+                        ep for ep in episodes_to_delete
+                        if ep.get('episodeFileId')
                     ]
-                    if episode_file_ids:
+                    if episodes_with_files:
                         keep_rule_config = load_config()
                         keep_rule_name = _find_rule_name_for_series(series_id, keep_rule_config)
                         delete_episodes_immediately(
-                            episode_file_ids,
+                            episodes_with_files,
+                            series_id,
                             series_title or f"Series {series_id}",
                             reason=f"Keep Rule (keeping {keep_count} {keep_type})",
                             rule_dry_run=rule.get('dry_run', False),
                             rule_name=keep_rule_name
                         )
                         logger.info(
-                            f"Immediately deleted {len(episode_file_ids)} episodes leaving keep block"
+                            f"Immediately deleted {len(episodes_with_files)} episodes leaving keep block"
                         )
 
                 protected_anchors = [
@@ -1364,22 +1365,22 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                                 f"entering grace period ({grace_watched}d): {ep_list}"
                             )
                         else:
-                            file_ids = [
-                                ep['episodeFileId'] for ep in releasable
+                            releasable_with_files = [
+                                ep for ep in releasable
                                 if ep.get('episodeFileId')
                             ]
-                            if file_ids:
+                            if releasable_with_files:
                                 finale_config = load_config()
                                 finale_rule_name = _find_rule_name_for_series(series_id, finale_config)
                                 delete_episodes_immediately(
-                                    file_ids, title,
+                                    releasable_with_files, series_id, title,
                                     reason=f"Season finale, no next season (released from keep)",
                                     rule_dry_run=rule.get('dry_run', False),
                                     rule_name=finale_rule_name
                                 )
                                 logger.info(
                                     f"🏁 {title} S{season_number} finale — no next season: "
-                                    f"deleted {len(file_ids)} episode(s) released from keep. "
+                                    f"deleted {len(releasable_with_files)} episode(s) released from keep. "
                                     f"Episodes: {ep_list}"
                                 )
                     else:
@@ -2083,13 +2084,35 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
     return False
 
 
-def delete_episodes_immediately(episode_file_ids, series_title, reason="Keep Rule", rule_dry_run=False, rule_name=None):
+def _get_episode_file_sizes(series_id):
+    """Bulk-fetch episode file sizes for a series, keyed by episodeFileId.
+
+    Used only for display in the pending-deletions queue — best-effort,
+    returns {} on any failure rather than blocking deletion/queueing.
+    """
+    try:
+        headers = {'X-Api-Key': SONARR_API_KEY}
+        response = http.get(f"{SONARR_URL}/api/v3/episodefile?seriesId={series_id}", headers=headers, timeout=10)
+        if not response.ok:
+            return {}
+        return {f['id']: f.get('size', 0) for f in response.json()}
+    except Exception:
+        return {}
+
+
+def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep Rule", rule_dry_run=False, rule_name=None):
     """
     Direct deletion for Keep rule - real-time webhook cleanup.
     Respects BOTH global dry_run_mode AND rule-level dry_run (either triggers queue).
     Used by: process_episodes_for_webhook() for real-time Keep rule deletions.
+
+    `episodes` is a list of Sonarr episode dicts (as returned by fetch_all_episodes),
+    each needing at least: id, episodeFileId, seasonNumber, episodeNumber, title.
+    Passing these through directly (instead of re-deriving them from Sonarr's
+    episodefile.episodeIds, which isn't reliably populated) is what makes dry-run
+    queueing actually work.
     """
-    if not episode_file_ids:
+    if not episodes:
         return
 
     global_settings = load_global_settings()
@@ -2098,82 +2121,43 @@ def delete_episodes_immediately(episode_file_ids, series_title, reason="Keep Rul
 
     if is_dry_run:
         if global_dry_run and rule_dry_run:
-            logger.info(f"🔍 DRY RUN (global + rule): Queueing {len(episode_file_ids)} episodes from {series_title}")
+            logger.info(f"🔍 DRY RUN (global + rule): Queueing {len(episodes)} episodes from {series_title}")
         elif global_dry_run:
-            logger.info(f"🔍 DRY RUN (global): Queueing {len(episode_file_ids)} episodes from {series_title}")
+            logger.info(f"🔍 DRY RUN (global): Queueing {len(episodes)} episodes from {series_title}")
         else:
-            logger.info(f"🔍 DRY RUN (rule '{rule_name}'): Queueing {len(episode_file_ids)} episodes from {series_title}")
+            logger.info(f"🔍 DRY RUN (rule '{rule_name}'): Queueing {len(episodes)} episodes from {series_title}")
 
         from pending_deletions import queue_deletion
 
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        series_title_cache = {}
+        file_sizes = _get_episode_file_sizes(series_id)
 
-        for episode_file_id in episode_file_ids:
+        for ep in episodes:
+            episode_file_id = ep.get('episodeFileId')
             try:
-                ep_url = f"{SONARR_URL}/api/v3/episodefile/{episode_file_id}"
-                ep_response = http.get(ep_url, headers=headers, timeout=10)
-
-                if not ep_response.ok:
-                    logger.warning(f"Could not fetch details for episode file {episode_file_id}")
-                    continue
-
-                ep_data = ep_response.json()
-                series_id = ep_data.get('seriesId')
-                season_num = ep_data.get('seasonNumber')
-
-                if series_id not in series_title_cache:
-                    series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
-                    series_title_cache[series_id] = series_response.json().get('title', series_title) if series_response.ok else series_title
-                series_title_full = series_title_cache[series_id]
-
-                episode_ids_list = ep_data.get('episodeIds', [])
-                if episode_ids_list:
-                    try:
-                        ep_detail_response = http.get(
-                            f"{SONARR_URL}/api/v3/episode/{episode_ids_list[0]}",
-                            headers=headers, timeout=10
-                        )
-                        if ep_detail_response.ok:
-                            ep_detail = ep_detail_response.json()
-                            episode_id = ep_detail.get('id')
-                            episode_num = ep_detail.get('episodeNumber', 0)
-                            episode_title = ep_detail.get('title', f"S{season_num}E{episode_num}")
-                        else:
-                            logger.warning(
-                                f"Failed to look up episode {episode_ids_list[0]} for file {episode_file_id}: "
-                                f"{ep_detail_response.status_code} — skipping"
-                            )
-                            continue
-                    except Exception as lookup_e:
-                        logger.warning(f"Failed to resolve episode info for file {episode_file_id}: {lookup_e} — skipping")
-                        continue
-                else:
-                    logger.warning(f"Episode file {episode_file_id} has no episodeIds, cannot resolve episode info — skipping")
-                    continue
-
+                season_num = ep.get('seasonNumber')
+                episode_num = ep.get('episodeNumber')
                 queue_deletion(
                     series_id=series_id,
-                    series_title=series_title_full,
+                    series_title=series_title,
                     season_number=season_num,
                     episode_number=episode_num,
-                    episode_id=episode_id,
-                    episode_title=episode_title,
+                    episode_id=ep.get('id'),
+                    episode_title=ep.get('title') or f"S{season_num}E{episode_num}",
                     episode_file_id=episode_file_id,
                     reason=reason,
                     date_source="Webhook",
                     date_value=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
                     rule_name=rule_name or "Unknown",
-                    file_size=ep_data.get('size', 0)
+                    file_size=file_sizes.get(episode_file_id, 0)
                 )
-
             except Exception as e:
-                logger.error(f"Error queueing episode {episode_file_id}: {str(e)}")
+                logger.error(f"Error queueing episode file {episode_file_id}: {str(e)}")
 
-        logger.info(f"✅ Queued {len(episode_file_ids)} episodes for approval (Keep Rule dry run)")
+        logger.info(f"✅ Queued {len(episodes)} episodes for approval (Keep Rule dry run)")
         return
 
     # LIVE DELETION (both global and rule dry_run are False)
+    episode_file_ids = [ep['episodeFileId'] for ep in episodes if ep.get('episodeFileId')]
     logger.info(f"🗑️ KEEP RULE: Deleting {len(episode_file_ids)} episodes from {series_title} - {reason}")
 
     headers = {'X-Api-Key': SONARR_API_KEY}
@@ -2195,7 +2179,8 @@ def delete_episodes_immediately(episode_file_ids, series_title, reason="Keep Rul
     if failed_deletes:
         logger.error(f"❌ Failed deletes: {failed_deletes}")
 def delete_episodes_in_sonarr_with_logging(
-    episode_file_ids, 
+    episodes,
+    series_id,
     rule_dry_run,  # Renamed from is_dry_run for clarity
     series_title,
     reason=None,
@@ -2205,9 +2190,13 @@ def delete_episodes_in_sonarr_with_logging(
     """
     Delete episodes with approval queue for Grace/Dormant cleanup.
     Respects BOTH global dry_run_mode AND rule-level dry_run (either triggers queue).
-    
+
     Args:
-        episode_file_ids: List of Sonarr episode file IDs to delete
+        episodes: List of Sonarr episode dicts (id, episodeFileId, seasonNumber,
+            episodeNumber, title) to delete. Passed through directly instead of
+            re-derived from Sonarr's episodefile.episodeIds, which isn't reliably
+            populated and previously caused every episode to be silently skipped.
+        series_id: Sonarr series ID
         rule_dry_run: Rule-level dry_run setting (from rule config)
         series_title: Name of the series
         reason: Explanation for deletion (e.g., "Grace Period - Watched (10 days)")
@@ -2215,105 +2204,62 @@ def delete_episodes_in_sonarr_with_logging(
         date_value: The date used in decision (e.g., "2025-06-21")
         rule_name: Name of the rule triggering deletion
     """
-    if not episode_file_ids:
+    if not episodes:
         return
-    
+
     # Check BOTH global dry_run_mode AND rule-level dry_run
     global_settings = load_global_settings()
     global_dry_run = global_settings.get('dry_run_mode', False)
-    
+
     # If EITHER is true, use dry run
     is_dry_run = global_dry_run or rule_dry_run
-    
+
     if is_dry_run:  # ✅ KEEP THIS ONE
         if global_dry_run and rule_dry_run:
-            cleanup_logger.info(f"🔍 DRY RUN (global + rule): Queueing {len(episode_file_ids)} episodes")
+            cleanup_logger.info(f"🔍 DRY RUN (global + rule): Queueing {len(episodes)} episodes")
         elif global_dry_run:
-            cleanup_logger.info(f"🔍 DRY RUN (global): Queueing {len(episode_file_ids)} episodes")
+            cleanup_logger.info(f"🔍 DRY RUN (global): Queueing {len(episodes)} episodes")
         else:
-            cleanup_logger.info(f"🔍 DRY RUN (rule '{rule_name}'): Queueing {len(episode_file_ids)} episodes")
-        
+            cleanup_logger.info(f"🔍 DRY RUN (rule '{rule_name}'): Queueing {len(episodes)} episodes")
+
         # Import here to avoid circular imports
         from pending_deletions import queue_deletion
-        
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        series_title_cache = {}
-        
-        for episode_file_id in episode_file_ids:
+
+        file_sizes = _get_episode_file_sizes(series_id)
+
+        for ep in episodes:
+            episode_file_id = ep.get('episodeFileId')
             try:
-                # Get episode file details
-                ep_url = f"{SONARR_URL}/api/v3/episodefile/{episode_file_id}"
-                ep_response = http.get(ep_url, headers=headers, timeout=10)
-                
-                if not ep_response.ok:
-                    cleanup_logger.warning(f"Could not fetch details for episode file {episode_file_id}")
-                    continue
-                
-                ep_data = ep_response.json()
-                series_id = ep_data.get('seriesId')
-                season_num = ep_data.get('seasonNumber')
-                
-                # Get series title (cached to avoid repeated fetches for same series)
-                if series_id not in series_title_cache:
-                    series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
-                    series_title_cache[series_id] = series_response.json().get('title', series_title) if series_response.ok else series_title
-                series_title_full = series_title_cache[series_id]
-                
-                # Resolve episode info via episodeIds (the episodes array is not reliably populated)
-                episode_ids_list = ep_data.get('episodeIds', [])
-                if episode_ids_list:
-                    try:
-                        ep_detail_response = http.get(
-                            f"{SONARR_URL}/api/v3/episode/{episode_ids_list[0]}",
-                            headers=headers, timeout=10
-                        )
-                        if ep_detail_response.ok:
-                            ep_detail = ep_detail_response.json()
-                            episode_id = ep_detail.get('id')
-                            episode_num = ep_detail.get('episodeNumber', 0)
-                            episode_title = ep_detail.get('title', f"S{season_num}E{episode_num}")
-                        else:
-                            cleanup_logger.warning(
-                                f"Failed to look up episode {episode_ids_list[0]} for file {episode_file_id}: "
-                                f"{ep_detail_response.status_code} — skipping"
-                            )
-                            continue
-                    except Exception as lookup_e:
-                        cleanup_logger.warning(f"Failed to resolve episode info for file {episode_file_id}: {lookup_e} — skipping")
-                        continue
-                else:
-                    cleanup_logger.warning(f"Episode file {episode_file_id} has no episodeIds, cannot resolve episode info — skipping")
-                    continue
-                
-                # Queue for deletion approval with CORRECT parameters
+                season_num = ep.get('seasonNumber')
+                episode_num = ep.get('episodeNumber')
                 queue_deletion(
                     series_id=series_id,
-                    series_title=series_title_full,
+                    series_title=series_title,
                     season_number=season_num,
                     episode_number=episode_num,
-                    episode_id=episode_id,
-                    episode_title=episode_title,
+                    episode_id=ep.get('id'),
+                    episode_title=ep.get('title') or f"S{season_num}E{episode_num}",
                     episode_file_id=episode_file_id,
                     reason=reason or "Cleanup",
                     date_source=date_source or "Unknown",
                     date_value=date_value or "N/A",
                     rule_name=rule_name or "Unknown",
-                    file_size=ep_data.get('size', 0)
+                    file_size=file_sizes.get(episode_file_id, 0)
                 )
-                    
             except Exception as e:
-                cleanup_logger.error(f"Error queueing episode {episode_file_id}: {str(e)}")
-        
-        cleanup_logger.info(f"✅ Queued {len(episode_file_ids)} episodes for approval")
+                cleanup_logger.error(f"Error queueing episode file {episode_file_id}: {str(e)}")
+
+        cleanup_logger.info(f"✅ Queued {len(episodes)} episodes for approval")
         return
-    
+
     # LIVE DELETION (both global and rule dry_run are False)
+    episode_file_ids = [ep['episodeFileId'] for ep in episodes if ep.get('episodeFileId')]
     cleanup_logger.info(f"🗑️  DELETING: {len(episode_file_ids)} episode files from {series_title}")
-    
+
     headers = {'X-Api-Key': SONARR_API_KEY}
     successful_deletes = 0
     failed_deletes = []
-    
+
     for episode_file_id in episode_file_ids:
         try:
             url = f"{SONARR_URL}/api/v3/episodeFile/{episode_file_id}"
@@ -2324,7 +2270,7 @@ def delete_episodes_in_sonarr_with_logging(
         except Exception as err:
             failed_deletes.append(episode_file_id)
             cleanup_logger.error(f"❌ Failed to delete episode file {episode_file_id}: {err}")
-    
+
     cleanup_logger.info(f"📊 Deletion summary: {successful_deletes} successful, {len(failed_deletes)} failed")
     if failed_deletes:
         cleanup_logger.error(f"❌ Failed deletes: {failed_deletes}")
@@ -2439,18 +2385,19 @@ def run_grace_watched_cleanup():
                             
                             # Filter out anchor episodes (S01E01)
                             delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
-                            
-                            episode_file_ids = [ep['episodeFileId'] for ep in delete_episodes if 'episodeFileId' in ep]
-                            
-                            if episode_file_ids:
-                                cleanup_logger.info(f"   📊 Deleting {len(episode_file_ids)} old watched episodes")
+
+                            episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+
+                            if episodes_with_files:
+                                cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} old watched episodes")
                                 cleanup_logger.info(f"   🔖 Keeping S{keep_episode['seasonNumber']}E{keep_episode['episodeNumber']} as reference")
-                                
+
                                 from datetime import datetime
                                 activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
-                                
+
                                 delete_episodes_in_sonarr_with_logging(
-                                    episode_file_ids,
+                                    episodes_with_files,
+                                    series_id,
                                     is_dry_run,
                                     series_title,
                                     reason=f"Grace Watched ({grace_watched_days}d) - Keep Last Watched",
@@ -2458,7 +2405,7 @@ def run_grace_watched_cleanup():
                                     date_value=activity_date_str,
                                     rule_name=rule_name
                                 )
-                                total_deleted += len(episode_file_ids)
+                                total_deleted += len(episodes_with_files)
                         elif len(watched_episodes) == 1:
                             cleanup_logger.info(f"   🔖 Only 1 watched episode - keeping as reference")
                         else:
@@ -2590,18 +2537,19 @@ def run_grace_unwatched_cleanup():
                             
                             # Filter out anchor episodes (S01E01)
                             delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
-                            
-                            episode_file_ids = [ep['episodeFileId'] for ep in delete_episodes if 'episodeFileId' in ep]
-                            
-                            if episode_file_ids:
-                                cleanup_logger.info(f"   📊 Deleting {len(episode_file_ids)} extra unwatched episodes")
+
+                            episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+
+                            if episodes_with_files:
+                                cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} extra unwatched episodes")
                                 cleanup_logger.info(f"   🔖 Keeping S{bookmark_episode['seasonNumber']}E{bookmark_episode['episodeNumber']} as bookmark")
-                                
+
                                 from datetime import datetime
                                 activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
-                                
+
                                 delete_episodes_in_sonarr_with_logging(
-                                    episode_file_ids,
+                                    episodes_with_files,
+                                    series_id,
                                     is_dry_run,
                                     series_title,
                                     reason=f"Grace Unwatched ({grace_unwatched_days}d) - Keep First Unwatched",
@@ -2609,7 +2557,7 @@ def run_grace_unwatched_cleanup():
                                     date_value=activity_date_str,
                                     rule_name=rule_name
                                 )
-                                total_deleted += len(episode_file_ids)
+                                total_deleted += len(episodes_with_files)
                             
                             # Mark as cleaned - has bookmark
                             if isinstance(series_data, dict):
@@ -2736,15 +2684,14 @@ def run_dormant_cleanup():
                     if days_since_activity > dormant_days:
                         all_episodes = fetch_all_episodes(series_id)
                         # Dormant cleanup is nuclear: respect keep_pilot but NOT always_have
-                        deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and 'episodeFileId' in ep and not is_anchor_episode(ep, series_id, check_always_have=False)]
-                        episode_file_ids = [ep['episodeFileId'] for ep in deletable_episodes]
-                        
-                        if episode_file_ids:
+                        deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and ep.get('episodeFileId') and not is_anchor_episode(ep, series_id, check_always_have=False)]
+
+                        if deletable_episodes:
                             candidates.append({
                                 'series_id': series_id,
                                 'title': series_info['title'],
                                 'days_since_activity': days_since_activity,
-                                'episode_file_ids': episode_file_ids,
+                                'episodes': deletable_episodes,
                                 'is_dry_run': is_dry_run,
                                 'last_activity': activity_date,
                                 'rule_name': rule_name
@@ -2777,8 +2724,9 @@ def run_dormant_cleanup():
                 date_source = "No Activity Data"
             
             delete_episodes_in_sonarr_with_logging(
-                candidate['episode_file_ids'], 
-                candidate['is_dry_run'], 
+                candidate['episodes'],
+                candidate['series_id'],
+                candidate['is_dry_run'],
                 candidate['title'],
                 reason=f"Dormant Series ({candidate['days_since_activity']:.1f} days inactive)",
                 date_source=date_source,
