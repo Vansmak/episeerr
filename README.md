@@ -3,6 +3,8 @@
 **Smart episode management for Sonarr** - Get episodes as you watch, clean up automatically when storage gets low.
 This project started as scratching my own itch - I wanted more granular series management and couldn't find exactly what I wanted. I'm not a programmer by trade, but I had a clear vision for the solution I needed. I used AI as a development tool to help implement my ideas faster, just like any other tool. The creativity, problem-solving, architecture decisions, and feature design are all mine - AI helped with code, syntax and implementation details. Although I run everything in my own production environment first, it is catered to my environment and is use at your own risk. All code is open source for anyone to review and audit. The tool has been useful for me, and I shared it in case others can benefit from it too - but I absolutely understand if some prefer to stick with established solutions.
 
+**A note on support:** the fast bug-fix turnaround this project has had depends on a paid AI subscription I use for development, which in turn depends on donations. See [Support](#support) for details — short version: if donations don't cover it, support slows down a lot.
+
 [![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/vansmak)
 
 ---
@@ -1452,6 +1454,8 @@ A: Yes! Create a rule with empty Grace and Dormant settings, assign those shows 
 ---
 
 ## Support
+
+> **Why donations matter:** most of the fast turnaround on bug reports right now — same-day diagnosis, same-day fixes, same-day releases — is only possible because of a paid AI coding subscription I use for development. That subscription is funded by donations. If donations don't cover it and I don't renew it, that pace stops — I'll still be around, but fixes and responses will get a lot slower, and at worst support is basically closed. If Episeerr is useful to you, [buying a coffee](https://buymeacoffee.com/vansmak) is what keeps this pace going.
 
 ### Get Help
 
