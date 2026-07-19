@@ -18,7 +18,6 @@ import requests
 from episeerr_utils import http
 import logging
 import subprocess
-import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import Blueprint, jsonify, request
@@ -33,7 +32,19 @@ logger = logging.getLogger(__name__)
 
 def process_watch_event(data: dict) -> dict:
     """
-    Handle a Tautulli "watched" webhook payload.
+    Handle a Tautulli webhook payload — "watched", or "playback start" for
+    held-activation series (e.g. always_have's e1+ modifier).
+
+    A "playback start" event is only ever treated as a watch: for every other
+    series it's a no-op, since playback starting is not playback finishing —
+    processing it as a full watched event would fire keep-window and
+    finale-release cleanup on an episode someone just started playing, which
+    is exactly the "episode you're mid-watch on gets deleted" bug (#62). The
+    only reason to act on it at all is to release a held e1+-style hold,
+    which is explicitly designed to trigger on playback start rather than
+    completion. This guard lives here (not in a route handler) so it applies
+    to every caller, including the legacy /webhook backward-compatibility
+    route in webhooks.py, which delegates straight to this function.
 
     Extracts series/episode identifiers, performs Sonarr tag-sync and
     drift correction, then spawns media_processor.py to process the
@@ -44,6 +55,35 @@ def process_watch_event(data: dict) -> dict:
     backward-compatibility route in episeerr.py.
     """
     try:
+        notification_type = (data.get('notification_type') or '').strip().lower()
+
+        if notification_type == 'playback start':
+            ps_series_title  = (data.get('plex_title') or data.get('server_title') or '').strip()
+            ps_season_number = data.get('plex_season_num') or data.get('server_season_num')
+            ps_episode_number = data.get('plex_ep_num') or data.get('server_ep_num')
+
+            if not (ps_series_title and ps_season_number and ps_episode_number):
+                logger.info("[Tautulli] Playback start received — missing episode data")
+                return {'status': 'success', 'message': 'Playback start noted'}
+
+            from media_processor import is_held_activation_episode
+            is_activation, _ = is_held_activation_episode(
+                ps_series_title, int(ps_season_number), int(ps_episode_number)
+            )
+            if not is_activation:
+                logger.info(
+                    f"[Tautulli] Playback start for non-held series "
+                    f"({ps_series_title} S{ps_season_number}E{ps_episode_number}) — ignored"
+                )
+                return {'status': 'success', 'message': 'Playback start noted'}
+
+            logger.info(
+                f"[Tautulli] Held activation: {ps_series_title} "
+                f"S{ps_season_number}E{ps_episode_number} — releasing hold on play start"
+            )
+            # Fall through to normal processing below — activation is
+            # designed to release on playback start, same as a watched event.
+
         # {show_name} is TV-only in Tautulli; movies send it empty — fall back to {title}
         series_title   = (data.get('plex_title') or data.get('plex_movie_title') or
                           data.get('server_title') or 'Unknown')
@@ -330,41 +370,8 @@ class TautulliIntegration(ServiceIntegration):
             if not data:
                 return jsonify({'status': 'error', 'message': 'No data received'}), 400
 
-            notification_type = data.get('notification_type', '').strip().lower()
-
-            # Playback start — only check held activation, never treat as watched
-            if notification_type == 'playback start':
-                series_title   = (data.get('plex_title') or data.get('server_title') or '').strip()
-                season_number  = data.get('plex_season_num') or data.get('server_season_num')
-                episode_number = data.get('plex_ep_num')    or data.get('server_ep_num')
-
-                if series_title and season_number and episode_number:
-                    from media_processor import is_held_activation_episode
-                    is_activation, _ = is_held_activation_episode(
-                        series_title, int(season_number), int(episode_number)
-                    )
-                    if is_activation:
-                        logger.info(
-                            f"[Tautulli] Held activation: {series_title} "
-                            f"S{season_number}E{episode_number} — releasing hold on play start"
-                        )
-                        threading.Thread(
-                            target=process_watch_event,
-                            args=(data,),
-                            daemon=True,
-                            name="TautulliHeldActivation"
-                        ).start()
-                        return jsonify({'status': 'success', 'message': 'Held activation triggered'}), 200
-                    else:
-                        logger.info(
-                            f"[Tautulli] Playback start for non-held series "
-                            f"({series_title} S{season_number}E{episode_number}) — ignored"
-                        )
-                else:
-                    logger.info("[Tautulli] Playback start received — missing episode data")
-                return jsonify({'status': 'success', 'message': 'Playback start noted'}), 200
-
-            # Watched (or no notification_type) — existing behavior unchanged
+            # process_watch_event() applies the playback-start / held-activation
+            # guard itself, so every notification_type is safe to hand it directly.
             result      = process_watch_event(data)
             status_code = 200 if result['status'] == 'success' else 500
             return jsonify(result), status_code
