@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.16
+
+### 🐛 Bug Fixes
+
+- **A Tautulli "Playback Start" webhook sent to the legacy `/webhook` route was processed as a full watched event, which could delete the episode you just started playing** — the newer `/api/integration/tautulli/webhook` route already guarded playback-start events (only acting on them for a held `e1+`-style activation, ignoring them otherwise), but that guard lived in the route handler, not in the shared `process_watch_event()` it calls. The legacy `/webhook` route (still the one many existing Tautulli setups point at) calls `process_watch_event()` directly and had no such guard, so a playback-start on a non-held series ran the full watched pipeline — updating activity to the just-started episode, unmonitoring it, and running keep-window/finale-release cleanup on it. On a season finale with `release_keep_on_finale` enabled and no `grace_watched` set, this deleted the file mid-playback. Fixed: the guard now lives inside `process_watch_event()` itself, so every caller (including the legacy route) is protected; the integration route's duplicate copy of the same logic was removed. (`integrations/tautulli.py`, #62)
+
+---
+
 ## v3.7.15
 
 ### 🐛 Bug Fixes
