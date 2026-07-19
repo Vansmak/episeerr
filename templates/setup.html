@@ -474,10 +474,16 @@ function toggleServiceEnabled(service, enabled) {
     .then(r => r.json())
     .then(data => {
         if (data.ok) {
+            if (enabled) {
+                // Badge needs the server-computed Connected/Not Connected
+                // state, which this response doesn't carry — reload to get it.
+                window.location.reload();
+                return;
+            }
             const card = document.getElementById(`card-${service}`);
-            if (card) card.style.opacity = enabled ? '' : '0.6';
+            if (card) card.style.opacity = '0.6';
             const badge = card?.querySelector('.badge');
-            if (badge && !enabled) {
+            if (badge) {
                 badge.className = 'badge bg-warning text-dark ms-2';
                 badge.textContent = 'Disabled';
             }
