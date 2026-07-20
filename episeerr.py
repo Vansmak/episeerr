@@ -4522,6 +4522,11 @@ def update_global_settings():
         episeerr_url = data.get('episeerr_url', 'http://localhost:5002')
         notify_aired_not_downloaded = data.get('notify_aired_not_downloaded', False)
 
+        # Multi-source coordination settings
+        multi_source_enabled = data.get('multi_source_enabled', False)
+        multi_source_affinity = data.get('multi_source_affinity', True)
+        multi_source_dedup_minutes = data.get('multi_source_dedup_minutes', 360)
+
         # Validate inputs
         if storage_min_gb is not None:
             storage_min_gb = int(storage_min_gb) if storage_min_gb else None
@@ -4537,6 +4542,10 @@ def update_global_settings():
             'discord_webhook_url': str(discord_webhook_url),
             'episeerr_url': str(episeerr_url),
             'notify_aired_not_downloaded': bool(notify_aired_not_downloaded),
+
+            'multi_source_enabled': bool(multi_source_enabled),
+            'multi_source_affinity': bool(multi_source_affinity),
+            'multi_source_dedup_minutes': int(multi_source_dedup_minutes or 360),
         }
         
         media_processor.save_global_settings(settings)
@@ -4552,6 +4561,37 @@ def update_global_settings():
     except Exception as e:
         app.logger.error(f"Error updating global settings: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/multi-source/state')
+def multi_source_state():
+    """Current multi-source coordination state: per-series pins + recent events."""
+    try:
+        import multi_source
+        return jsonify({"status": "success", "state": multi_source.get_state()})
+    except Exception as e:
+        app.logger.error(f"Error getting multi-source state: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+@app.route('/api/multi-source/affinity', methods=['POST'])
+def multi_source_affinity():
+    """Pin a series to a watch-event source, or clear the pin.
+
+    Body: {"series_id": <sonarr id>, "source": "plex"|"jellyfin"|...|null}
+    A null/empty source clears the pin so the next event re-pins the series.
+    """
+    try:
+        import multi_source
+        data = request.json or {}
+        series_id = data.get('series_id')
+        if series_id is None:
+            return jsonify({"status": "error", "message": "series_id is required"}), 400
+        state = multi_source.set_affinity(series_id, data.get('source'))
+        return jsonify({"status": "success", "state": state})
+    except Exception as e:
+        app.logger.error(f"Error setting multi-source affinity: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 
 @app.route('/api/scheduler-status-global')
 def scheduler_status_global():

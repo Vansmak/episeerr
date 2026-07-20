@@ -146,6 +146,7 @@ def process_watch_event(data: dict) -> dict:
             "themoviedb_id":   themoviedb_id,
             "sonarr_series_id": series_id,
             "rule":            final_rule,
+            "source":          "tautulli",
         }
 
         temp_path = os.path.join(temp_dir, 'data_from_server.json')

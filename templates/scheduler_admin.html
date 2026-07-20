@@ -96,6 +96,36 @@
                             </div>
                         </div>
 
+                        <!-- Multi-Source Section -->
+                        <h6 class="border-bottom pb-2 mb-3">
+                            <i class="fas fa-random me-2"></i>Multi-Source Coordination
+                        </h6>
+                        <div class="row mb-4">
+                            <div class="col-md-6">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="multiSourceEnabled" name="multi_source_enabled">
+                                    <label class="form-check-label" for="multiSourceEnabled">
+                                        <strong>Enable multi-source mode</strong>
+                                        <small class="text-muted d-block">Allow more than one media server (e.g. Plex + Jellyfin) to send watch events without conflicting</small>
+                                    </label>
+                                </div>
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="multiSourceAffinity" name="multi_source_affinity" checked>
+                                    <label class="form-check-label" for="multiSourceAffinity">
+                                        <strong>Per-series source pinning</strong>
+                                        <small class="text-muted d-block">Each series follows the first server that reports it; other servers only refresh activity timers</small>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="mb-3">
+                                    <label for="multiSourceDedupMinutes" class="form-label">Duplicate-event window (minutes)</label>
+                                    <input type="number" class="form-control" id="multiSourceDedupMinutes" name="multi_source_dedup_minutes" value="360" min="0">
+                                    <small class="form-text text-muted">Same episode reported again within this window is ignored</small>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Notifications Section -->
                         <h6 class="border-bottom pb-2 mb-3">
                             <i class="fas fa-bell me-2"></i>Notifications
@@ -326,6 +356,14 @@ async function loadGlobalSettings() {
                 globalSettings.episeerr_url || 'http://localhost:5002';
             document.getElementById('notify_aired_not_downloaded').checked =
                 globalSettings.notify_aired_not_downloaded || false;
+
+            // Multi-source fields
+            document.getElementById('multiSourceEnabled').checked =
+                globalSettings.multi_source_enabled || false;
+            document.getElementById('multiSourceAffinity').checked =
+                globalSettings.multi_source_affinity !== false;
+            document.getElementById('multiSourceDedupMinutes').value =
+                globalSettings.multi_source_dedup_minutes || 360;
                 
             // Update storage status if we have disk info
             if (data.disk_info) {
@@ -353,7 +391,11 @@ async function saveGlobalSettings(event) {
         notifications_enabled: formData.has('notifications_enabled'),
         discord_webhook_url: formData.get('discord_webhook_url') || '',
         episeerr_url: formData.get('episeerr_url') || 'http://localhost:5002',
-        notify_aired_not_downloaded: formData.has('notify_aired_not_downloaded')
+        notify_aired_not_downloaded: formData.has('notify_aired_not_downloaded'),
+
+        multi_source_enabled: formData.has('multi_source_enabled'),
+        multi_source_affinity: formData.has('multi_source_affinity'),
+        multi_source_dedup_minutes: parseInt(formData.get('multi_source_dedup_minutes')) || 360
     };
     
     try {

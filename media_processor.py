@@ -1509,9 +1509,15 @@ def load_global_settings():
                 settings['dry_run_mode'] = True
                 save_global_settings(settings)
                 logger.info("✓ Migrated global_settings.json - added dry_run_mode: true")
-            
-            
-            
+
+            # MIGRATION: multi-source coordination settings (default: off)
+            if 'multi_source_enabled' not in settings:
+                settings['multi_source_enabled'] = False
+                settings.setdefault('multi_source_affinity', True)
+                settings.setdefault('multi_source_dedup_minutes', 360)
+                save_global_settings(settings)
+                logger.info("✓ Migrated global_settings.json - added multi_source settings")
+
             return settings
         else:
             # Default settings (already has dry_run_mode: True - good!)
@@ -1523,7 +1529,11 @@ def load_global_settings():
                 
                 'notifications_enabled': False,
                 'discord_webhook_url': '',
-                'episeerr_url': 'http://localhost:5002'
+                'episeerr_url': 'http://localhost:5002',
+
+                'multi_source_enabled': False,
+                'multi_source_affinity': True,
+                'multi_source_dedup_minutes': 360
             }
             save_global_settings(default_settings)
             return default_settings
@@ -3158,8 +3168,29 @@ def main():
     
     if series_name and is_recent_webhook:
         # Webhook mode - process the episode that was just watched
+        event_source = 'unknown'
+        try:
+            with open(webhook_file, 'r') as fh:
+                event_source = (json.load(fh).get('source') or 'unknown').strip().lower()
+        except Exception:
+            pass
+
         series_id = get_series_id(series_name, thetvdb_id, themoviedb_id)
         if series_id:
+            import multi_source
+            allowed, reason = multi_source.allow_event(
+                series_id, season_number, episode_number, event_source)
+            if not allowed:
+                # Blocked events still count as activity so Grace/Dormant
+                # timers reflect all viewing, but only the pinned source may
+                # move the episode window.
+                logger.info(
+                    f"🔀 Multi-source: skipping window processing for "
+                    f"'{series_name}' S{season_number}E{episode_number} "
+                    f"from '{event_source}' ({reason})")
+                update_activity_date(series_id, season_number, episode_number)
+                return True
+
             config = load_config()
             config_rule, modified = reconcile_series_drift(series_id, config)
             if modified:
