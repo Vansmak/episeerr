@@ -16,14 +16,20 @@
 -- succeeded, in which case no event channels exist either and the DELETE
 -- below is a no-op).
 --
--- Deletes any channel in the "Events Today" group whose tvg_id (set to
--- "events:<league>:<espn_event_id>" at creation time) is not in the fresh
--- whitelist. Not gated on auto_created -- channels created via the
--- from-stream API are not flagged auto_created (that flag is specific to
--- Dispatcharr's own M3U auto-channel-sync), so this group is exclusively
--- populated by events.py and is safe to sweep by group membership alone.
--- Do not put manually-created channels in "Events Today" -- they will be
--- deleted the next time their tvg_id isn't in the whitelist.
+-- Deletes any channel whose tvg_id (set to "events:<league>:<espn_event_id>"
+-- at creation time) starts with the events: prefix and is not in the fresh
+-- whitelist. Matched on tvg_id prefix, NOT group name/membership -- the
+-- configured group_name can be (and in Joe's setup is) the real "Sports"
+-- group shared with ordinary pre-existing channels like ESPN, so group
+-- membership alone can't distinguish a pipeline-owned channel from a real
+-- one sitting in the same group. tvg_id can: it's set only by events.py's
+-- own channel-creation path, matching the same marker events.py's Python
+-- side uses to recognize "already carried" channels as not its own.
+-- Not gated on auto_created -- channels created via the from-stream API are
+-- not flagged auto_created (that flag is specific to Dispatcharr's own M3U
+-- auto-channel-sync).
+-- Do not manually set a channel's tvg_id to an "events:..." value -- it
+-- will be deleted the next time that key isn't in the whitelist.
 --
 -- Usage:  docker exec -i dispatcharr psql -U postgres -d dispatcharr \
 --             < events_teardown.sql
@@ -38,9 +44,8 @@ CREATE TEMP TABLE _events_whitelist (event_key text);
 CREATE TEMP TABLE _expired_events AS
 SELECT c.id, c.name, c.tvg_id
 FROM dispatcharr_channels_channel c
-JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
-WHERE g.name = 'Events Today'
-  AND (c.tvg_id IS NULL OR c.tvg_id NOT IN (SELECT event_key FROM _events_whitelist));
+WHERE c.tvg_id LIKE 'events:%'
+  AND c.tvg_id NOT IN (SELECT event_key FROM _events_whitelist);
 
 \echo 'Events expiring:'
 SELECT COUNT(*) AS events_expiring FROM _expired_events;

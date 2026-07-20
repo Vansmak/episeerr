@@ -328,17 +328,24 @@ def _select_streams(hits: List[Dict], game: Dict) -> List[Dict]:
 
 
 def _find_carrying_channel(network: str) -> Optional[Dict]:
-    """Return the first existing (non-events-group) channel whose name
-    matches this broadcast network, if any. Used both to decide "already
-    carried" and to surface that channel's number/name to Xadarr without
-    creating a duplicate. Read-only -- this pipeline never writes to a
-    channel it didn't create itself."""
+    """Return the first existing channel whose name matches this broadcast
+    network that ISN'T one this pipeline created itself, if any. Used both
+    to decide "already carried" and to surface that channel's number/name
+    to Xadarr without creating a duplicate. Read-only -- this pipeline never
+    writes to a channel it didn't create itself.
+
+    Filters by tvg_id prefix ("events:<league>:<id>", set at creation time),
+    not channel_group_id: group_name is configured as the real "Sports"
+    group (not a separate events-only group), so a genuine pre-existing
+    channel like ESPN lives in the *same* group as pipeline-created ones --
+    group membership alone can't tell them apart. tvg_id can, and it's the
+    same marker events_teardown.sql already keys its sweep on.
+    """
     if not network:
         return None
     items = _paged_results(_dispatcharr_request("GET", "/api/channels/channels/", params={"search": network}))
-    events_group_id = _events_group_cache.get("id")
     for c in items:
-        if c.get("channel_group") != events_group_id:
+        if not (c.get("tvg_id") or "").startswith("events:"):
             return c
     return None
 
