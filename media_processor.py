@@ -2100,10 +2100,13 @@ def _get_episode_file_sizes(series_id):
         return {}
 
 
-def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep Rule", rule_dry_run=False, rule_name=None):
+def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep Rule", rule_dry_run=False, rule_name=None, force=False):
     """
     Direct deletion for Keep rule - real-time webhook cleanup.
-    Respects BOTH global dry_run_mode AND rule-level dry_run (either triggers queue).
+    Respects BOTH global dry_run_mode AND rule-level dry_run (either triggers queue),
+    unless force=True (used when approving from the pending-deletions queue, where
+    the human has already explicitly confirmed and both dry-run flags must be
+    bypassed entirely — not just the rule-level one).
     Used by: process_episodes_for_webhook() for real-time Keep rule deletions.
 
     `episodes` is a list of Sonarr episode dicts (as returned by fetch_all_episodes),
@@ -2115,9 +2118,12 @@ def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep 
     if not episodes:
         return
 
-    global_settings = load_global_settings()
-    global_dry_run = global_settings.get('dry_run_mode', False)
-    is_dry_run = global_dry_run or rule_dry_run
+    if force:
+        is_dry_run = False
+    else:
+        global_settings = load_global_settings()
+        global_dry_run = global_settings.get('dry_run_mode', False)
+        is_dry_run = global_dry_run or rule_dry_run
 
     if is_dry_run:
         if global_dry_run and rule_dry_run:

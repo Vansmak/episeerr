@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.17
+
+### 🐛 Bug Fixes
+
+- **Approving a queued deletion hung the request forever — browser eventually threw "NetworkError when attempting to fetch resource," and the whole service went unresponsive until restarted** — regression from v3.7.15's fix. `approve_deletions()` holds `pending_lock` (a plain, non-reentrant `Lock`) for its whole body, and while still holding it, called `delete_episodes_immediately(..., rule_dry_run=False)` to force a real delete. But that function's dry-run check is `global_dry_run or rule_dry_run` — forcing only the rule-level flag doesn't help when `dry_run_mode` is on globally (the default for new installs), so it still routed into the queueing branch, which calls back into `add_to_pending_deletions()` — which itself takes `pending_lock`. Re-acquiring a lock the same thread already holds blocks forever, and once enough threads pile up waiting on it (1 worker/8 threads since v3.7.14), the whole app stops responding. Fixed: `delete_episodes_immediately()` now takes a `force=True` param that bypasses both global and rule dry-run outright, which `approve_deletions()` now passes; `approve_deletions()` also no longer holds `pending_lock` across the delete call, so this class of deadlock can't happen via any future path either. (`media_processor.py`, `pending_deletions.py`, #35)
+
+---
+
 ## v3.7.16
 
 ### 🐛 Bug Fixes
