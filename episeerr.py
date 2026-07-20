@@ -4525,7 +4525,16 @@ def update_global_settings():
         # Multi-source coordination settings
         multi_source_enabled = data.get('multi_source_enabled', False)
         multi_source_affinity = data.get('multi_source_affinity', True)
-        multi_source_dedup_minutes = data.get('multi_source_dedup_minutes', 360)
+
+        def _int_or(value, fallback):
+            # 0 is a valid value ("or fallback" would clobber it)
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return fallback
+
+        multi_source_dedup_minutes = _int_or(data.get('multi_source_dedup_minutes'), 360)
+        multi_source_pin_ttl_days = _int_or(data.get('multi_source_pin_ttl_days'), 30)
 
         # Validate inputs
         if storage_min_gb is not None:
@@ -4545,7 +4554,8 @@ def update_global_settings():
 
             'multi_source_enabled': bool(multi_source_enabled),
             'multi_source_affinity': bool(multi_source_affinity),
-            'multi_source_dedup_minutes': int(multi_source_dedup_minutes or 360),
+            'multi_source_dedup_minutes': multi_source_dedup_minutes,
+            'multi_source_pin_ttl_days': multi_source_pin_ttl_days,
         }
         
         media_processor.save_global_settings(settings)
@@ -4586,7 +4596,8 @@ def multi_source_affinity():
         series_id = data.get('series_id')
         if series_id is None:
             return jsonify({"status": "error", "message": "series_id is required"}), 400
-        state = multi_source.set_affinity(series_id, data.get('source'))
+        state = multi_source.set_affinity(series_id, data.get('source'),
+                                          series_title=data.get('title'))
         return jsonify({"status": "success", "state": state})
     except Exception as e:
         app.logger.error(f"Error setting multi-source affinity: {str(e)}")

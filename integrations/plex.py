@@ -1602,13 +1602,13 @@ class PlexIntegration(ServiceIntegration):
                 'source':           'plex',
             }
 
-            temp_path = os.path.join(temp_dir, 'data_from_server.json')
+            temp_path = os.path.join(temp_dir, f'data_from_server_{os.urandom(4).hex()}.json')
             with open(temp_path, 'w') as fh:
                 import json as _json
                 _json.dump(payload, fh)
 
             result = subprocess.run(
-                ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+                ["python3", os.path.join(os.getcwd(), "media_processor.py"), temp_path],
                 capture_output=True, text=True,
             )
 

@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import requests
 import logging
 from logging.handlers import RotatingFileHandler
@@ -471,12 +472,17 @@ def get_episode_tracking_key(series_name, season, episode, user_name):
     return f"{series_name}:S{season}E{episode}:{user_name}"
 
 
-def get_server_activity():
-    """Read current viewing details from server webhook stored data."""
+def get_server_activity(filepath=None):
+    """Read current viewing details from server webhook stored data.
+
+    filepath: per-event payload written by an integration. When omitted,
+    falls back to the legacy shared file locations.
+    """
     try:
-        filepath = '/app/temp/data_from_server.json'
-        if not os.path.exists(filepath):
-            filepath = '/app/temp/data_from_tautulli.json'
+        if not filepath:
+            filepath = '/app/temp/data_from_server.json'
+            if not os.path.exists(filepath):
+                filepath = '/app/temp/data_from_tautulli.json'
             
         with open(filepath, 'r') as file:
             data = json.load(file)
@@ -1511,10 +1517,12 @@ def load_global_settings():
                 logger.info("✓ Migrated global_settings.json - added dry_run_mode: true")
 
             # MIGRATION: multi-source coordination settings (default: off)
-            if 'multi_source_enabled' not in settings:
-                settings['multi_source_enabled'] = False
+            if ('multi_source_enabled' not in settings
+                    or 'multi_source_pin_ttl_days' not in settings):
+                settings.setdefault('multi_source_enabled', False)
                 settings.setdefault('multi_source_affinity', True)
                 settings.setdefault('multi_source_dedup_minutes', 360)
+                settings.setdefault('multi_source_pin_ttl_days', 30)
                 save_global_settings(settings)
                 logger.info("✓ Migrated global_settings.json - added multi_source settings")
 
@@ -1533,7 +1541,8 @@ def load_global_settings():
 
                 'multi_source_enabled': False,
                 'multi_source_affinity': True,
-                'multi_source_dedup_minutes': 360
+                'multi_source_dedup_minutes': 360,
+                'multi_source_pin_ttl_days': 30
             }
             save_global_settings(default_settings)
             return default_settings
@@ -3149,12 +3158,27 @@ def should_trigger_processing(current_progress, trigger_percentage):
 
 def main():
     """Main entry point - FIXED webhook vs cleanup logic"""
+    # Integrations pass their per-event payload file as argv[1] so
+    # concurrent events cannot clobber each other in the shared temp file.
+    # No argument = legacy shared-file behavior (scheduled/manual cleanup).
+    payload_path = sys.argv[1] if len(sys.argv) > 1 else None
+    try:
+        return _run(payload_path)
+    finally:
+        if payload_path:
+            try:
+                os.remove(payload_path)
+            except OSError:
+                pass
+
+
+def _run(payload_path):
     # Check if this is a webhook call (has recent webhook data)
-    series_name, season_number, episode_number, thetvdb_id, themoviedb_id = get_server_activity()
-    
+    series_name, season_number, episode_number, thetvdb_id, themoviedb_id = get_server_activity(payload_path)
+
     # ONLY process as webhook if this was called BY a webhook (not manual cleanup)
     # Add a flag or check timestamp to distinguish
-    webhook_file = '/app/temp/data_from_server.json'
+    webhook_file = payload_path or '/app/temp/data_from_server.json'
     
     try:
         # Check if webhook file is recent (within last few minutes)
@@ -3179,7 +3203,8 @@ def main():
         if series_id:
             import multi_source
             allowed, reason = multi_source.allow_event(
-                series_id, season_number, episode_number, event_source)
+                series_id, season_number, episode_number, event_source,
+                series_title=series_name)
             if not allowed:
                 # Blocked events still count as activity so Grace/Dormant
                 # timers reflect all viewing, but only the pinned source may

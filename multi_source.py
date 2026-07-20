@@ -18,6 +18,12 @@ rolling episode window. Two mechanisms, both gated behind the
    window. Affinity can be reassigned or cleared via the
    /api/multi-source/affinity endpoint.
 
+   To avoid a stale pin locking a series forever (viewer abandons a show,
+   someone on the other server picks it up later), a pin expires after
+   `multi_source_pin_ttl_days` without an allowed event from its source
+   (default 30, 0 = never); the next source to report the series takes it
+   over.
+
 State lives in data/multi_source_state.json. Because integrations spawn
 media_processor.py as short-lived subprocesses, state access is serialized
 with an fcntl lock so concurrent events from different servers cannot race.
@@ -36,6 +42,7 @@ LOCK_FILE = STATE_FILE + '.lock'
 SETTINGS_FILE = os.path.join(os.getcwd(), 'config', 'global_settings.json')
 
 DEFAULT_DEDUP_MINUTES = 360
+DEFAULT_PIN_TTL_DAYS = 30
 
 
 def _load_settings():
@@ -60,6 +67,15 @@ def _dedup_seconds(settings):
     except (TypeError, ValueError):
         minutes = DEFAULT_DEDUP_MINUTES
     return max(0, minutes) * 60
+
+
+def _pin_ttl_seconds(settings):
+    """Seconds of source silence before a pin may be taken over; None = never."""
+    try:
+        days = int(settings.get('multi_source_pin_ttl_days', DEFAULT_PIN_TTL_DAYS))
+    except (TypeError, ValueError):
+        days = DEFAULT_PIN_TTL_DAYS
+    return days * 86400 if days > 0 else None
 
 
 class _locked_state:
@@ -90,7 +106,7 @@ class _locked_state:
         return False
 
 
-def allow_event(series_id, season, episode, source):
+def allow_event(series_id, season, episode, source, series_title=None):
     """
     Decide whether a watch event may drive window processing.
 
@@ -107,6 +123,7 @@ def allow_event(series_id, season, episode, source):
     event_key = f"{series_key}:S{season}E{episode}"
     now = time.time()
     window = _dedup_seconds(settings)
+    ttl = _pin_ttl_seconds(settings)
 
     try:
         with _locked_state() as ls:
@@ -117,6 +134,7 @@ def allow_event(series_id, season, episode, source):
 
             prior = events.get(event_key)
             if prior is not None:
+                ls.save()  # persist pruning
                 return False, (
                     f"duplicate: already processed from '{prior.get('source')}' "
                     f"{int(now - prior.get('ts', now))}s ago"
@@ -125,16 +143,32 @@ def allow_event(series_id, season, episode, source):
             if _affinity_enabled(settings):
                 affinity = ls.state['series_affinity']
                 pinned = affinity.get(series_key)
+                if pinned is not None and pinned.get('source') != source:
+                    last_seen = (pinned.get('last_event_ts')
+                                 or pinned.get('pinned_at') or 0)
+                    if ttl is not None and now - last_seen > ttl:
+                        logger.info(
+                            f"Multi-source: pin on series {series_key} "
+                            f"('{pinned.get('title') or 'unknown'}') expired, "
+                            f"'{pinned.get('source')}' silent for "
+                            f"{int((now - last_seen) / 86400)}d; "
+                            f"'{source}' takes over")
+                        pinned = None
+                    else:
+                        ls.save()  # persist pruning
+                        return False, (
+                            f"series pinned to '{pinned.get('source')}', "
+                            f"event came from '{source}'"
+                        )
                 if pinned is None:
-                    affinity[series_key] = {'source': source, 'pinned_at': now}
                     logger.info(
                         f"Multi-source: pinned series {series_key} to source '{source}'")
-                elif pinned.get('source') != source:
-                    ls.save()  # persist any pruning
-                    return False, (
-                        f"series pinned to '{pinned.get('source')}', "
-                        f"event came from '{source}'"
-                    )
+                pin = dict(pinned or {})
+                pin.update({'source': source, 'last_event_ts': now})
+                pin.setdefault('pinned_at', now)
+                if series_title:
+                    pin['title'] = series_title
+                affinity[series_key] = pin
 
             events[event_key] = {'source': source, 'ts': now}
             ls.save()
@@ -157,16 +191,20 @@ def get_state():
         return {'enabled': is_enabled(), 'error': str(exc)}
 
 
-def set_affinity(series_id, source):
+def set_affinity(series_id, source, series_title=None):
     """Pin a series to a source, or clear the pin when source is falsy."""
     series_key = str(series_id)
     with _locked_state() as ls:
         if source:
-            ls.state['series_affinity'][series_key] = {
+            prior = ls.state['series_affinity'].get(series_key) or {}
+            pin = {
                 'source': str(source).strip().lower(),
                 'pinned_at': time.time(),
                 'manual': True,
             }
+            if series_title or prior.get('title'):
+                pin['title'] = series_title or prior.get('title')
+            ls.state['series_affinity'][series_key] = pin
         else:
             ls.state['series_affinity'].pop(series_key, None)
         ls.save()

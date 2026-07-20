@@ -117,11 +117,31 @@
                                     </label>
                                 </div>
                             </div>
-                            <div class="col-md-4">
+                            <div class="col-md-3">
                                 <div class="mb-3">
                                     <label for="multiSourceDedupMinutes" class="form-label">Duplicate-event window (minutes)</label>
                                     <input type="number" class="form-control" id="multiSourceDedupMinutes" name="multi_source_dedup_minutes" value="360" min="0">
-                                    <small class="form-text text-muted">Same episode reported again within this window is ignored</small>
+                                    <small class="form-text text-muted">Same episode reported again within this window is ignored. 0 disables.</small>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="mb-3">
+                                    <label for="multiSourcePinTtlDays" class="form-label">Pin takeover after (days)</label>
+                                    <input type="number" class="form-control" id="multiSourcePinTtlDays" name="multi_source_pin_ttl_days" value="30" min="0">
+                                    <small class="form-text text-muted">If the pinned server reports nothing for this long, another server may take the series over. 0 = never.</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row mb-4" id="multiSourcePinsPanel" style="display: none;">
+                            <div class="col-12">
+                                <label class="form-label"><strong>Current series pins</strong>
+                                    <button type="button" class="btn btn-sm btn-outline-secondary ms-2" onclick="loadMultiSourcePins()">Refresh</button>
+                                </label>
+                                <div class="table-responsive">
+                                    <table class="table table-sm align-middle">
+                                        <thead><tr><th>Series</th><th>Source</th><th>Last event</th><th></th></tr></thead>
+                                        <tbody id="multiSourcePinsBody"></tbody>
+                                    </table>
                                 </div>
                             </div>
                         </div>
@@ -357,13 +377,16 @@ async function loadGlobalSettings() {
             document.getElementById('notify_aired_not_downloaded').checked =
                 globalSettings.notify_aired_not_downloaded || false;
 
-            // Multi-source fields
+            // Multi-source fields (?? keeps a configured 0 intact)
             document.getElementById('multiSourceEnabled').checked =
                 globalSettings.multi_source_enabled || false;
             document.getElementById('multiSourceAffinity').checked =
                 globalSettings.multi_source_affinity !== false;
             document.getElementById('multiSourceDedupMinutes').value =
-                globalSettings.multi_source_dedup_minutes || 360;
+                globalSettings.multi_source_dedup_minutes ?? 360;
+            document.getElementById('multiSourcePinTtlDays').value =
+                globalSettings.multi_source_pin_ttl_days ?? 30;
+            loadMultiSourcePins();
                 
             // Update storage status if we have disk info
             if (data.disk_info) {
@@ -375,6 +398,71 @@ async function loadGlobalSettings() {
         }
     } catch (error) {
         console.error('Error loading global settings:', error);
+    }
+}
+
+function intOr(value, fallback) {
+    // parseInt(x) || fallback would turn a valid 0 into the fallback
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+async function loadMultiSourcePins() {
+    const panel = document.getElementById('multiSourcePinsPanel');
+    try {
+        const response = await fetch('/api/multi-source/state');
+        const data = await response.json();
+        if (data.status !== 'success') return;
+
+        const pins = data.state.series_affinity || {};
+        const body = document.getElementById('multiSourcePinsBody');
+        body.innerHTML = '';
+        const ids = Object.keys(pins);
+        panel.style.display = (data.state.enabled && ids.length) ? '' : 'none';
+
+        for (const id of ids) {
+            const pin = pins[id];
+            const last = pin.last_event_ts || pin.pinned_at;
+            const row = document.createElement('tr');
+
+            const title = document.createElement('td');
+            title.textContent = pin.title || ('Series #' + id);
+            row.appendChild(title);
+
+            const source = document.createElement('td');
+            source.textContent = pin.source + (pin.manual ? ' (manual)' : '');
+            row.appendChild(source);
+
+            const seen = document.createElement('td');
+            seen.textContent = last ? new Date(last * 1000).toLocaleString() : '?';
+            row.appendChild(seen);
+
+            const actions = document.createElement('td');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn btn-sm btn-outline-danger';
+            btn.textContent = 'Clear pin';
+            btn.onclick = () => clearMultiSourcePin(id);
+            actions.appendChild(btn);
+            row.appendChild(actions);
+
+            body.appendChild(row);
+        }
+    } catch (error) {
+        console.error('Error loading multi-source pins:', error);
+    }
+}
+
+async function clearMultiSourcePin(seriesId) {
+    try {
+        await fetch('/api/multi-source/affinity', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ series_id: seriesId, source: null })
+        });
+        loadMultiSourcePins();
+    } catch (error) {
+        console.error('Error clearing multi-source pin:', error);
     }
 }
 
@@ -395,7 +483,8 @@ async function saveGlobalSettings(event) {
 
         multi_source_enabled: formData.has('multi_source_enabled'),
         multi_source_affinity: formData.has('multi_source_affinity'),
-        multi_source_dedup_minutes: parseInt(formData.get('multi_source_dedup_minutes')) || 360
+        multi_source_dedup_minutes: intOr(formData.get('multi_source_dedup_minutes'), 360),
+        multi_source_pin_ttl_days: intOr(formData.get('multi_source_pin_ttl_days'), 30)
     };
     
     try {

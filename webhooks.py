@@ -730,16 +730,17 @@ def handle_server_webhook():
             "thetvdb_id": thetvdb_id,
             "themoviedb_id": themoviedb_id,
             "sonarr_series_id": series_id,
-            "rule": final_rule
+            "rule": final_rule,
+            "source": "tautulli"
         }
 
-        temp_file_path = os.path.join(temp_dir, 'data_from_server.json')
+        temp_file_path = os.path.join(temp_dir, f'data_from_server_{os.urandom(4).hex()}.json')
         with open(temp_file_path, 'w') as f:
             json.dump(plex_data, f)
 
         # ─── Original subprocess call ───
         result = subprocess.run(
-            ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+            ["python3", os.path.join(os.getcwd(), "media_processor.py"), temp_file_path],
             capture_output=True,
             text=True
         )
