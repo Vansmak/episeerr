@@ -673,12 +673,25 @@ END $$;
 -- above — moved-in streams keep whatever order they had on their original
 -- single-provider channel (almost always 0), so a merged channel could end
 -- up with two+ streams tied at order=0 and no defined failover priority.
+--
+-- Within a provider tier, break ties by ascending ffmpeg_output_bitrate
+-- (from stream_stats, populated once Dispatcharr has probed the stream)
+-- instead of raw import order. Found via Fox News: two Titan variants
+-- stacked, and cs.id ordering happened to put the 1080p/~4.96Mbps variant
+-- at order 0 ahead of the 720p/~3.4Mbps one — 40%+ higher bitrate than
+-- everything else in the stack, a very plausible buffering/freeze cause
+-- since Dispatcharr only fails over on a hard stream error, not on
+-- buffering. Same "2+ Titan variants, arbitrary order" pattern hit ESPN,
+-- ESPN2, Fox Business, Fox Sports 1/2, Fox Weather, Nat Geo Wild, and
+-- others. Streams not yet probed sort NULL LAST, so unprobed pairs keep
+-- today's ordering rather than guessing.
 WITH ranked AS (
   SELECT cs.id,
     ROW_NUMBER() OVER (
       PARTITION BY cs.channel_id
       ORDER BY
         CASE s.m3u_account_id WHEN 11 THEN 0 WHEN 13 THEN 1 ELSE 2 END,
+        (s.stream_stats->>'ffmpeg_output_bitrate')::numeric NULLS LAST,
         cs."order", cs.id
     ) - 1 AS new_order
   FROM dispatcharr_channels_channelstream cs
