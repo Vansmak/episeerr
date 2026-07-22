@@ -56,7 +56,13 @@ DEFAULT_GROUP_NAME = "Events Today"
 DEFAULT_NUMBER_RANGE = [80, 99]
 DEFAULT_TICK_MINUTES = 30
 DEFAULT_WATCHLIST = [
-    {"team": "Dodgers", "league": "mlb"},
+    # rsn_hint: substring (case-insensitive) matched against ESPN's reported
+    # broadcast names first, ahead of national networks (TBS/ESPN/FS1/etc.) --
+    # MLB blacks out national broadcasts in the two teams' home markets, so
+    # the team's own regional feed is the one Joe can actually watch even
+    # when a national channel also legitimately airs the game (see
+    # AMBIGUOUS_BROADCAST_AFFILIATES comment below for the related history).
+    {"team": "Dodgers", "league": "mlb", "rsn_hint": "sportsnet la"},
     {"team": "Rams", "league": "nfl"},
     {"team": None, "league": "ufc"},   # no team filter -- track every main card
 ]
@@ -65,23 +71,36 @@ DEFAULT_WATCHLIST = [
 # Part 9 Step D) -- keep the same provider priority for failover ordering.
 PROVIDER_PRIORITY = {11: 0, 13: 1}
 
-# National cable sports networks broadcast one identical feed everywhere, so a
-# name-search hit against Joe's existing lineup reliably means "this exact game
-# is already carried" -- safe to skip creating a duplicate event channel.
+# National cable sports networks and dedicated regional sports networks (RSNs)
+# broadcast one identical feed to everyone tuned in, so a name-search hit
+# against Joe's existing lineup reliably means "this exact game is already
+# carried" -- safe to skip creating a duplicate event channel.
 #
-# Local broadcast affiliates (NBC/CBS/ABC/FOX) are deliberately NOT in this set
-# even though they're not streaming-exclusive either: they run different
-# regional programming most of the time and only sometimes happen to be
-# showing a given game's national feed. A name-search hit on "NBC" just means
-# Joe's local NBC affiliate channel exists -- not that it's airing *this* game
-# right now. Dispatcharr has no real EPG behind these channels to verify that
-# (same root limitation noted in the file header). Treating a broadcast
-# affiliate as "already carried" produced a real false negative: an MLB
-# doubleheader nightcap on NBC/Peacock never got a channel created for it,
-# silently, every tick, with no indication to Joe that it had been suppressed.
-NATIONAL_CABLE_NETWORKS = {
-    "espn", "espn2", "espnews", "espnu", "fs1", "fs2", "tbs", "tnt", "nba tv",
-    "mlb network", "nfl network", "nhl network", "trutv",
+# This used to be a fixed allowlist of national-only network names, checked
+# against just ESPN's *first* reported broadcast name. Both were wrong for a
+# Dodgers game broadcast regionally: ESPN reports broadcasts as
+# ["MLB.TV", "TBS", "Sportsnet LA", "NBC Sports Phil"] with the streaming-only
+# "MLB.TV" placeholder first, so the old check on networks[0] alone never even
+# reached "TBS" (which WAS allowlisted) or "Sportsnet LA" (an RSN, not
+# allowlisted at all) -- created a redundant channel instead of recognizing
+# the RSN already in Joe's lineup. Now every reported network name is tried,
+# and any dedicated sports/cable network name is trusted.
+#
+# Local broadcast affiliates (NBC/CBS/ABC/FOX/CW/PBS) are the one category
+# still excluded, by name here rather than allowlisted above: they run
+# different regional programming most of the time and only sometimes happen
+# to be showing a given game's national feed. A name-search hit on "NBC" just
+# means Joe's local NBC affiliate channel exists -- not that it's airing
+# *this* game right now. Dispatcharr has no real EPG behind these channels to
+# verify that (same root limitation noted in the file header). Treating a
+# broadcast affiliate as "already carried" produced a real false negative: an
+# MLB doubleheader nightcap on NBC/Peacock never got a channel created for it,
+# silently, every tick, with no indication to Joe that it had been
+# suppressed. RSNs and national cable/sports networks don't have this
+# ambiguity -- they're single-purpose sports channels, not general
+# broadcasters, so a name match is a reliable signal on its own.
+AMBIGUOUS_BROADCAST_AFFILIATES = {
+    "abc", "cbs", "nbc", "fox", "cw", "the cw", "pbs", "telemundo", "univision", "mynetworktv",
 }
 
 ESPN_LEAGUE_PATH = {
@@ -460,12 +479,26 @@ def _ensure_channel_for_game(cfg: Dict, game: Dict, registry: Dict[str, int]) ->
             "owned": False,
         }
 
-    primary_network = (game.get("networks") or [None])[0]
-    if primary_network and primary_network.lower() in NATIONAL_CABLE_NETWORKS:
-        carrying = _find_carrying_channel(primary_network)
+    # Try the watchlist entry's own RSN hint before ESPN's reported order --
+    # national broadcasts (TBS/ESPN/FOX/etc.) are usually blacked out in the
+    # two teams' home markets, so if Joe's own team's RSN is in the list at
+    # all, it's the feed he can actually watch regardless of where ESPN
+    # happens to list it relative to the national feed.
+    rsn_hint = (game.get("rsn_hint") or "").lower()
+    reported_networks = [n for n in (game.get("networks") or []) if n]
+    ordered_networks = reported_networks
+    if rsn_hint:
+        hinted = [n for n in reported_networks if rsn_hint in n.lower()]
+        rest = [n for n in reported_networks if rsn_hint not in n.lower()]
+        ordered_networks = hinted + rest
+
+    for network_name in ordered_networks:
+        if network_name.lower() in AMBIGUOUS_BROADCAST_AFFILIATES:
+            continue
+        carrying = _find_carrying_channel(network_name)
         if carrying:
             logger.info(
-                f"[Events] {game['name']!r} airs on {primary_network!r}, already carried on "
+                f"[Events] {game['name']!r} airs on {network_name!r}, already carried on "
                 f"channel {carrying.get('channel_number')} -- not creating a duplicate"
             )
             return _info_result(carrying)
@@ -583,6 +616,7 @@ def run_tick() -> Dict[str, Any]:
         for ev in fetch_espn_scoreboard(league, date=today):
             game = _parse_espn_event(ev, league)
             if game and _team_matches(team, game):
+                game["rsn_hint"] = entry.get("rsn_hint")
                 matched_games.append(game)
 
     registry = _get_registry()
