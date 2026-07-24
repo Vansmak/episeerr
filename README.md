@@ -10,6 +10,7 @@ This project started as scratching my own itch - I wanted more granular series m
 ---
 [![Docker Pulls](https://img.shields.io/docker/pulls/vansmak/episeerr)](https://hub.docker.com/r/vansmak/episeerr)
 [![GitHub Issues](https://img.shields.io/github/issues/vansmak/episeerr)](https://github.com/Vansmak/episeerr/issues)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Support-orange)](https://buymeacoffee.com/vansmak)
 
 ---
@@ -544,8 +545,7 @@ docker logs episeerr | grep "\[Plex webhook\]"
      "plex_ep_num": "{episode_num}",
      "thetvdb_id": "{thetvdb_id}",
      "themoviedb_id": "{themoviedb_id}",
-     "media_type": "{media_type}",
-     "notification_type": "{notification_type}"
+     "media_type": "{media_type}"
    }
    ```
 4. **Save**
@@ -563,7 +563,7 @@ If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold 
    - **Webhook URL:** `http://your-episeerr:5002/api/integration/tautulli/webhook`
    - **Method:** POST
    - **Trigger:** "Playback Start"
-3. **Data → Text:** *(same template as above — `notification_type` is what tells Episeerr this is a play-start event)*
+3. **Data → Text:** *(same template as above, plus a hardcoded `notification_type` — this is what tells Episeerr it's a play-start event. Type it exactly as shown below, with no curly braces: Tautulli has no `{notification_type}` placeholder, so a template using braces here sends the literal, unsubstituted text `{notification_type}` and Episeerr will never recognize it as a play-start event.)*
    ```json
    {
      "plex_title": "{show_name}",
@@ -573,12 +573,13 @@ If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold 
      "thetvdb_id": "{thetvdb_id}",
      "themoviedb_id": "{themoviedb_id}",
      "media_type": "{media_type}",
-     "notification_type": "{notification_type}"
+     "notification_type": "playback start"
    }
    ```
 4. **Save**
 
 > For non-held series (no `+` modifier), playback start events are silently ignored — no risk of double-processing.
+> Do not add `"notification_type"` to the "Watched" agent's template — leave it out there, since a hardcoded `"playback start"` on the Watched agent would make watched events get ignored too.
 
 In Tautulli → Settings → General, set **TV Episode Watched Percent** between 50–95% (recommended: 80%).
 
@@ -1503,7 +1504,7 @@ Contributions welcome! Please open an issue or pull request on GitHub.
 
 ## License
 
-[MIT License](LICENSE)
+[GNU Affero General Public License v3.0](LICENSE) — modified versions, including ones run as a hosted/network service, must make their source available under the same license.
 
 ---
 

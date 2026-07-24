@@ -1,5 +1,13 @@
 # Changelog
 
+## v3.7.18
+
+### 🐛 Bug Fixes
+
+- **The v3.7.16 fix for the "episode you're watching gets deleted" bug (#62) didn't actually work — Tautulli "Playback Start" webhooks still ran the full watched pipeline and deleted the episode mid-playback, even after upgrading.** Root cause: the guard checks `data.get('notification_type') == 'playback start'`, and both the README's and in-app documentation's JSON templates told users to populate that field with `"notification_type": "{notification_type}"` — but `{notification_type}` isn't a real Tautulli placeholder. Tautulli sends the literal, unsubstituted text `"{notification_type}"` back verbatim, which never equals `'playback start'`, so the guard never fired regardless of which webhook URL was configured. Fixed: the README's "Playback Start" agent template now uses a hardcoded literal `"notification_type": "playback start"` (no braces — not a placeholder, so it can't fail to substitute) and the field has been dropped entirely from the "Watched" agent template, where it was doing nothing. Also updated the in-app documentation page and the route handler's docstring to match. (`README.md`, `templates/documentation.html`, `integrations/tautulli.py`, #62)
+
+---
+
 ## v3.7.17
 
 ### 🐛 Bug Fixes
