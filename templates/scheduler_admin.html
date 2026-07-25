@@ -75,8 +75,15 @@
                                         <small class="text-muted d-block">Show what would be deleted without actually deleting</small>
                                     </label>
                                 </div>
-                                
-                                
+
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="automationHeld" name="automation_held">
+                                    <label class="form-check-label" for="automationHeld">
+                                        <strong>Hold Automation <span class="text-muted">(Vacation Mode)</span></strong>
+                                        <small class="text-muted d-block">Ignore every watch event and skip all cleanup (TV + movies) until turned back off. Nothing downloads, unmonitors, or deletes while held.</small>
+                                    </label>
+                                </div>
+
                             </div>
                         </div>
 
@@ -93,6 +100,23 @@
                                         <small class="text-muted d-block">New series without tags automatically go to default rule</small>
                                     </label>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- Reconcile Section -->
+                        <h6 class="border-bottom pb-2 mb-3">
+                            <i class="fas fa-history me-2"></i>Missed Watch-Event Detection
+                        </h6>
+                        <div class="row mb-4">
+                            <div class="col-md-9">
+                                <div class="form-check form-switch mb-2">
+                                    <input class="form-check-input" type="checkbox" id="reconcileEnabled" name="reconcile_enabled">
+                                    <label class="form-check-label" for="reconcileEnabled">
+                                        <strong>Check for missed watch events at startup</strong>
+                                        <small class="text-muted d-block">Runs once, ~5 minutes after Episeerr starts. Checks Plex/Jellyfin/Emby/Tautulli's own watch history for anything newer than what Episeerr has on record - e.g. a webhook lost while Episeerr was down. Nothing is replayed automatically: each one shows up as a <a href="/pending-deletions">pending watch event</a> for you to Process or Clear. Skipped entirely while Hold Automation (above) is on.</small>
+                                    </label>
+                                </div>
+                                <div id="reconcileStatus" class="text-muted small"></div>
                             </div>
                         </div>
 
@@ -311,9 +335,11 @@ async function loadGlobalSettings() {
                 globalSettings.global_storage_min_gb || '';
             document.getElementById('cleanupInterval').value = 
                 globalSettings.cleanup_interval_hours || 6;
-            document.getElementById('dryRunMode').checked = 
+            document.getElementById('dryRunMode').checked =
                 globalSettings.dry_run_mode || false;
-            document.getElementById('autoAssignNewSeries').checked = 
+            document.getElementById('automationHeld').checked =
+                globalSettings.automation_held || false;
+            document.getElementById('autoAssignNewSeries').checked =
                 globalSettings.auto_assign_new_series || false;
            
             
@@ -326,7 +352,12 @@ async function loadGlobalSettings() {
                 globalSettings.episeerr_url || 'http://localhost:5002';
             document.getElementById('notify_aired_not_downloaded').checked =
                 globalSettings.notify_aired_not_downloaded || false;
-                
+
+            // Reconcile fields
+            document.getElementById('reconcileEnabled').checked =
+                globalSettings.reconcile_enabled || false;
+            loadReconcileStatus();
+
             // Update storage status if we have disk info
             if (data.disk_info) {
                 updateStorageStatus(data.disk_info, globalSettings);
@@ -348,12 +379,15 @@ async function saveGlobalSettings(event) {
         global_storage_min_gb: formData.get('global_storage_min_gb') || null,
         cleanup_interval_hours: parseInt(formData.get('cleanup_interval_hours')) || 6,
         dry_run_mode: formData.has('dry_run_mode'),
+        automation_held: formData.has('automation_held'),
         auto_assign_new_series: formData.has('auto_assign_new_series'),
         
         notifications_enabled: formData.has('notifications_enabled'),
         discord_webhook_url: formData.get('discord_webhook_url') || '',
         episeerr_url: formData.get('episeerr_url') || 'http://localhost:5002',
-        notify_aired_not_downloaded: formData.has('notify_aired_not_downloaded')
+        notify_aired_not_downloaded: formData.has('notify_aired_not_downloaded'),
+
+        reconcile_enabled: formData.has('reconcile_enabled')
     };
     
     try {
@@ -372,12 +406,35 @@ async function saveGlobalSettings(event) {
             globalSettings = data.settings;
             loadStorageStatus();
             updateSafetyStatusFromGlobal(data.settings);
+            loadReconcileStatus();
         } else {
             showMessage('Error: ' + data.message, 'error');
         }
     } catch (error) {
         console.error('Error saving settings:', error);
         showMessage('Failed to save settings', 'error');
+    }
+}
+
+async function loadReconcileStatus() {
+    const el = document.getElementById('reconcileStatus');
+    if (!el) return;
+    try {
+        const response = await fetch('/api/pending-watch-events');
+        const data = await response.json();
+        if (!data.success) {
+            el.textContent = '';
+            return;
+        }
+        if (!data.last_checked) {
+            el.textContent = 'No check has run yet.';
+            return;
+        }
+        const when = new Date(data.last_checked * 1000).toLocaleString();
+        const pendingNote = data.count ? ` - ${data.count} pending item(s) awaiting review` : ' - nothing pending';
+        el.textContent = `Last checked: ${when}${pendingNote}`;
+    } catch (error) {
+        console.error('Error loading reconcile status:', error);
     }
 }
 

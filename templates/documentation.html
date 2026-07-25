@@ -279,12 +279,12 @@
                         <li><strong>Torrent Delay:</strong> 999999 minutes (essentially infinite)</li>
                     </ul>
                 </li>
-                <li>Set <strong>Tags:</strong> <code>episeerr_[rule_name]</code> and/or <code>episeerr_select</code></li>
+                <li>Set <strong>Tags:</strong> <code>episeerr_select</code></li>
                 <li>Save</li>
             </ol>
 
             <div class="alert alert-info">
-                <strong><i class="fas fa-lightbulb me-2"></i>Pro Tip:</strong> Create a delay profile specifically for Episeerr-managed shows. This way, other shows can still auto-download normally.
+                <strong><i class="fas fa-lightbulb me-2"></i>Pro Tip:</strong> Create a delay profile specifically for Episeerr-managed shows. This way, other shows can still auto-download normally. Don't add rule tags to it (including <code>episeerr_[rule_name]</code> or <code>episeerr_default</code>) — those are deliberately left out so downloads aren't delayed forever once a show's actually been processed; <code>episeerr_default</code> behaves exactly like any other rule tag, it just resolves to whichever rule is currently your default instead of a specific named one. Tagging a series with a rule tag while Episeerr might be down? Add <code>episeerr_delay</code> alongside it instead — Episeerr removes it once processed, whether that's right away or on its next startup check.
             </div>
 
             <h5 class="mt-4"><i class="fas fa-list text-success me-2"></i>Step 2: Create Your First Rule</h5>
@@ -1307,7 +1307,7 @@
                 <strong>Only required for external adds</strong> (Sonarr tags, Plex watchlist sync, Seerr) that use <code>episeerr_select</code>. Not needed when adding via Episeerr search — Sonarr isn't touched until you confirm.
             </div>
 
-            <p>Delay profiles tell Sonarr to wait before downloading. For <code>episeerr_select</code> tagged shows, this holds all downloads until you confirm your selection in Episeerr.</p>
+            <p>Delay profiles tell Sonarr to wait before downloading. For <code>episeerr_select</code> tagged shows, this holds all downloads until Episeerr actually processes the series.</p>
 
             <h5>Setup:</h5>
             <ol>
@@ -1318,12 +1318,14 @@
                 <li>Save</li>
             </ol>
 
+            <p class="text-muted small">Episeerr manages this profile's tags itself from here — at every startup it makes sure <code>episeerr_select</code> and the internal <code>episeerr_delay</code> tag are attached to whichever profile you created above, and <em>only</em> those two.</p>
+
             <div class="card bg-light mt-3">
                 <div class="card-body">
-                    <p class="mb-1"><strong>For rule-managed shows</strong> (episeerr_rulename tags), a separate delay profile is optional but recommended so Sonarr doesn't grab episodes before Episeerr's GET rule fires:</p>
-                    <pre class="bg-dark text-light p-2 mb-0"><code>Name: Episeerr Managed
-Usenet/Torrent Delay: 999999 minutes
-Tags: episeerr_[each_rule_name]</code></pre>
+                    <p class="mb-1"><strong>Tagging a series directly with a rule tag</strong> (<code>episeerr_rulename</code>, or <code>episeerr_default</code> - it behaves exactly like a rule tag, just resolved to whichever rule is currently your default) skips this hold entirely - rule tags are deliberately <em>not</em> bound to the delay profile, so downloads for shows Episeerr has already processed aren't delayed forever. That's fine as long as Episeerr is running when you apply the tag. If there's any chance it might be down at that moment, pair the rule tag with <code>episeerr_delay</code> instead of adding a second delay profile:</p>
+                    <pre class="bg-dark text-light p-2 mb-0"><code>Tags on the series: episeerr_[rule_name] + episeerr_delay
+(or) episeerr_default + episeerr_delay</code></pre>
+                    <p class="mb-0 mt-2 small text-muted">Episeerr removes <code>episeerr_delay</code> itself once it actually processes the series — right away if it's up, or on its next startup check if it wasn't.</p>
                 </div>
             </div>
         </div>

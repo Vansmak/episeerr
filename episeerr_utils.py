@@ -355,6 +355,72 @@ def get_tag_mapping():
         logger.error(f"Error getting tag mapping: {str(e)}")
         return {}
 
+
+def resolve_rule_from_tags(series_tags, tag_mapping, config):
+    """
+    Given a series' current Sonarr tags, figure out what Episeerr should do
+    with it. Shared by the live SeriesAdd webhook handler and reconcile.py's
+    episeerr_delay sweep so the two can never disagree about what a tag
+    combination means.
+
+    Args:
+        series_tags: list of tag IDs (int) or labels (str, webhook format)
+        tag_mapping: {tag_id: tag_label} from get_tag_mapping()
+        config: loaded Episeerr config (for rule lookups + default_rule)
+
+    Returns:
+        (assigned_rule: str|None, is_select_request: bool)
+        - is_select_request=True: episeerr_select present, ignore assigned_rule
+        - assigned_rule set: either a direct episeerr_<rulename> match, or
+          episeerr_default resolved through config['default_rule'] (dynamic -
+          follows whichever rule is currently flagged default, not a rule
+          literally named "default")
+        - both falsy: no recognized episeerr tag on this series
+    """
+    reverse_tag_mapping = {label.lower(): tag_id for tag_id, label in tag_mapping.items()}
+
+    for tag_item in series_tags:
+        if isinstance(tag_item, int):
+            tag_label = tag_mapping.get(tag_item, '').lower()
+        elif isinstance(tag_item, str):
+            tag_label = tag_item.lower()
+            if tag_label not in reverse_tag_mapping:
+                logger.warning(f"Tag label '{tag_item}' not found in Sonarr tags")
+                continue
+        else:
+            logger.error(f"Unexpected tag type: {tag_item} (type: {type(tag_item)})")
+            continue
+
+        if not tag_label or not tag_label.startswith('episeerr_'):
+            continue
+
+        rule_name = tag_label.replace('episeerr_', '')
+
+        if rule_name == 'select':
+            logger.info("Detected episeerr_select tag -> selection workflow")
+            return None, True
+
+        if rule_name == 'default':
+            default_rule_name = config.get('default_rule', 'default')
+            if default_rule_name in config.get('rules', {}):
+                logger.info(f"Detected episeerr_default tag -> resolved to current default rule '{default_rule_name}'")
+                return default_rule_name, False
+            logger.warning(f"episeerr_default tag present but default rule '{default_rule_name}' missing from config")
+            return None, False
+
+        # Direct rule tag - case-insensitive lookup
+        actual_rule_name = next(
+            (rn for rn in config.get('rules', {}).keys() if rn.lower() == rule_name.lower()), None
+        )
+        if actual_rule_name:
+            logger.info(f"Detected direct rule tag: episeerr_{rule_name} -> matched rule '{actual_rule_name}'")
+            return actual_rule_name, False
+
+        logger.warning(f"Ignoring unknown rule tag: episeerr_{rule_name} (available: {list(config.get('rules', {}).keys())})")
+
+    return None, False
+
+
 def get_episeerr_delay_profile_id():
     """
     Find the custom delay profile that should contain episeerr tags.
@@ -410,14 +476,20 @@ def update_delay_profile_with_control_tags():
     - episeerr_select
     - episeerr_delay
 
-    episeerr_default is deliberately NOT bound here: it's the shipped
-    "default" rule's own tag, same as episeerr_one_at_a_time or any other
-    rule tag - not a transient workflow marker. Binding it to the delay
-    profile would permanently block Sonarr's automatic RSS grabs for every
-    series left on the default rule, well past initial processing.
+    episeerr_default is deliberately NOT bound here: for processing purposes
+    it behaves just like any other episeerr_<rulename> tag - resolved
+    dynamically through config['default_rule'] instead of a literal rule
+    named "default" (see resolve_rule_from_tags), then swapped for the real
+    resolved rule's tag via sync_rule_tag_to_sonarr, same as any direct rule
+    tag. But it's still a rule tag, not a workflow marker: binding it to the
+    delay profile would permanently block Sonarr's automatic RSS grabs for
+    every series left on the default rule, well past initial processing.
+    If you want a series protected against Episeerr being down at the
+    moment it's tagged, pair episeerr_default (or any rule tag) with
+    episeerr_delay manually - see reconcile.check_delay_tagged_series().
 
     Rule tags (episeerr_default, episeerr_one_at_a_time, episeerr_get1keepseason,
-    etc.) are NOT included to allow immediate downloads after processing.
+    etc.) are NOT included, to allow immediate downloads after processing.
 
     Returns:
         bool: True if successful, False otherwise
@@ -444,8 +516,8 @@ def update_delay_profile_with_control_tags():
         control_tags = set()
 
         # Ensure episeerr_default exists and stays populated (used elsewhere,
-        # e.g. check_and_cancel_unmonitored_downloads) but is NOT bound to the
-        # delay profile - it's a real rule tag, not a workflow marker.
+        # e.g. resolve_rule_from_tags) but is NOT bound to the delay profile -
+        # it's a real rule tag, not a workflow marker.
         create_episeerr_default_tag()
 
         # 1. episeerr_select
@@ -667,7 +739,7 @@ def remove_all_episeerr_tags(series_id):
         return False
 
 
-def validate_series_tag(series_id, expected_rule, series_data=None):
+def validate_series_tag(series_id, expected_rule, series_data=None, config=None):
     """
     Check if series tag matches expected rule in config.
     Handles multiple episeerr_* tags (logs error, auto-fixes to config rule).
@@ -676,6 +748,11 @@ def validate_series_tag(series_id, expected_rule, series_data=None):
         series_id: Sonarr series ID
         expected_rule: Rule name from config
         series_data: Pre-fetched series dict (avoids redundant API call in bulk loops)
+        config: Episeerr config, needed to resolve episeerr_default through
+            config['default_rule'] (see resolve_rule_from_tags). Falls back to
+            treating 'default' as a literal rule name if omitted - only
+            correct for installs where the default rule actually is named
+            "default", so pass config when you have it.
 
     Returns:
         tuple: (matches: bool, actual_tag_rule: str or None)
@@ -684,9 +761,9 @@ def validate_series_tag(series_id, expected_rule, series_data=None):
         series = series_data if series_data is not None else get_series_from_sonarr(series_id)
         if not series:
             return (False, None)
-        
+
         tag_mapping = get_tag_mapping()
-        
+
         # Find all episeerr_* tags (excluding special ones)
         episeerr_tags = []
         for tag_id in series.get('tags', []):
@@ -694,9 +771,16 @@ def validate_series_tag(series_id, expected_rule, series_data=None):
             if tag_name.startswith('episeerr_'):
                 rule_name = tag_name.replace('episeerr_', '')
                 # Skip select - transient workflow marker, not a rule tag.
-                # 'default' IS a real rule tag (the shipped default rule).
-                if rule_name != 'select':
-                    episeerr_tags.append(rule_name)
+                # 'default' IS a real rule tag (the shipped default rule),
+                # but resolved dynamically through config['default_rule']
+                # rather than treated as a literal rule name - same as
+                # resolve_rule_from_tags, so a renamed default rule is still
+                # recognized correctly here.
+                if rule_name == 'select':
+                    continue
+                if rule_name == 'default' and config is not None:
+                    rule_name = config.get('default_rule', 'default')
+                episeerr_tags.append(rule_name)
         
         # No rule tags found
         if len(episeerr_tags) == 0:
@@ -755,7 +839,7 @@ def reconcile_series_drift(series_id, config, series_data=None):
             break
 
     if config_rule:
-        matches, actual_tag_rule = validate_series_tag(series_id, config_rule, series_data=series_data)
+        matches, actual_tag_rule = validate_series_tag(series_id, config_rule, series_data=series_data, config=config)
         if matches:
             return config_rule, False
 
@@ -780,38 +864,245 @@ def reconcile_series_drift(series_id, config, series_data=None):
             return config_rule, False
 
     else:
-        # Series not in config — check for an orphaned episeerr tag in Sonarr
+        # Series not in config — check for an orphaned episeerr tag in Sonarr.
+        # Uses the same resolution as the live SeriesAdd webhook and the
+        # episeerr_delay sweep (resolve_rule_from_tags) so an episeerr_default
+        # tag resolves through config['default_rule'] here too, instead of
+        # only matching a rule literally named "default".
         series = series_data if series_data is not None else get_series_from_sonarr(series_id)
         if not series:
             return None, False
 
         tag_mapping = get_tag_mapping()
-        for tag_id in series.get('tags', []):
-            tag_name = tag_mapping.get(tag_id, '').lower()
-            if not tag_name.startswith('episeerr_'):
-                continue
-            rule_name = tag_name.replace('episeerr_', '')
-            if rule_name == 'select':
-                continue
-            actual_rule = next(
-                (rn for rn in config['rules'] if rn.lower() == rule_name), None
-            )
-            if actual_rule:
-                config['rules'][actual_rule].setdefault('series', {})[series_id_str] = {
-                    'activity_date': int(_time.time())
-                }
-                logger.info(
-                    f"Orphaned: series {series_id} added to '{actual_rule}' via Sonarr tag"
-                )
-                return actual_rule, True
-            else:
-                logger.warning(
-                    f"Orphaned tag '{tag_name}' on series {series_id} "
-                    f"but rule '{rule_name}' not in config"
-                )
-                return None, False
+        actual_rule, is_select_request = resolve_rule_from_tags(
+            series.get('tags', []), tag_mapping, config
+        )
+        if is_select_request or not actual_rule:
+            return None, False
 
-        return None, False
+        config['rules'][actual_rule].setdefault('series', {})[series_id_str] = {
+            'activity_date': int(_time.time())
+        }
+        logger.info(f"Orphaned: series {series_id} added to '{actual_rule}' via Sonarr tag")
+        return actual_rule, True
+
+
+def cancel_queued_downloads_for_series(series_id):
+    """Remove any queued/downloading Sonarr grabs for a series - used before
+    applying initial rule selection to a series that may have started
+    grabbing everything while episeerr_delay's hold was somehow bypassed or
+    already expired (e.g. Episeerr was down long enough that the delay
+    profile's own timer ran out before this caught it)."""
+    try:
+        headers = get_sonarr_headers()
+        resp = http.get(f"{SONARR_URL}/api/v3/queue",
+                         headers=headers, params={'seriesId': series_id, 'pageSize': 200}, timeout=15)
+        if not resp.ok:
+            logger.warning(f"Failed to get Sonarr queue for series {series_id}: {resp.status_code}")
+            return 0
+        records = resp.json().get('records', [])
+        cancelled = 0
+        for record in records:
+            queue_id = record.get('id')
+            if not queue_id:
+                continue
+            del_resp = http.delete(
+                f"{SONARR_URL}/api/v3/queue/{queue_id}",
+                headers=headers,
+                params={'removeFromClient': 'true', 'blocklist': 'false'},
+                timeout=15,
+            )
+            if del_resp.ok:
+                cancelled += 1
+            else:
+                logger.warning(f"Failed to cancel queue item {queue_id} for series {series_id}: {del_resp.status_code}")
+        if cancelled:
+            logger.info(f"Cancelled {cancelled} queued download(s) for series {series_id}")
+        return cancelled
+    except Exception as e:
+        logger.error(f"Error cancelling queued downloads for series {series_id}: {e}")
+        return 0
+
+
+def ensure_series_tracked_under_rule(series_id, rule_name, config):
+    """
+    First-time bookkeeping for a series newly assigned to a rule: add it to
+    config['rules'][rule_name]['series'] and sync the actual episeerr_<rule>
+    tag to Sonarr. No-op if already tracked there. Mutates config in place;
+    caller doesn't need to save it separately - this saves it itself only
+    when it actually adds the series (matches the original inline behavior).
+    """
+    series_id_str = str(series_id)
+    target_rule = config['rules'][rule_name]
+    target_rule.setdefault('series', {})
+    series_dict = target_rule['series']
+
+    if series_id_str in series_dict:
+        return
+
+    from episeerr import save_config
+    series_dict[series_id_str] = {'activity_date': None}
+    save_config(config)
+    try:
+        sync_rule_tag_to_sonarr(series_id, rule_name)
+        logger.info(f"Synced tag episeerr_{rule_name} for series {series_id}")
+    except Exception as e:
+        logger.error(f"Tag sync failed for series {series_id}: {e}")
+
+
+def apply_initial_rule_selection(series_id, series_title, rule_name, config, starting_season=1):
+    """
+    Apply a rule's initial episode selection to a series newly under
+    Episeerr's management: ensure it's tracked under the rule, process
+    always_have, monitor + optionally search the get_type/get_count
+    selection, then release the episeerr_delay hold if present so future
+    downloads for this series aren't delayed forever.
+
+    Shared by two callers so they can never drift out of sync:
+    - webhooks.py's live SeriesAdd handler (the normal, fast path)
+    - reconcile.py's startup sweep for series still carrying episeerr_delay,
+      which only happens when that live webhook was missed entirely (down,
+      restarting) - the delay tag is the unambiguous signal for that, since
+      the live path always removes it once it finishes.
+
+    Returns True if selection was applied without a hard failure (individual
+    monitor/search/tag-removal API errors are logged, not raised).
+    """
+    try:
+        ensure_series_tracked_under_rule(series_id, rule_name, config)
+        headers = get_sonarr_headers()
+        rule_config = config['rules'][rule_name]
+        get_type = rule_config.get('get_type', 'episodes')
+        get_count = rule_config.get('get_count', 1)
+        action_option = rule_config.get('action_option', 'monitor')
+        series_id_str = str(series_id)
+
+        # Process always_have FIRST (additive on top of get_type, runs after unmonitor)
+        always_have = rule_config.get('always_have', '')
+        skip_get_count = False
+        if always_have:
+            try:
+                import media_processor
+                media_processor.process_always_have(series_id, always_have, starting_season=starting_season)
+            except Exception as e:
+                logger.error(f"always_have processing failed for series {series_id}: {e}")
+
+            # If process_always_have set any season to held, suppress get_count processing
+            # (mirrors the activation gate in process_episodes_for_webhook)
+            from episeerr import load_config as _load_config
+            _fresh = _load_config()
+            _series_data = _fresh.get('rules', {}).get(rule_name, {}).get('series', {}).get(series_id_str, {})
+            if any(v == 'held' for v in _series_data.get('activation_seasons', {}).values()):
+                skip_get_count = True
+                logger.info(f"Series {series_id} has held season(s) - skipping get_count processing")
+
+        if not skip_get_count:
+            logger.info(f"Executing rule '{rule_name}' with get_type '{get_type}', get_count '{get_count}' starting from Season {starting_season}")
+
+            episodes_response = http.get(f"{SONARR_URL}/api/v3/episode?seriesId={series_id}", headers=headers)
+            if not episodes_response.ok:
+                logger.error(f"Failed to get episodes for series {series_id}: {episodes_response.text}")
+                return False
+
+            all_episodes = episodes_response.json()
+            requested_season_episodes = sorted(
+                [ep for ep in all_episodes if ep.get('seasonNumber') == starting_season],
+                key=lambda x: x.get('episodeNumber', 0)
+            )
+
+            if not requested_season_episodes:
+                logger.warning(f"No Season {starting_season} episodes found for {series_title}")
+            else:
+                episodes_to_monitor = []
+
+                if get_type == 'all':
+                    episodes_to_monitor = [
+                        ep['id'] for ep in all_episodes
+                        if ep.get('seasonNumber') >= starting_season
+                    ]
+                    logger.info(f"Monitoring all episodes from Season {starting_season} onward")
+
+                elif get_type == 'seasons':
+                    num_seasons = get_count or 1
+                    episodes_to_monitor = [
+                        ep['id'] for ep in all_episodes
+                        if starting_season <= ep.get('seasonNumber') < (starting_season + num_seasons)
+                    ]
+                    logger.info(f"Monitoring {num_seasons} season(s) starting from Season {starting_season} ({len(episodes_to_monitor)} episodes)")
+
+                else:  # episodes
+                    try:
+                        num_episodes = get_count or 1
+                        episodes_to_monitor = [ep['id'] for ep in requested_season_episodes[:num_episodes]]
+                        logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes of Season {starting_season}")
+                    except (ValueError, TypeError):
+                        episodes_to_monitor = [requested_season_episodes[0]['id']] if requested_season_episodes else []
+                        logger.warning("Invalid get_count, defaulting to first episode")
+
+                if episodes_to_monitor:
+                    monitor_response = http.put(
+                        f"{SONARR_URL}/api/v3/episode/monitor",
+                        headers=headers,
+                        json={"episodeIds": episodes_to_monitor, "monitored": True}
+                    )
+
+                    if monitor_response.ok:
+                        logger.info(f"✓ Monitored {len(episodes_to_monitor)} episodes for {series_title}")
+
+                        if action_option == 'search':
+                            if get_type == 'seasons':
+                                first_ep_response = http.get(
+                                    f"{SONARR_URL}/api/v3/episode/{episodes_to_monitor[0]}", headers=headers
+                                )
+                                if first_ep_response.ok:
+                                    season_number = first_ep_response.json().get('seasonNumber')
+                                    logger.info(f"Searching for season pack for Season {season_number}")
+                                    search_json = {"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": season_number}
+                                else:
+                                    search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
+                            else:
+                                search_json = {"name": "EpisodeSearch", "episodeIds": episodes_to_monitor}
+
+                            search_response = http.post(f"{SONARR_URL}/api/v3/command", headers=headers, json=search_json)
+                            if search_response.ok:
+                                search_type = "season pack" if get_type == 'seasons' else "episodes"
+                                logger.info(f"✓ Started search for {search_type}")
+                            else:
+                                logger.error(f"Failed to search: {search_response.text}")
+                    else:
+                        logger.error(f"Failed to monitor episodes: {monitor_response.text}")
+                else:
+                    logger.warning(f"No episodes to monitor for {series_title}")
+
+        # Remove episeerr_delay tag to allow immediate downloads going forward
+        try:
+            delay_tag_id = get_or_create_rule_tag_id('delay')
+            if delay_tag_id:
+                series_refresh_resp = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+                if series_refresh_resp.ok:
+                    fresh_series = series_refresh_resp.json()
+                    current_tags = fresh_series.get('tags', [])
+                    if delay_tag_id in current_tags:
+                        current_tags.remove(delay_tag_id)
+                        fresh_series['tags'] = current_tags
+                        update_resp = http.put(f"{SONARR_URL}/api/v3/series", headers=headers, json=fresh_series)
+                        if update_resp.ok:
+                            logger.info("✓ Removed episeerr_delay tag - downloads can proceed immediately")
+                        else:
+                            logger.error(f"Failed to remove delay tag: {update_resp.text}")
+                    else:
+                        logger.debug("episeerr_delay tag not present (already removed or never added)")
+                else:
+                    logger.error(f"Failed to refresh series data: {series_refresh_resp.status_code}")
+            else:
+                logger.warning("Could not get delay tag ID")
+        except Exception as e:
+            logger.error(f"Error removing delay tag: {str(e)}")
+
+        return True
+    except Exception as e:
+        logger.error(f"apply_initial_rule_selection error for series {series_id}: {str(e)}", exc_info=True)
+        return False
 
 
 def unmonitor_series(series_id, headers):
