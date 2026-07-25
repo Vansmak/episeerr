@@ -248,88 +248,97 @@ def approve_deletions(episode_ids, sonarr_delete_func):
     Returns:
         dict with success count and any errors
     """
+    # Only hold pending_lock while touching the on-disk queue itself. The delete
+    # calls below can recurse back into add_to_pending_deletions() (e.g. if a
+    # deletion turns out to still be dry-run for some other reason) which also
+    # takes pending_lock — that lock is a plain, non-reentrant Lock, so calling
+    # sonarr_delete_func() while still holding it would deadlock the request
+    # thread (and, with it, every other thread waiting on the same lock).
     with pending_lock:
         pending_list = load_pending_deletions()
-        deleted_count = 0
-        errors = []
-        
+
         # Group episodes by series for batched deletion
         episodes_by_series = defaultdict(list)
-        
-        # Find all episodes to delete and group by series
         for series in pending_list:
             series_title = series['series_title']
             for season_data in list(series['seasons'].values()):
                 for episode in list(season_data['episodes']):
                     if episode['episode_id'] in episode_ids:
                         episodes_by_series[series_title].append(episode)
-        
-        # Delete episodes in batches per series (MORE EFFICIENT!)
-        for series_title, episodes in episodes_by_series.items():
-            try:
-                # Build the episode dicts delete_episodes_immediately() expects
-                # (id, episodeFileId, seasonNumber, episodeNumber, title), and
-                # grab the series_id off any one of them — they're all the same
-                # series since we grouped by series_title above.
-                series_id = None
-                episode_list = []
+
+    deleted_count = 0
+    errors = []
+
+    # Delete episodes in batches per series (MORE EFFICIENT!)
+    for series_title, episodes in episodes_by_series.items():
+        try:
+            # Build the episode dicts delete_episodes_immediately() expects
+            # (id, episodeFileId, seasonNumber, episodeNumber, title), and
+            # grab the series_id off any one of them — they're all the same
+            # series since we grouped by series_title above.
+            series_id = None
+            episode_list = []
+            for episode in episodes:
+                episode_data = episode['episode_data']
+                episode_file_id = episode_data.get('episodeFile', {}).get('id')
+                if not episode_file_id:
+                    errors.append(f"No file ID for episode {episode['episode_id']}")
+                    continue
+                if series_id is None:
+                    series_id = episode_data.get('seriesId')
+                episode_list.append({
+                    'id': episode_data.get('id'),
+                    'episodeFileId': episode_file_id,
+                    'seasonNumber': episode_data.get('seasonNumber'),
+                    'episodeNumber': episode_data.get('episodeNumber'),
+                    'title': episode_data.get('title'),
+                })
+
+            if episode_list:
+                # ONE DELETE CALL FOR ALL EPISODES IN THIS SERIES.
+                # force=True bypasses BOTH global and rule-level dry-run:
+                # approving from the pending queue is the explicit human
+                # confirmation to delete now. (rule_dry_run=False alone isn't
+                # enough — global dry_run_mode defaults to True and would
+                # still route this back into the queueing path.)
+                logger.info(f"Deleting {len(episode_list)} episodes from {series_title} in batch")
+                sonarr_delete_func(episode_list, series_id, series_title,
+                                    reason="Approved from pending deletions",
+                                    rule_dry_run=False, force=True)
+                deleted_count += len(episode_list)
+
+                # Log individual episodes
                 for episode in episodes:
                     episode_data = episode['episode_data']
-                    episode_file_id = episode_data.get('episodeFile', {}).get('id')
-                    if not episode_file_id:
-                        errors.append(f"No file ID for episode {episode['episode_id']}")
-                        continue
-                    if series_id is None:
-                        series_id = episode_data.get('seriesId')
-                    episode_list.append({
-                        'id': episode_data.get('id'),
-                        'episodeFileId': episode_file_id,
-                        'seasonNumber': episode_data.get('seasonNumber'),
-                        'episodeNumber': episode_data.get('episodeNumber'),
-                        'title': episode_data.get('title'),
-                    })
+                    logger.info(f"✓ Deleted: {series_title} S{episode_data['seasonNumber']:02d}E{episode_data['episodeNumber']:02d}")
 
-                if episode_list:
-                    # ONE DELETE CALL FOR ALL EPISODES IN THIS SERIES.
-                    # rule_dry_run is forced False: approving from the pending
-                    # queue is the explicit human confirmation to delete now,
-                    # regardless of the dry-run setting that queued it.
-                    logger.info(f"Deleting {len(episode_list)} episodes from {series_title} in batch")
-                    sonarr_delete_func(episode_list, series_id, series_title,
-                                        reason="Approved from pending deletions",
-                                        rule_dry_run=False)
-                    deleted_count += len(episode_list)
+        except Exception as e:
+            error_msg = f"Failed to delete episodes from {series_title}: {str(e)}"
+            errors.append(error_msg)
+            logger.error(error_msg)
 
-                    # Log individual episodes
-                    for episode in episodes:
-                        episode_data = episode['episode_data']
-                        logger.info(f"✓ Deleted: {series_title} S{episode_data['seasonNumber']:02d}E{episode_data['episodeNumber']:02d}")
-
-            except Exception as e:
-                error_msg = f"Failed to delete episodes from {series_title}: {str(e)}"
-                errors.append(error_msg)
-                logger.error(error_msg)
-        
-        # Remove deleted episodes from pending list
+    # Remove deleted episodes from pending list
+    with pending_lock:
+        pending_list = load_pending_deletions()
         for series in pending_list:
             for season_key, season_data in list(series['seasons'].items()):
                 season_data['episodes'] = [
-                    ep for ep in season_data['episodes'] 
+                    ep for ep in season_data['episodes']
                     if ep['episode_id'] not in episode_ids
                 ]
                 # Remove empty seasons
                 if not season_data['episodes']:
                     del series['seasons'][season_key]
-        
+
         # Remove empty series
         pending_list = [s for s in pending_list if s['seasons']]
-        
+
         save_pending_deletions(pending_list)
-        
-        return {
-            'deleted_count': deleted_count,
-            'errors': errors
-        }
+
+    return {
+        'deleted_count': deleted_count,
+        'errors': errors
+    }
 
 
 def reject_deletions(episode_ids):

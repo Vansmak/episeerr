@@ -401,24 +401,9 @@ def setup():
             if isinstance(config.get('config'), dict):
                 saved_values.update(config['config'])
         
-        # Check actual DB enabled flag (without the enabled=1 filter so we can
-        # show the toggle even when the service is currently disabled).
-        _is_enabled = True
-        try:
-            import sqlite3 as _sql
-            from settings_db import DB_PATH as _DB
-            _row = _sql.connect(_DB).execute(
-                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
-                (integration.service_name,)
-            ).fetchone()
-            if _row is not None:
-                _is_enabled = bool(_row[0])
-        except Exception:
-            pass
-
         integration_configs[integration.service_name] = {
             'connected': config is not None,
-            'enabled': _is_enabled,
+            'enabled': _svc_enabled(integration.service_name),
             'url': saved_values.get('url'),
             'apikey': saved_values.get('apikey'),
             'integration': integration,
@@ -539,6 +524,82 @@ def test_connection(service):
         return jsonify({'status': 'error', 'message': f'Connection failed: {str(e)}'}), 400
 
 # Replace save_service_config in episeerr.py with this:
+
+def _create_service_row_from_env(service_type, enabled):
+    """Create a services row from env-var fallback config, if any exists.
+
+    Used by toggle_service_enabled() when a service was configured entirely
+    via env vars and never saved through the Setup UI, so it has no DB row
+    for the toggle to UPDATE. Returns True if a row was created, False if
+    there's no env config to seed it with (nothing to toggle).
+    """
+    if service_type == 'tmdb':
+        apikey = os.getenv('TMDB_API_KEY')
+        if not apikey:
+            return False
+        save_service('tmdb', 'default', '', apikey, enabled=enabled)
+        return True
+
+    from settings_db import (
+        get_sonarr_config, get_radarr_config, get_jellyfin_config,
+        get_plex_config, get_tautulli_config, get_emby_config,
+    )
+    getters = {
+        'sonarr': get_sonarr_config,
+        'radarr': get_radarr_config,
+        'jellyfin': get_jellyfin_config,
+        'plex': get_plex_config,
+        'tautulli': get_tautulli_config,
+        'emby': get_emby_config,
+    }
+    getter = getters.get(service_type)
+    if not getter:
+        return False
+
+    cfg = getter()
+    if not cfg or not cfg.get('url'):
+        return False
+
+    extra_config = {k: v for k, v in cfg.items() if k not in ('url', 'api_key')}
+    save_service(service_type, 'default', cfg['url'], cfg.get('api_key'),
+                 config=extra_config or None, enabled=enabled)
+    return True
+
+
+@app.route('/api/toggle-service/<service>', methods=['POST'])
+def toggle_service_enabled(service):
+    """Enable or disable a service without changing its config."""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        conn = _sql.connect(_DB)
+        result = conn.execute(
+            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE service_type = ? AND name = 'default'",
+            (1 if enabled else 0, service)
+        )
+        conn.commit()
+        conn.close()
+
+        if result.rowcount == 0:
+            # No row yet — likely configured only via env vars and never
+            # saved through Setup. Seed a row from that env config so the
+            # toggle has something to persist instead of silently 404ing.
+            if not _create_service_row_from_env(service, enabled):
+                return jsonify({
+                    'ok': False,
+                    'error': f'No configuration found for {service!r}. Save its settings first.'
+                }), 404
+
+        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        reload_module_configs()
+        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
+    except Exception as exc:
+        app.logger.error("toggle_service_enabled %s: %s", service, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
 
 # Replace save_service_config in episeerr.py:
 

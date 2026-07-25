@@ -362,8 +362,12 @@ class TautulliIntegration(ServiceIntegration):
               Trigger: Playback Start  (optional — enables held activation)
               URL: http://<episeerr-host>:5002/api/integration/tautulli/webhook
 
-            For playback start support, add "notification_type": "{notification_type}"
-            to your Tautulli JSON template so events can be distinguished.
+            For playback start support, add a hardcoded literal
+            "notification_type": "playback start" (no curly braces) to the
+            Playback Start agent's JSON template — Tautulli has no
+            {notification_type} placeholder, so a template using braces
+            there sends back the literal unsubstituted text and this guard
+            never fires. Leave the field out of the Watched agent's template.
             """
             logger.info("[Tautulli] Webhook received")
             data = request.get_json(silent=True) or {}
