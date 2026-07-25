@@ -1381,6 +1381,12 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                 series_id, season_number, episode_number, rule, series_title, all_episodes
             )
 
+        # ── Series ended: unmonitor season + series (opt-in) ────────────────
+        if rule.get('unmonitor_on_series_ended', False) and not skip_rule_processing:
+            _unmonitor_if_series_ended(
+                series_id, season_number, series_title
+            )
+
         logger.info(f"✅ Webhook processing complete for {series_id}")
 
     except Exception as e:
@@ -1473,6 +1479,70 @@ def _advance_sequential_if_finale(series_id, season_number, episode_number, rule
 
     except Exception as e:
         logger.error(f"_advance_sequential_if_finale error: {e}", exc_info=True)
+
+
+def _unmonitor_if_series_ended(series_id, season_number, series_title):
+    """
+    If Sonarr reports this series as ended (status=='ended'), unmonitor the
+    season just watched and the series itself. Idempotent (skips PUT calls
+    when already unmonitored) and scoped only to the watched season — never
+    touches other seasons.
+    """
+    try:
+        headers = {'X-Api-Key': SONARR_API_KEY}
+        sr = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=5)
+        if not sr.ok:
+            logger.error(
+                f"Series-ended check: failed to fetch series {series_id}: {sr.status_code}"
+            )
+            return
+
+        series = sr.json()
+        if str(series.get('status', '')).lower() != 'ended':
+            return
+
+        title = series_title or series.get('title') or f"Series {series_id}"
+        seasons = series.get('seasons', [])
+        season = next((s for s in seasons if s.get('seasonNumber') == season_number), None)
+
+        changed = False
+
+        if season and season.get('monitored', False):
+            season['monitored'] = False
+            changed = True
+        elif not season:
+            logger.warning(
+                f"Series ended: season {season_number} not found on series {series_id}, "
+                f"skipping season unmonitor"
+            )
+
+        series_needs_unmonitor = series.get('monitored', True)
+
+        if changed or series_needs_unmonitor:
+            series['monitored'] = False
+            put_resp = http.put(
+                f"{SONARR_URL}/api/v3/series/{series_id}",
+                headers=headers,
+                json=series
+            )
+            if not put_resp.ok:
+                logger.error(
+                    f"Series ended: failed to unmonitor series {series_id}/season "
+                    f"{season_number}: {put_resp.status_code} {put_resp.text}"
+                )
+                return
+            logger.info(
+                f"🔒 Series ended: unmonitored S{season_number} and series for "
+                f"'{title}' (id {series_id})"
+            )
+        else:
+            logger.info(
+                f"Series ended: '{title}' (id {series_id}) S{season_number} and series "
+                f"already unmonitored, no-op"
+            )
+
+    except Exception as e:
+        logger.error(f"_unmonitor_if_series_ended error: {e}", exc_info=True)
 
 
 # ============================================================================
