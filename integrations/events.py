@@ -87,20 +87,42 @@ PROVIDER_PRIORITY = {11: 0, 13: 1}
 # and any dedicated sports/cable network name is trusted.
 #
 # Local broadcast affiliates (NBC/CBS/ABC/FOX/CW/PBS) are the one category
-# still excluded, by name here rather than allowlisted above: they run
-# different regional programming most of the time and only sometimes happen
-# to be showing a given game's national feed. A name-search hit on "NBC" just
-# means Joe's local NBC affiliate channel exists -- not that it's airing
-# *this* game right now. Dispatcharr has no real EPG behind these channels to
-# verify that (same root limitation noted in the file header). Treating a
-# broadcast affiliate as "already carried" produced a real false negative: an
-# MLB doubleheader nightcap on NBC/Peacock never got a channel created for it,
+# still excluded from a bare name match, by name here rather than allowlisted
+# above: they run different regional programming most of the time and only
+# sometimes happen to be showing a given game's national feed. A name-search
+# hit on "NBC" just means Joe's local NBC affiliate channel exists -- not
+# that it's airing *this* game right now. Treating a broadcast affiliate as
+# "already carried" on name alone produced a real false negative: an MLB
+# doubleheader nightcap on NBC/Peacock never got a channel created for it,
 # silently, every tick, with no indication to Joe that it had been
 # suppressed. RSNs and national cable/sports networks don't have this
 # ambiguity -- they're single-purpose sports channels, not general
 # broadcasters, so a name match is a reliable signal on its own.
+#
+# For these ambiguous affiliates, real Dispatcharr EPG data (Joe's locals are
+# Gracenote/SD-backed, unlike this pipeline's own synthetic channels -- see
+# file header) is used instead of a name match: _local_affiliate_airs_game()
+# checks the actual program title airing on Joe's own LA-market affiliate at
+# the game's exact start time. That's strictly additive over a bare name
+# match -- it can only turn a "not carried" into "carried" when the EPG
+# genuinely confirms it, never the reverse -- so it can't reintroduce the
+# NBC/Peacock false-negative above.
 AMBIGUOUS_BROADCAST_AFFILIATES = {
     "abc", "cbs", "nbc", "fox", "cw", "the cw", "pbs", "telemundo", "univision", "mynetworktv",
+}
+
+# Joe's own LA-market broadcast affiliates (see maintenance.sql Part 9 Step B
+# naming convention) -- only these have a real channel to cross-check against
+# an ambiguous national network name. Affiliates with no LA channel in his
+# locals lineup (PBS/Telemundo/Univision/MyNetworkTV) fall through to the
+# old skip-entirely behavior, unchanged.
+LOCAL_AFFILIATE_SEARCH = {
+    "fox": "Los Angeles: FOX",
+    "nbc": "Los Angeles: NBC",
+    "cbs": "Los Angeles: CBS",
+    "abc": "Los Angeles: ABC",
+    "cw": "Los Angeles: CW",
+    "the cw": "Los Angeles: CW",
 }
 
 ESPN_LEAGUE_PATH = {
@@ -369,6 +391,42 @@ def _find_carrying_channel(network: str) -> Optional[Dict]:
     return None
 
 
+def _find_local_affiliate_channel(network_name: str) -> Optional[Dict]:
+    """Look up Joe's own LA-market channel for an ambiguous national network
+    name (FOX/NBC/CBS/ABC/CW), if he has one in his locals lineup. Read-only,
+    same as _find_carrying_channel."""
+    search = LOCAL_AFFILIATE_SEARCH.get(network_name.lower())
+    if not search:
+        return None
+    items = _paged_results(_dispatcharr_request("GET", "/api/channels/channels/", params={"search": search}))
+    for c in items:
+        if (c.get("name") or "").startswith(search):
+            return c
+    return None
+
+
+def _local_affiliate_airs_game(channel: Dict, game: Dict) -> bool:
+    """Confirm via Dispatcharr's real EPG (Joe's locals carry actual
+    Gracenote/SD program data, unlike this pipeline's own synthetic channels)
+    that the program airing on this local affiliate at the game's exact start
+    time is this specific game -- not just a name-match guess."""
+    if not game.get("start_time"):
+        return False
+    resp = _dispatcharr_request(
+        "GET", "/api/epg/programs/search/",
+        params={"channel_id": channel["id"], "airing_at": game["start_time"]},
+    )
+    if not resp or not resp.ok:
+        return False
+    team_terms = [t.split()[-1].lower() for t in game.get("teams", []) if t]
+    league_kw = game.get("league", "").lower()
+    for prog in _paged_results(resp):
+        title = (prog.get("title") or "").lower()
+        if any(t in title for t in team_terms) or (league_kw and league_kw in title):
+            return True
+    return False
+
+
 def _format_matchup_name(game: Dict) -> str:
     time_str = ""
     if game.get("start_time"):
@@ -494,6 +552,13 @@ def _ensure_channel_for_game(cfg: Dict, game: Dict, registry: Dict[str, int]) ->
 
     for network_name in ordered_networks:
         if network_name.lower() in AMBIGUOUS_BROADCAST_AFFILIATES:
+            local_channel = _find_local_affiliate_channel(network_name)
+            if local_channel and _local_affiliate_airs_game(local_channel, game):
+                logger.info(
+                    f"[Events] {game['name']!r} confirmed via EPG on local affiliate "
+                    f"{local_channel.get('name')!r} -- not creating a duplicate"
+                )
+                return _info_result(local_channel)
             continue
         carrying = _find_carrying_channel(network_name)
         if carrying:
