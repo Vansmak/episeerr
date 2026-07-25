@@ -477,7 +477,7 @@ def get_server_activity():
         filepath = '/app/temp/data_from_server.json'
         if not os.path.exists(filepath):
             filepath = '/app/temp/data_from_tautulli.json'
-            
+
         with open(filepath, 'r') as file:
             data = json.load(file)
         
@@ -1509,9 +1509,14 @@ def load_global_settings():
                 settings['dry_run_mode'] = True
                 save_global_settings(settings)
                 logger.info("✓ Migrated global_settings.json - added dry_run_mode: true")
-            
-            
-            
+
+            # MIGRATION: hold automation + missed watch-event reconciliation (default: off)
+            if 'automation_held' not in settings:
+                settings.setdefault('automation_held', False)
+                settings.setdefault('reconcile_enabled', False)
+                save_global_settings(settings)
+                logger.info("✓ Migrated global_settings.json - added automation_held/reconcile settings")
+
             return settings
         else:
             # Default settings (already has dry_run_mode: True - good!)
@@ -1520,10 +1525,13 @@ def load_global_settings():
                 'cleanup_interval_hours': 6,
                 'dry_run_mode': True,
                 'auto_assign_new_series': False,
-                
+
                 'notifications_enabled': False,
                 'discord_webhook_url': '',
-                'episeerr_url': 'http://localhost:5002'
+                'episeerr_url': 'http://localhost:5002',
+
+                'automation_held': False,
+                'reconcile_enabled': False
             }
             save_global_settings(default_settings)
             return default_settings
@@ -1536,7 +1544,9 @@ def load_global_settings():
             'auto_assign_new_series': False,
             'notifications_enabled': False,
             'discord_webhook_url': '',
-            'episeerr_url': 'http://localhost:5002'
+            'episeerr_url': 'http://localhost:5002',
+            'automation_held': False,
+            'reconcile_enabled': False
         }
 
 def save_global_settings(settings):
@@ -3133,13 +3143,20 @@ def should_trigger_processing(current_progress, trigger_percentage):
 
 def main():
     """Main entry point - FIXED webhook vs cleanup logic"""
+    # Single choke point for every webhook AND every cleanup run (scheduled,
+    # manual, movie) - held automation means nothing downloads, unmonitors,
+    # or deletes anything, without needing a separate check in each caller.
+    if load_global_settings().get('automation_held', False):
+        logger.info("⏸️ Automation held - skipping webhook/cleanup processing")
+        return False
+
     # Check if this is a webhook call (has recent webhook data)
     series_name, season_number, episode_number, thetvdb_id, themoviedb_id = get_server_activity()
-    
+
     # ONLY process as webhook if this was called BY a webhook (not manual cleanup)
     # Add a flag or check timestamp to distinguish
     webhook_file = '/app/temp/data_from_server.json'
-    
+
     try:
         # Check if webhook file is recent (within last few minutes)
         if os.path.exists(webhook_file):
@@ -3149,7 +3166,7 @@ def main():
             is_recent_webhook = False
     except:
         is_recent_webhook = False
-    
+
     if series_name and is_recent_webhook:
         # Webhook mode - process the episode that was just watched
         series_id = get_series_id(series_name, thetvdb_id, themoviedb_id)

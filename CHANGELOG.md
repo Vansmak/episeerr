@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### ✨ New Features (from episeerr_dev)
+
+- **Hold Automation (Vacation Mode)** — a single toggle on the Scheduler / Global Settings page that pauses everything: webhook-triggered episode processing, scheduled/manual cleanup, and movie cleanup. Gated at the single choke point `media_processor.main()` already runs every webhook and cleanup call through, so grace/dormant inactivity rules simply don't fire while held — no more coming back from vacation to a show deleted because nobody watched it while you were away. (`media_processor.py`, `episeerr.py`, `templates/scheduler_admin.html`)
+- **Missed watch-event detection** — once at startup, Episeerr checks Plex/Jellyfin/Emby/Tautulli's own watch history for anything newer than what's on record, and — deliberately — does **not** replay it automatically. Every source has some gap between its own definition of "watched" and Episeerr's configured detection threshold, so an inferred replay could quietly do the wrong thing. Instead, anything found lands as a **pending watch event** (new section on the Pending Deletions page) for you to **Process** (run it through the exact same path a live webhook would have) or **Clear** (ignore it). Off by default (`reconcile_enabled`). (`reconcile.py`, `pending_watch_events.py`, `templates/pending_deletions.html`)
+- **`episeerr_delay` startup safety net** — a second, always-on startup check (no toggle, no inference involved) for any series still carrying the `episeerr_delay` tag, which can only happen if a live `SeriesAdd` webhook never got to process it (Episeerr was down at the time). Cancels anything Sonarr already grabbed while waiting, then runs the same rule logic the live webhook would have. (`reconcile.py`)
+- **`episeerr_default` tag now resolves dynamically** to whichever rule is currently set as your default (`config['default_rule']`), instead of only matching a rule literally named "default" — so renaming your default rule doesn't silently break tagging with `episeerr_default`. Otherwise behaves exactly like any other rule tag: not bound to a delay profile, swapped for the real resolved rule tag once processed. Pair it with `episeerr_delay` yourself (same as any rule tag) if there's a chance Episeerr might be down when you apply it.
+
+### 🐛 Bug Fixes (from episeerr_dev)
+
+- **Sonarr tag-based drift detection and orphan recovery didn't know about `episeerr_default`'s dynamic resolution** — `validate_series_tag()` and `reconcile_series_drift()`'s orphan-recovery branch each had their own older, separate tag-matching logic that only recognized a rule literally named "default." A series tagged `episeerr_default` on an install where the default rule had been renamed away from "default" would fail orphan recovery every single cleanup cycle, and drift-detection would never notice or correct it. Both now resolve through the same shared `resolve_rule_from_tags()` the live webhook handler and the `episeerr_delay` sweep already use, so all four reconciliation paths agree. (`episeerr_utils.py`)
+
+### 🔧 Internal (from episeerr_dev)
+
+- Extracted the ~200-line inline rule-processing block from the live Sonarr `SeriesAdd` webhook handler into shared `episeerr_utils` functions (`resolve_rule_from_tags`, `ensure_series_tracked_under_rule`, `apply_initial_rule_selection`) so the live webhook path, the `episeerr_delay` startup sweep, and drift detection can never drift apart from each other again. (`webhooks.py`, `episeerr_utils.py`)
+
+---
+
+## v3.7.18
+
 ### 🐛 Bug Fixes
 
 - **A Tautulli "Playback Start" webhook sent to the legacy `/webhook` route could delete the episode you just started playing** — same fix as episeerr_dev v3.7.16: the playback-start/held-activation guard now lives inside the shared `process_watch_event()` instead of only in the newer integration route's handler, so the legacy `/webhook` route (which calls `process_watch_event()` directly) is protected too. Previously a playback-start on a non-held series ran the full watched pipeline, which on a season finale with no `grace_watched` set could delete the file mid-playback. (`integrations/tautulli.py`, upstream #62)

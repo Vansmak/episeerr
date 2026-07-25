@@ -273,6 +273,26 @@
         <p class="mb-0 small">All movie cleanup operations are up to date.</p>
     </div>
     {% endif %}
+
+    <!-- ── PENDING WATCH EVENTS ──────────────────────────────────────────── -->
+    <hr class="my-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4><i class="fas fa-history me-2 text-secondary"></i>Pending Watch Events</h4>
+        <div>
+            <span class="text-muted small" id="watchEventsLastChecked"></span>
+            <button class="btn btn-secondary btn-sm ms-2" id="clearAllWatchEventsBtn" style="display:none;" onclick="clearAllWatchEvents()">
+                <i class="fas fa-times"></i> Clear All
+            </button>
+        </div>
+    </div>
+    <p class="text-muted small">
+        Found on Plex/Jellyfin/Emby/Tautulli's own watch history at startup, newer than what Episeerr has on record -
+        e.g. a webhook lost while Episeerr was down. Nothing here happened automatically: <strong>Process</strong> runs
+        it through the same path a live webhook would have; <strong>Clear</strong> just dismisses it.
+    </p>
+    <div id="watchEventsContainer">
+        <div class="text-muted small">Loading…</div>
+    </div>
 </div>
 
 <script>
@@ -511,6 +531,119 @@ function doRejectMovies(movieIds) {
     })
     .catch(err => alert('Error rejecting movies: ' + err.message));
 }
+
+// ── Pending Watch Events ──────────────────────────────────────────────────
+
+function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+}
+
+async function loadWatchEvents() {
+    const container = document.getElementById('watchEventsContainer');
+    const lastCheckedEl = document.getElementById('watchEventsLastChecked');
+    try {
+        const response = await fetch('/api/pending-watch-events');
+        const data = await response.json();
+        if (!data.success) {
+            container.innerHTML = `<div class="alert alert-danger">Error: ${escapeHtml(data.error || 'Unknown')}</div>`;
+            return;
+        }
+
+        if (data.last_checked) {
+            lastCheckedEl.textContent = `Last checked: ${new Date(data.last_checked * 1000).toLocaleString()}`;
+        }
+
+        const items = data.items || [];
+        document.getElementById('clearAllWatchEventsBtn').style.display = items.length ? '' : 'none';
+
+        if (!items.length) {
+            container.innerHTML = `
+                <div class="alert alert-success text-center py-4">
+                    <i class="fas fa-check-circle fa-2x mb-2"></i>
+                    <h5>No Pending Watch Events</h5>
+                    <p class="mb-0 small">Nothing found newer than Episeerr's records on the last startup check.</p>
+                </div>`;
+            return;
+        }
+
+        const rows = items.map(item => `
+            <tr id="watch-event-${item.id}">
+                <td><strong>${escapeHtml(item.series_title)}</strong></td>
+                <td>S${item.season}E${item.episode}</td>
+                <td><span class="badge bg-info">${escapeHtml(item.source)}</span></td>
+                <td>${escapeHtml(item.user || 'Unknown')}</td>
+                <td><small>${new Date(item.watched_at * 1000).toLocaleString()}</small></td>
+                <td><small>${new Date(item.detected_at * 1000).toLocaleString()}</small></td>
+                <td>
+                    <button class="btn btn-xs btn-success me-1" onclick="processWatchEvent('${item.id}')" title="Run as if the webhook came in">
+                        <i class="fas fa-play"></i> Process
+                    </button>
+                    <button class="btn btn-xs btn-secondary" onclick="clearWatchEvent('${item.id}')" title="Dismiss, do nothing">
+                        <i class="fas fa-times"></i> Clear
+                    </button>
+                </td>
+            </tr>`).join('');
+
+        container.innerHTML = `
+            <div class="table-responsive">
+                <table class="table table-dark table-hover table-sm">
+                    <thead>
+                        <tr>
+                            <th>Series</th><th>Episode</th><th>Source</th><th>User</th>
+                            <th>Watched around</th><th>Detected at</th><th style="width:170px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+    } catch (err) {
+        container.innerHTML = `<div class="alert alert-danger">Error loading pending watch events: ${escapeHtml(err.message)}</div>`;
+    }
+}
+
+function processWatchEvent(itemId) {
+    fetch(`/api/pending-watch-events/${itemId}/process`, {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadWatchEvents();
+            } else {
+                alert('Error: ' + (data.error || 'Unknown'));
+            }
+        })
+        .catch(err => alert('Error processing watch event: ' + err.message));
+}
+
+function clearWatchEvent(itemId) {
+    fetch(`/api/pending-watch-events/${itemId}/clear`, {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadWatchEvents();
+            } else {
+                alert('Error: ' + (data.error || 'Unknown'));
+            }
+        })
+        .catch(err => alert('Error clearing watch event: ' + err.message));
+}
+
+function clearAllWatchEvents() {
+    if (!confirm('Clear all pending watch events? This just dismisses them - nothing gets processed.')) return;
+    fetch('/api/pending-watch-events/clear-all', {method: 'POST'})
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                loadWatchEvents();
+            } else {
+                alert('Error: ' + (data.error || 'Unknown'));
+            }
+        })
+        .catch(err => alert('Error clearing watch events: ' + err.message));
+}
+
+document.addEventListener('DOMContentLoaded', loadWatchEvents);
 </script>
 
 <style>

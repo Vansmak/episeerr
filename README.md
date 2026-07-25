@@ -825,10 +825,11 @@ Episeerr intercepts series added to Sonarr via tags on the Sonarr webhook.
 | Tag | What happens |
 |-----|-------------|
 | `episeerr_<rulename>` | Processed immediately with that rule — GET/monitor applied, tag removed |
+| `episeerr_default` | Same as above, but resolves to whichever rule is currently set as your default (Rules page) instead of a specific named rule — otherwise behaves exactly like `episeerr_<rulename>` |
 | `episeerr_select` | Pending request created, delay profile holds all downloads until you confirm selections |
 | *(no tag, auto-assign on)* | Silently added to default rule, waits for first watch before doing anything |
 
-> **`episeerr_select` requires a Sonarr delay profile** to hold downloads until you make your selection — see [Episode Selection setup](#episode-selection) below.
+> **Only `episeerr_select` holds downloads via a Sonarr delay profile.** `episeerr_default` and any specific `episeerr_<rulename>` tag are both ordinary rule tags with no such hold — if Episeerr happens to be down at the exact moment you (or Seerr, or nzb360) apply one, nothing stops Sonarr's normal automatic search for however long Episeerr stays down. It's optional, but **good practice to also add `episeerr_delay`** alongside whichever rule tag you're using — `episeerr_default + episeerr_delay`, or `episeerr_<rulename> + episeerr_delay` — Episeerr removes `episeerr_delay` itself once it actually processes the series, whether that happens right away or later after a restart. See [Episode Selection setup](#episode-selection) below for the delay profile itself.
 
 **Use cases:** Add from Sonarr UI, request from Jellyseerr/Overseerr, add from nzb360
 
@@ -885,6 +886,8 @@ Without this, external adds with `episeerr_select` will start downloading immedi
 <img width="720" height="608" alt="image" src="https://github.com/user-attachments/assets/c33f6443-d00c-4446-8d00-fddb1b42fff7" />
 
 > **Not needed for Path 3 (search within Episeerr)** — Sonarr isn't touched until after you confirm.
+>
+> Episeerr manages this profile's **tags** itself going forward — at every startup it makes sure `episeerr_select` and the internal `episeerr_delay` tag are attached to whichever profile you set up here, and only those two. Rule tags (`episeerr_<rulename>`, including `episeerr_default`) are deliberately left off, so ongoing downloads for a series Episeerr has already processed aren't delayed — only series still waiting to be processed are held. Add `episeerr_delay` alongside a rule tag yourself when you want that protection for a specific add (see the tag table above).
 
 #### **Entering the selection flow:**
 

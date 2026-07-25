@@ -1210,7 +1210,7 @@ class OCDarrScheduler:
         self.last_cleanup = 0
         self.last_aired_check = 0
         self.update_interval_from_settings()
-    
+
     def update_interval_from_settings(self):
         """Update cleanup interval from global settings."""
         try:
@@ -1219,13 +1219,30 @@ class OCDarrScheduler:
             self.cleanup_interval_hours = global_settings.get('cleanup_interval_hours', 6)
         except:
             self.cleanup_interval_hours = 6  # Fallback
-    
+
     def start_scheduler(self):
         if self.running:
             return
         self.running = True
         self.cleanup_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
         self.cleanup_thread.start()
+
+        # One-shot startup checks - no periodic interval for either.
+        def _startup_reconcile_check():
+            try:
+                import reconcile
+                # Missed watch events: inferred from history, so queued for
+                # human review (reconcile_enabled/automation_held gate this
+                # internally).
+                reconcile.check_for_missed_watch_events()
+                # episeerr_delay-tagged series: unambiguous "webhook never
+                # ran" signal, safe to act on directly (automation_held
+                # still gates this internally).
+                reconcile.check_delay_tagged_series()
+            except Exception as e:
+                print(f"Startup reconcile check error: {e}")
+        threading.Thread(target=_startup_reconcile_check, daemon=True).start()
+
         print(f"✓ Global storage gate scheduler started - cleanup every {self.cleanup_interval_hours} hours")
     
     def _scheduler_loop(self):
@@ -4765,6 +4782,10 @@ def update_global_settings():
         episeerr_url = data.get('episeerr_url', 'http://localhost:5002')
         notify_aired_not_downloaded = data.get('notify_aired_not_downloaded', False)
 
+        # Hold automation (vacation mode) + missed watch-event detection
+        automation_held = data.get('automation_held', False)
+        reconcile_enabled = data.get('reconcile_enabled', False)
+
         # Validate inputs
         if storage_min_gb is not None:
             storage_min_gb = int(storage_min_gb) if storage_min_gb else None
@@ -4780,9 +4801,16 @@ def update_global_settings():
             'discord_webhook_url': str(discord_webhook_url),
             'episeerr_url': str(episeerr_url),
             'notify_aired_not_downloaded': bool(notify_aired_not_downloaded),
+
+            'automation_held': bool(automation_held),
+            'reconcile_enabled': bool(reconcile_enabled),
         }
-        
+
         media_processor.save_global_settings(settings)
+        try:
+            cleanup_scheduler.update_interval_from_settings()
+        except Exception:
+            pass
         
         app.logger.info(f"Global settings updated: {settings}")
         
@@ -4795,6 +4823,76 @@ def update_global_settings():
     except Exception as e:
         app.logger.error(f"Error updating global settings: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/pending-watch-events')
+def get_pending_watch_events():
+    """List watch events reconcile.py found that are newer than Episeerr's
+    records - each needs a human Process or Clear, nothing here is automatic."""
+    import pending_watch_events
+    try:
+        summary = pending_watch_events.get_pending_summary()
+        summary['last_checked'] = pending_watch_events.get_last_checked()
+        return jsonify({'success': True, **summary})
+    except Exception as e:
+        app.logger.error(f"Error getting pending watch events: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pending-watch-events/<item_id>/process', methods=['POST'])
+def process_pending_watch_event(item_id):
+    """Run one pending watch event through the normal processing path - the
+    same thing a live webhook would have done. If a real webhook already
+    caught this series up in the meantime, this is a no-op clear instead of
+    replaying stale data."""
+    import pending_watch_events
+    import reconcile
+    from media_processor import load_config
+    try:
+        item = pending_watch_events.get_item(item_id)
+        if not item:
+            return jsonify({'success': False, 'error': 'Item not found'}), 404
+
+        config = load_config()
+        if not reconcile._is_newer_than_recorded(
+            item['series_id'], item['season'], item['episode'], config
+        ):
+            pending_watch_events.clear_pending(item_id)
+            return jsonify({'success': True, 'message': 'Already caught up by a live webhook - cleared', 'processed': False})
+
+        ok = reconcile.replay_watch_event(
+            item['source'], item['series_title'], item['season'], item['episode'], item['user']
+        )
+        if ok:
+            pending_watch_events.clear_pending(item_id)
+        return jsonify({'success': ok, 'processed': ok})
+    except Exception as e:
+        app.logger.error(f"Error processing pending watch event {item_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pending-watch-events/<item_id>/clear', methods=['POST'])
+def clear_pending_watch_event(item_id):
+    """Dismiss one pending watch event without acting on it."""
+    import pending_watch_events
+    try:
+        found = pending_watch_events.clear_pending(item_id)
+        if not found:
+            return jsonify({'success': False, 'error': 'Item not found'}), 404
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/pending-watch-events/clear-all', methods=['POST'])
+def clear_all_pending_watch_events():
+    """Dismiss every pending watch event without acting on any of them."""
+    import pending_watch_events
+    try:
+        pending_watch_events.clear_all_pending()
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 
 @app.route('/api/scheduler-status-global')
 def scheduler_status_global():
@@ -6281,11 +6379,11 @@ def initialize_episeerr():
     except Exception as e:
         app.logger.error(f"Error during tag reconciliation: {str(e)}")
 
-    # NEW: Ensure delay profile has control tags ONLY (default, select, delay)
+    # NEW: Ensure delay profile has control tags ONLY (select, delay)
     try:
         updated = episeerr_utils.update_delay_profile_with_control_tags()
         if updated:
-            app.logger.info("✓ Delay profile updated with control tags (default, select, delay)")
+            app.logger.info("✓ Delay profile updated with control tags (select, delay)")
         else:
             app.logger.warning("Delay profile update skipped or failed (check logs)")
     except requests.exceptions.ConnectionError:
