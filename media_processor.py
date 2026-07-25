@@ -165,21 +165,6 @@ def load_config():
 
 
 def save_config(config):
-    """Load configuration from JSON file."""
-    config_path = os.getenv('CONFIG_PATH', '/app/config/config.json')
-    
-    # REMOVED: Backup on every load (was causing spam)
-    with open(config_path, 'r') as file:
-        config = json.load(file)
-    
-    # Ensure required keys are present with default values
-    if 'rules' not in config:
-        config['rules'] = {}
-    
-    return config
-
-
-def save_config(config):
     """Save configuration to JSON file with automatic backup."""
     config_path = os.getenv('CONFIG_PATH', '/app/config/config.json')
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
