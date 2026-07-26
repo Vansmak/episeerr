@@ -3814,6 +3814,7 @@ def create_rule():
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
             'release_keep_on_finale': 'release_keep_on_finale' in request.form,
+            'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in request.form,
             'always_have': always_have,
             'series': {},
             'dry_run': False
@@ -3894,6 +3895,7 @@ def edit_rule(rule_name):
             'grace_scope': grace_scope,
             'keep_pilot': 'keep_pilot' in request.form,
             'release_keep_on_finale': 'release_keep_on_finale' in request.form,
+            'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in request.form,
             'always_have': always_have
         })
         
