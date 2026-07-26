@@ -41,6 +41,7 @@ This project started as scratching my own itch - I wanted more granular series m
 - [Configuration Examples](#configuration-examples)
 - [Troubleshooting](#troubleshooting)
 - [Screenshots](#screenshots)
+- [Companion App (Optional)](#companion-app-optional)
 - [FAQ](#faq)
 - [Support](#support)
 
@@ -1324,6 +1325,15 @@ docker logs episeerr | grep "Jellyfin"
 
 <img width="1869" height="1040" alt="image" src="https://github.com/user-attachments/assets/b03ad3a3-c5eb-4805-a3ec-929a69469d82" />
 
+---
+
+## Companion App (Optional)
+
+**[EpiseerrApp](https://github.com/vansmak/EpiseerrApp)** is an Android client (phone or Android TV) for managing your Episeerr instance — rules, pending approvals, and service config, without opening a browser. It's entirely optional: Episeerr runs fully without it.
+
+- **Download:** [latest release](https://github.com/vansmak/EpiseerrApp/releases/latest), or grab the newest build from the repo's [Actions tab](https://github.com/vansmak/EpiseerrApp/actions) after any push to `main`
+- **Install:** sideload on Android TV or mobile — see the [EpiseerrApp README](https://github.com/vansmak/EpiseerrApp#readme) for step-by-step instructions
+- Point it at your Episeerr server URL on first launch, same as any other client
 
 ## FAQ
 

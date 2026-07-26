@@ -1,5 +1,11 @@
 # Changelog
 
+## 📱 New: Companion App (Optional)
+
+[EpiseerrApp](https://github.com/vansmak/EpiseerrApp) is now available — an Android client (phone or Android TV) for managing rules, pending approvals, and service config without opening a browser. Entirely optional; Episeerr runs fully without it. See [README](README.md#companion-app-optional) for install instructions.
+
+---
+
 ## v3.8.0
 
 ### ✨ New Features
