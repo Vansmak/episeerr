@@ -1673,6 +1673,50 @@ def get_pending_deletions_count():
     })
 
 
+@app.route('/api/pending-deletions')
+def api_pending_deletions():
+    """JSON: full pending-deletions summary (episodes + movies), for a native
+    client's approve/reject screen. Strips the bulky raw Sonarr episode_data
+    blob that the HTML page's summary carries - the app doesn't need it."""
+    import pending_deletions
+    try:
+        ep_summary = pending_deletions.get_pending_deletions_summary()
+        movie_summary = pending_deletions.get_pending_movies_summary()
+
+        series_out = []
+        for series in ep_summary['pending_list']:
+            seasons_out = []
+            for season in series['seasons'].values():
+                episodes_out = [
+                    {k: v for k, v in ep.items() if k != 'episode_data'}
+                    for ep in season['episodes']
+                ]
+                seasons_out.append({'season_number': season['season_number'], 'episodes': episodes_out})
+            series_out.append({
+                'series_id': series['series_id'],
+                'series_title': series['series_title'],
+                'seasons': seasons_out
+            })
+
+        return jsonify({
+            'success': True,
+            'episodes': {
+                'total_series': ep_summary['total_series'],
+                'total_episodes': ep_summary['total_episodes'],
+                'total_size_gb': ep_summary['total_size_gb'],
+                'series': series_out
+            },
+            'movies': {
+                'total_movies': movie_summary['total_movies'],
+                'total_size_gb': movie_summary['total_size_gb'],
+                'movies': movie_summary['movies']
+            }
+        })
+    except Exception as e:
+        app.logger.error(f"Error getting pending deletions summary: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 # ============================================================================
 # MOVIE RULES ROUTES
 # ============================================================================
