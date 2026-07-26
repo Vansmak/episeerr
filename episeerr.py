@@ -5504,193 +5504,213 @@ def select_seasons(tmdb_id):
         app.logger.error(f"Error in select_seasons: {str(e)}", exc_info=True)
         return render_template('error.html', message=f"Error loading season selection: {str(e)}")
 
+def _apply_rule_to_selection_core(tmdb_id, rule_name):
+    """
+    Assign a pending selection request's series to a rule - the "just give me
+    the whole show under this rule" shortcut that skips granular season/episode
+    picking. Shared by the legacy form route and the JSON API route.
+    Returns (success: bool, message: str).
+    """
+    if not tmdb_id or not rule_name:
+        return False, 'tmdb_id and rule_name are required'
+
+    series_id = None
+    request_id = None
+    request_data = find_pending_request_by_tmdb(tmdb_id)
+    if request_data:
+        series_id = request_data.get('series_id')
+        request_id = request_data.get('id')
+
+    if not series_id:
+        # Deferred add: series was queued from Discover or Search without adding to Sonarr yet
+        if request_data and request_data.get('source') in ('discover', 'search'):
+            try:
+                prefs = sonarr_utils.load_preferences()
+                s_url = prefs.get('SONARR_URL')
+                s_key = prefs.get('SONARR_API_KEY')
+                if not s_url or not s_key:
+                    app.logger.error("Sonarr not configured — cannot add deferred series")
+                    return False, 'Sonarr not configured'
+
+                s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
+                lookup_data = request_data.get('sonarr_lookup') or {}
+                payload = {
+                    'title':            lookup_data.get('title'),
+                    'titleSlug':        lookup_data.get('titleSlug'),
+                    'qualityProfileId': int(request_data['quality_profile_id']),
+                    'rootFolderPath':   request_data['root_folder_path'],
+                    'tvdbId':           lookup_data.get('tvdbId'),
+                    'images':           lookup_data.get('images', []),
+                    'seasons':          lookup_data.get('seasons', []),
+                    'monitored':        False,
+                    'addOptions': {'searchForMissingEpisodes': False, 'monitor': 'none'},
+                }
+                add_resp = http.post(f"{s_url}/api/v3/series",
+                                     headers=s_headers, json=payload, timeout=15)
+                if add_resp.status_code not in (200, 201):
+                    app.logger.error(f"Failed to add deferred series to Sonarr: {add_resp.text}")
+                    return False, f'Failed to add series to Sonarr: {add_resp.status_code}'
+
+                new_series = add_resp.json()
+                series_id = new_series['id']
+                # Update pending request with new series_id so later steps work
+                request_data['series_id'] = series_id
+                add_pending_request(request_data)
+                app.logger.info(f"Added '{request_data.get('title')}' to Sonarr (ID {series_id}) from {request_data.get('source')} queue")
+            except Exception as e:
+                app.logger.error(f"Error adding deferred series to Sonarr: {e}")
+                return False, f'Error adding series to Sonarr: {e}'
+        else:
+            return False, 'No pending request found for this TMDB ID'
+
+    config = load_config()
+
+    if rule_name not in config.get('rules', {}):
+        return False, f"Rule '{rule_name}' not found"
+
+    # Remove series from any rule it was previously in
+    series_id_str = str(series_id)
+    for rname, rdata in config['rules'].items():
+        if rname != rule_name and series_id_str in rdata.get('series', {}):
+            del rdata['series'][series_id_str]
+            app.logger.info(f"✓ Removed series {series_id} from rule '{rname}'")
+
+    # Assign series to the chosen rule
+    target_rule = config['rules'][rule_name]
+    target_rule.setdefault('series', {})
+    target_rule['series'][series_id_str] = {'activity_date': None}
+    save_config(config)
+
+    _rule_cfg = config['rules'][rule_name]
+    _always_have = _rule_cfg.get('always_have', '')
+    _request_source = request_data.get('source', '') if request_data else ''
+    _rule_headers = {'X-Api-Key': SONARR_API_KEY}
+
+    # always_have: monitor matching episodes (additive, never unmonitors)
+    if _always_have:
+        try:
+            media_processor.process_always_have(series_id, _always_have)
+        except Exception as e:
+            app.logger.error(f"always_have processing failed for series {series_id}: {e}")
+
+    # For new shows (not a series_page reassignment) also run get_type/get_count monitoring
+    if _request_source != 'series_page':
+        try:
+            _get_type = _rule_cfg.get('get_type', 'episodes')
+            _get_count = _rule_cfg.get('get_count', 1)
+            _action_option = _rule_cfg.get('action_option', 'monitor')
+
+            _eps_resp = http.get(
+                f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                headers=_rule_headers
+            )
+            if _eps_resp.ok:
+                _all_eps = _eps_resp.json()
+                _starting_season = 1
+                _season_eps = sorted(
+                    [ep for ep in _all_eps if ep.get('seasonNumber') == _starting_season],
+                    key=lambda x: x.get('episodeNumber', 0)
+                )
+
+                _to_monitor = []
+                if _get_type == 'all':
+                    _to_monitor = [ep['id'] for ep in _all_eps if ep.get('seasonNumber', 0) >= _starting_season]
+                elif _get_type == 'seasons':
+                    _n = _get_count if _get_count is not None else 1
+                    _to_monitor = [
+                        ep['id'] for ep in _all_eps
+                        if _starting_season <= ep.get('seasonNumber', 0) < (_starting_season + _n)
+                    ]
+                else:  # episodes
+                    _n = _get_count if _get_count is not None else 1
+                    _to_monitor = [ep['id'] for ep in _season_eps[:_n]]
+
+                if _to_monitor:
+                    _mon_resp = http.put(
+                        f"{SONARR_URL}/api/v3/episode/monitor",
+                        headers=_rule_headers,
+                        json={"episodeIds": _to_monitor, "monitored": True}
+                    )
+                    if _mon_resp.ok:
+                        app.logger.info(
+                            f"Monitored {len(_to_monitor)} episodes (get_type={_get_type}) "
+                            f"for series {series_id}"
+                        )
+                        if _action_option == 'search':
+                            _srch_resp = http.post(
+                                f"{SONARR_URL}/api/v3/command",
+                                headers=_rule_headers,
+                                json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
+                            )
+                            if _srch_resp.ok:
+                                app.logger.info(f"Triggered episode search for series {series_id}")
+                            else:
+                                app.logger.error(f"Episode search failed: {_srch_resp.text}")
+                    else:
+                        app.logger.error(f"Failed to monitor episodes: {_mon_resp.text}")
+        except Exception as e:
+            app.logger.error(f"get_type monitoring failed for series {series_id}: {e}")
+
+    # Sync the rule tag to Sonarr
+    try:
+        episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
+        app.logger.info(f"✓ Synced tag episeerr_{rule_name} for series {series_id}")
+    except Exception as e:
+        app.logger.error(f"Tag sync failed: {e}")
+
+    # Clean up the pending request
+    if request_id:
+        delete_pending_request(request_id)
+        app.logger.info(f"✓ Removed pending request {request_id}")
+
+    # Remove episeerr_select tag (keep rule tag)
+    try:
+        tag_resp = http.get(f"{SONARR_URL}/api/v3/tag", headers=_rule_headers)
+        if tag_resp.ok:
+            tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
+            select_tag_id = tag_map.get('episeerr_select')
+
+            if select_tag_id:
+                series_resp = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=_rule_headers)
+                if series_resp.ok:
+                    series_data = series_resp.json()
+                    current_tags = series_data.get('tags', [])
+                    if select_tag_id in current_tags:
+                        current_tags.remove(select_tag_id)
+                        series_data['tags'] = current_tags
+                        http.put(f"{SONARR_URL}/api/v3/series/{series_id}", headers=_rule_headers, json=series_data)
+    except Exception as e:
+        app.logger.debug(f"Tag cleanup: {e}")
+
+    title = request_data.get('title', 'series') if request_data else 'series'
+    app.logger.info(f"Applied rule '{rule_name}' to {title}")
+    _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+    return True, f"Applied rule '{rule_name}' to {title}"
+
+
 @app.route('/api/apply-rule-to-selection', methods=['POST'])
 def apply_rule_to_selection():
-
-
     try:
         tmdb_id = request.form.get('tmdb_id')
         rule_name = request.form.get('rule_name')
-        
-        if not tmdb_id or not rule_name:
-            return redirect(url_for('rules_page'))
-        
-        # Find the pending request to get series_id
-        series_id = None
-        request_id = None
-        request_data = find_pending_request_by_tmdb(tmdb_id)
-        if request_data:
-            series_id = request_data.get('series_id')
-            request_id = request_data.get('id')
-
-        if not series_id:
-            # Deferred add: series was queued from Discover or Search without adding to Sonarr yet
-            if request_data and request_data.get('source') in ('discover', 'search'):
-                try:
-                    prefs = sonarr_utils.load_preferences()
-                    s_url = prefs.get('SONARR_URL')
-                    s_key = prefs.get('SONARR_API_KEY')
-                    if not s_url or not s_key:
-                        app.logger.error("Sonarr not configured — cannot add deferred series")
-                        return redirect(url_for('rules_page'))
-
-                    s_headers = {'X-Api-Key': s_key, 'Content-Type': 'application/json'}
-                    lookup_data = request_data.get('sonarr_lookup') or {}
-                    payload = {
-                        'title':            lookup_data.get('title'),
-                        'titleSlug':        lookup_data.get('titleSlug'),
-                        'qualityProfileId': int(request_data['quality_profile_id']),
-                        'rootFolderPath':   request_data['root_folder_path'],
-                        'tvdbId':           lookup_data.get('tvdbId'),
-                        'images':           lookup_data.get('images', []),
-                        'seasons':          lookup_data.get('seasons', []),
-                        'monitored':        False,
-                        'addOptions': {'searchForMissingEpisodes': False, 'monitor': 'none'},
-                    }
-                    add_resp = http.post(f"{s_url}/api/v3/series",
-                                         headers=s_headers, json=payload, timeout=15)
-                    if add_resp.status_code not in (200, 201):
-                        app.logger.error(f"Failed to add deferred series to Sonarr: {add_resp.text}")
-                        return redirect(url_for('rules_page'))
-
-                    new_series = add_resp.json()
-                    series_id = new_series['id']
-                    # Update pending request with new series_id so later steps work
-                    request_data['series_id'] = series_id
-                    add_pending_request(request_data)
-                    app.logger.info(f"Added '{request_data.get('title')}' to Sonarr (ID {series_id}) from {request_data.get('source')} queue")
-                except Exception as e:
-                    app.logger.error(f"Error adding deferred series to Sonarr: {e}")
-                    return redirect(url_for('rules_page'))
-            else:
-                return redirect(url_for('rules_page'))
-
-        config = load_config()
-
-        if rule_name not in config.get('rules', {}):
-            return redirect(url_for('rules_page'))
-        
-        # Remove series from any rule it was previously in
-        series_id_str = str(series_id)
-        for rname, rdata in config['rules'].items():
-            if rname != rule_name and series_id_str in rdata.get('series', {}):
-                del rdata['series'][series_id_str]
-                app.logger.info(f"✓ Removed series {series_id} from rule '{rname}'")
-
-        # Assign series to the chosen rule
-        target_rule = config['rules'][rule_name]
-        target_rule.setdefault('series', {})
-        target_rule['series'][series_id_str] = {'activity_date': None}
-        save_config(config)
-
-        _rule_cfg = config['rules'][rule_name]
-        _always_have = _rule_cfg.get('always_have', '')
-        _request_source = request_data.get('source', '')
-        _rule_headers = {'X-Api-Key': SONARR_API_KEY}
-
-        # always_have: monitor matching episodes (additive, never unmonitors)
-        if _always_have:
-            try:
-                media_processor.process_always_have(series_id, _always_have)
-            except Exception as e:
-                app.logger.error(f"always_have processing failed for series {series_id}: {e}")
-
-        # For new shows (not a series_page reassignment) also run get_type/get_count monitoring
-        if _request_source != 'series_page':
-            try:
-                _get_type = _rule_cfg.get('get_type', 'episodes')
-                _get_count = _rule_cfg.get('get_count', 1)
-                _action_option = _rule_cfg.get('action_option', 'monitor')
-
-                _eps_resp = http.get(
-                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
-                    headers=_rule_headers
-                )
-                if _eps_resp.ok:
-                    _all_eps = _eps_resp.json()
-                    _starting_season = 1
-                    _season_eps = sorted(
-                        [ep for ep in _all_eps if ep.get('seasonNumber') == _starting_season],
-                        key=lambda x: x.get('episodeNumber', 0)
-                    )
-
-                    _to_monitor = []
-                    if _get_type == 'all':
-                        _to_monitor = [ep['id'] for ep in _all_eps if ep.get('seasonNumber', 0) >= _starting_season]
-                    elif _get_type == 'seasons':
-                        _n = _get_count if _get_count is not None else 1
-                        _to_monitor = [
-                            ep['id'] for ep in _all_eps
-                            if _starting_season <= ep.get('seasonNumber', 0) < (_starting_season + _n)
-                        ]
-                    else:  # episodes
-                        _n = _get_count if _get_count is not None else 1
-                        _to_monitor = [ep['id'] for ep in _season_eps[:_n]]
-
-                    if _to_monitor:
-                        _mon_resp = http.put(
-                            f"{SONARR_URL}/api/v3/episode/monitor",
-                            headers=_rule_headers,
-                            json={"episodeIds": _to_monitor, "monitored": True}
-                        )
-                        if _mon_resp.ok:
-                            app.logger.info(
-                                f"Monitored {len(_to_monitor)} episodes (get_type={_get_type}) "
-                                f"for series {series_id}"
-                            )
-                            if _action_option == 'search':
-                                _srch_resp = http.post(
-                                    f"{SONARR_URL}/api/v3/command",
-                                    headers=_rule_headers,
-                                    json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
-                                )
-                                if _srch_resp.ok:
-                                    app.logger.info(f"Triggered episode search for series {series_id}")
-                                else:
-                                    app.logger.error(f"Episode search failed: {_srch_resp.text}")
-                        else:
-                            app.logger.error(f"Failed to monitor episodes: {_mon_resp.text}")
-            except Exception as e:
-                app.logger.error(f"get_type monitoring failed for series {series_id}: {e}")
-
-        # Sync the rule tag to Sonarr
-        try:
-            episeerr_utils.sync_rule_tag_to_sonarr(series_id, rule_name)
-            app.logger.info(f"✓ Synced tag episeerr_{rule_name} for series {series_id}")
-        except Exception as e:
-            app.logger.error(f"Tag sync failed: {e}")
-        
-        # Clean up the pending request
-        if request_id:
-            delete_pending_request(request_id)
-            app.logger.info(f"✓ Removed pending request {request_id}")
-        
-        # Remove episeerr_select tag (keep rule tag)
-        try:
-            tag_resp = http.get(f"{SONARR_URL}/api/v3/tag", headers=headers)
-            if tag_resp.ok:
-                tag_map = {t['label'].lower(): t['id'] for t in tag_resp.json()}
-                select_tag_id = tag_map.get('episeerr_select')
-                
-                if select_tag_id:
-                    series_resp = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
-                    if series_resp.ok:
-                        series_data = series_resp.json()
-                        current_tags = series_data.get('tags', [])
-                        if select_tag_id in current_tags:
-                            current_tags.remove(select_tag_id)
-                            series_data['tags'] = current_tags
-                            http.put(f"{SONARR_URL}/api/v3/series", headers=headers, json=series_data)
-        except Exception as e:
-            app.logger.debug(f"Tag cleanup: {e}")
-        
-        app.logger.info(f"Applied rule '{rule_name}' to {request_data.get('title', 'series')}")
-        _plex_watchlist_add_silent(tmdb_id, 'tv', request_data.get('title', ''))
-        return redirect(url_for('rules_page'))
-
+        _apply_rule_to_selection_core(tmdb_id, rule_name)
     except Exception as e:
         app.logger.error(f"Error applying rule to selection: {e}", exc_info=True)
-        return redirect(url_for('rules_page'))
+    return redirect(url_for('rules_page'))
+
+
+@app.route('/api/pending-requests/apply-rule', methods=['POST'])
+def api_apply_rule_to_selection():
+    """JSON: assign a pending selection request's series to a rule (skips
+    granular season/episode picking - the whole show gets the rule's normal
+    get_type/get_count treatment)."""
+    try:
+        data = request.get_json(silent=True) or {}
+        success, message = _apply_rule_to_selection_core(data.get('tmdb_id'), data.get('rule_name'))
+        return jsonify({'success': success, 'message': message}), (200 if success else 400)
+    except Exception as e:
+        app.logger.error(f"Error applying rule to selection via API: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/select-episodes/<tmdb_id>')
 def select_episodes(tmdb_id):
