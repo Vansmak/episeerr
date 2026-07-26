@@ -312,34 +312,31 @@ def auto_add_quick_link(name, url, icon, open_in_iframe=False, alternate_url=Non
     add_quick_link(name, url, icon, open_in_iframe, alternate_url)
     app.logger.info(f"Auto-added {name} to quick links")
 
-@app.route('/setup')
-def setup():
-    """Service setup page"""
-    # Get all service configurations (existing)
-    sonarr = get_service('sonarr', 'default')
-    tautulli = get_service('tautulli', 'default')
-    tmdb = get_service('tmdb', 'default')
+def _is_service_enabled(service_type):
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        row = _sql.connect(_DB).execute(
+            "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
+            (service_type,)
+        ).fetchone()
+        return bool(row[0]) if row is not None else True
+    except Exception:
+        return True
 
-    def _svc_enabled(service_type):
-        try:
-            import sqlite3 as _sql
-            from settings_db import DB_PATH as _DB
-            row = _sql.connect(_DB).execute(
-                "SELECT enabled FROM services WHERE service_type = ? AND name = 'default'",
-                (service_type,)
-            ).fetchone()
-            return bool(row[0]) if row is not None else True
-        except Exception:
-            return True
 
-    sonarr_enabled = _svc_enabled('sonarr')
-    tmdb_enabled   = _svc_enabled('tmdb')
+def _build_integration_configs():
+    """Per-integration setup-field schema + saved values + connected/enabled flags.
 
-        # NEW: Get integration configurations with guaranteed fields
+    Shared by the /setup page (Jinja) and /api/setup-schema (JSON) so both stay
+    in sync. Note: each entry's 'integration' key holds the live integration
+    object (used by the Jinja template) - JSON consumers must strip it out and
+    project the fields they need instead, since it isn't serializable.
+    """
     integration_configs = {}
     for integration in get_all_integrations():
         config = get_service(integration.service_name, 'default')
-        
+
         # Force fallback fields — ignore whatever get_setup_fields() returns for now
         setup_fields = [
             {
@@ -359,7 +356,7 @@ def setup():
                 'help': f'From {integration.display_name} settings'
             }
         ]
-        
+
         # If the integration actually defines custom fields, use them instead
         try:
             custom = integration.get_setup_fields()
@@ -370,7 +367,7 @@ def setup():
                 print(f"Using FALLBACK fields for {integration.service_name} (2 fields)")
         except Exception as e:
             print(f"Error reading custom fields for {integration.service_name}: {e} — using fallback")
-        
+
         # Pre-fill values — flatten everything into one dict
         saved_values = {}
         if config:
@@ -379,28 +376,43 @@ def setup():
             # Merge any old-style config dict
             if isinstance(config.get('config'), dict):
                 saved_values.update(config['config'])
-        
+
         integration_configs[integration.service_name] = {
             'connected': config is not None,
-            'enabled': _svc_enabled(integration.service_name),
+            'enabled': _is_service_enabled(integration.service_name),
             'url': saved_values.get('url'),
             'apikey': saved_values.get('apikey'),
             'integration': integration,
             'setup_fields': setup_fields,
             'saved_values': saved_values  # for template pre-fill
         }
-    
+    return integration_configs
+
+
+@app.route('/setup')
+def setup():
+    """Service setup page"""
+    # Get all service configurations (existing)
+    sonarr = get_service('sonarr', 'default')
+    tautulli = get_service('tautulli', 'default')
+    tmdb = get_service('tmdb', 'default')
+
+    sonarr_enabled = _is_service_enabled('sonarr')
+    tmdb_enabled   = _is_service_enabled('tmdb')
+
+    integration_configs = _build_integration_configs()
+
     # Check if setup is complete — needs Sonarr + at least one media server
     plex_svc     = get_service('plex',     'default')
     jellyfin_svc = get_service('jellyfin', 'default')
     emby_svc     = get_service('emby',     'default')
     has_media_server = bool(tautulli or plex_svc or jellyfin_svc or emby_svc)
     setup_complete = bool(sonarr and has_media_server)
-    
+
     # Quick links
     from settings_db import get_all_quick_links
     quick_links = get_all_quick_links()
-    
+
     sonarr_config = (sonarr.get('config') or {}) if sonarr else {}
 
     return render_template('setup.html',
@@ -419,6 +431,59 @@ def setup():
         integration_configs=integration_configs,
         quick_links=quick_links
     )
+
+
+@app.route('/api/setup-schema')
+def api_setup_schema():
+    """JSON: integration setup schema + saved values + connected/enabled flags + setup_complete.
+
+    Mirrors what /setup computes for Jinja, so a native client can render
+    integration config forms dynamically instead of hardcoding fields per integration.
+    """
+    sonarr = get_service('sonarr', 'default')
+    tautulli = get_service('tautulli', 'default')
+    tmdb = get_service('tmdb', 'default')
+
+    plex_svc     = get_service('plex',     'default')
+    jellyfin_svc = get_service('jellyfin', 'default')
+    emby_svc     = get_service('emby',     'default')
+    has_media_server = bool(tautulli or plex_svc or jellyfin_svc or emby_svc)
+    setup_complete = bool(sonarr and has_media_server)
+
+    sonarr_config = (sonarr.get('config') or {}) if sonarr else {}
+
+    integrations_json = {}
+    for name, cfg in _build_integration_configs().items():
+        integration = cfg['integration']
+        integrations_json[name] = {
+            'service_name': integration.service_name,
+            'display_name': getattr(integration, 'display_name', name),
+            'connected': cfg['connected'],
+            'enabled': cfg['enabled'],
+            'apikey': cfg['apikey'],
+            'setup_fields': cfg['setup_fields'],
+            'saved_values': cfg['saved_values'],
+        }
+
+    return jsonify({
+        'success': True,
+        'setup_complete': setup_complete,
+        'sonarr': {
+            'enabled': _is_service_enabled('sonarr'),
+            'connected': sonarr is not None,
+            'url': sonarr['url'] if sonarr else None,
+            'apikey': sonarr['api_key'] if sonarr else None,
+            'alternate_url': sonarr_config.get('alternate_url', ''),
+            'open_in_iframe': sonarr_config.get('open_in_iframe', False),
+            'default_quality_profile_id': sonarr_config.get('default_quality_profile_id') or '',
+        },
+        'tmdb': {
+            'enabled': _is_service_enabled('tmdb'),
+            'connected': tmdb is not None,
+            'apikey': tmdb['api_key'] if tmdb else None,
+        },
+        'integrations': integrations_json,
+    })
 
 # Replace test_connection in episeerr.py with this version:
 
@@ -1620,6 +1685,63 @@ def movie_rules_page():
     )
 
 
+_MOVIE_RULE_FIELD_NAMES = (
+    'description', 'grace_watched', 'dormant_days', 'require_approval',
+    'dry_run', 'delete_option',
+)
+
+
+def _movie_rule_form_to_dict(form):
+    """Build a movie-rule payload dict (matching the JSON API shape) from a form-encoded request."""
+    return {
+        'description': form.get('description', '').strip(),
+        'grace_watched': form.get('grace_watched', '').strip(),
+        'dormant_days': form.get('dormant_days', '').strip(),
+        'require_approval': form.get('require_approval') == 'true',
+        'dry_run': form.get('dry_run') == 'true',
+        'delete_option': form.get('delete_option', 'file_only'),
+    }
+
+
+def _normalize_movie_rule_payload(data):
+    """Validate + coerce a movie-rule payload dict (from a form or a JSON body)."""
+    def _int_or_none(value):
+        if value in (None, ''):
+            return None
+        return int(value)
+
+    return {
+        'description': str(data.get('description') or '').strip(),
+        'grace_watched': _int_or_none(data.get('grace_watched')),
+        'dormant_days': _int_or_none(data.get('dormant_days')),
+        'require_approval': bool(data.get('require_approval', False)),
+        'dry_run': bool(data.get('dry_run', False)),
+        'delete_option': data.get('delete_option') or 'file_only',
+    }
+
+
+def _create_radarr_tag_for_rule(rule_name):
+    try:
+        from movie_processor import get_or_create_radarr_tag, get_radarr_settings
+        radarr_url, api_key = get_radarr_settings()
+        if radarr_url and api_key:
+            get_or_create_radarr_tag(rule_name, radarr_url, api_key)
+    except Exception as e:
+        app.logger.warning(f"Could not create Radarr tag for movie rule '{rule_name}': {e}")
+
+
+def _set_default_movie_rule_on_create(config, rule_name, want_default):
+    if want_default:
+        config['default_movie_rule'] = rule_name
+
+
+def _set_default_movie_rule_on_edit(config, rule_name, new_name, want_default):
+    if want_default:
+        config['default_movie_rule'] = new_name
+    elif config.get('default_movie_rule') == rule_name:
+        config.pop('default_movie_rule', None)
+
+
 @app.route('/movie-rules/create', methods=['POST'])
 def create_movie_rule():
     """Create a new movie rule."""
@@ -1631,36 +1753,14 @@ def create_movie_rule():
     if not rule_name:
         return redirect(url_for('movie_rules_page'))
 
-    grace_watched_raw = request.form.get('grace_watched', '').strip()
-    dormant_days_raw = request.form.get('dormant_days', '').strip()
-
-    rule = {
-        'grace_watched': int(grace_watched_raw) if grace_watched_raw else None,
-        'dormant_days': int(dormant_days_raw) if dormant_days_raw else None,
-        'require_approval': request.form.get('require_approval') == 'true',
-        'dry_run': request.form.get('dry_run') == 'true',
-        'delete_option': request.form.get('delete_option', 'file_only'),
-        'description': request.form.get('description', '').strip(),
-        'movies': {},
-    }
-
+    rule = _normalize_movie_rule_payload(_movie_rule_form_to_dict(request.form))
+    rule['movies'] = {}
     config['movie_rules'][rule_name] = rule
 
-    if request.form.get('set_as_default') == 'true':
-        config['default_movie_rule'] = rule_name
-    elif config.get('default_movie_rule') == rule_name and request.form.get('set_as_default') != 'true':
-        config.pop('default_movie_rule', None)
+    _set_default_movie_rule_on_create(config, rule_name, request.form.get('set_as_default') == 'true')
 
     save_config(config)
-
-    # Create Radarr tag
-    try:
-        from movie_processor import get_or_create_radarr_tag, get_radarr_settings
-        radarr_url, api_key = get_radarr_settings()
-        if radarr_url and api_key:
-            get_or_create_radarr_tag(rule_name, radarr_url, api_key)
-    except Exception as e:
-        app.logger.warning(f"Could not create Radarr tag for movie rule '{rule_name}': {e}")
+    _create_radarr_tag_for_rule(rule_name)
 
     return redirect(url_for('movie_rules_page'))
 
@@ -1675,24 +1775,11 @@ def edit_movie_rule(rule_name):
         return redirect(url_for('movie_rules_page'))
 
     if request.method == 'POST':
-        grace_watched_raw = request.form.get('grace_watched', '').strip()
-        dormant_days_raw = request.form.get('dormant_days', '').strip()
-
         new_name = request.form.get('rule_name', '').strip() or rule_name
 
-        movie_rules[rule_name].update({
-            'grace_watched': int(grace_watched_raw) if grace_watched_raw else None,
-            'dormant_days': int(dormant_days_raw) if dormant_days_raw else None,
-            'require_approval': request.form.get('require_approval') == 'true',
-            'dry_run': request.form.get('dry_run') == 'true',
-            'delete_option': request.form.get('delete_option', 'file_only'),
-            'description': request.form.get('description', '').strip(),
-        })
+        movie_rules[rule_name].update(_normalize_movie_rule_payload(_movie_rule_form_to_dict(request.form)))
 
-        if request.form.get('set_as_default') == 'true':
-            config['default_movie_rule'] = new_name
-        elif config.get('default_movie_rule') == rule_name:
-            config.pop('default_movie_rule', None)
+        _set_default_movie_rule_on_edit(config, rule_name, new_name, request.form.get('set_as_default') == 'true')
 
         if new_name and new_name != rule_name:
             movie_rules[new_name] = movie_rules.pop(rule_name)
@@ -1763,6 +1850,100 @@ def delete_movie_rule(rule_name):
     save_config(config)
     _swap_movie_rule_tag_on_all(rule_name, new_rule=None)
     return redirect(url_for('movie_rules_page'))
+
+
+@app.route('/api/movie-rules/<rule_name>', methods=['GET'])
+def api_get_movie_rule(rule_name):
+    """JSON: fetch a single movie rule's full editable field set."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+    if rule_name not in movie_rules:
+        return jsonify({'success': False, 'error': f"Movie rule '{rule_name}' not found"}), 404
+
+    rule = movie_rules[rule_name]
+    payload = {field: rule.get(field) for field in _MOVIE_RULE_FIELD_NAMES}
+    payload['name'] = rule_name
+    payload['is_default'] = (rule_name == config.get('default_movie_rule'))
+    payload['movie_count'] = len(rule.get('movies', {}))
+    return jsonify({'success': True, 'rule': payload})
+
+
+@app.route('/api/movie-rules', methods=['POST'])
+def api_create_movie_rule():
+    """JSON: create a movie rule. Body: {rule_name, set_as_default, ...rule fields}."""
+    config = load_config()
+    if 'movie_rules' not in config:
+        config['movie_rules'] = {}
+
+    data = request.get_json(silent=True) or {}
+    rule_name = str(data.get('rule_name', '')).strip()
+    if not rule_name:
+        return jsonify({'success': False, 'error': 'Rule name is required'}), 400
+    if rule_name in config['movie_rules']:
+        return jsonify({'success': False, 'error': f"Movie rule '{rule_name}' already exists"}), 409
+
+    rule = _normalize_movie_rule_payload(data)
+    rule['movies'] = {}
+    config['movie_rules'][rule_name] = rule
+    _set_default_movie_rule_on_create(config, rule_name, bool(data.get('set_as_default', False)))
+
+    save_config(config)
+    _create_radarr_tag_for_rule(rule_name)
+
+    payload = {field: rule.get(field) for field in _MOVIE_RULE_FIELD_NAMES}
+    payload['name'] = rule_name
+    payload['is_default'] = (config.get('default_movie_rule') == rule_name)
+    return jsonify({'success': True, 'rule': payload}), 201
+
+
+@app.route('/api/movie-rules/<rule_name>', methods=['PUT'])
+def api_edit_movie_rule(rule_name):
+    """JSON: update a movie rule. Body: {new_name, set_as_default, ...rule fields}."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+    if rule_name not in movie_rules:
+        return jsonify({'success': False, 'error': f"Movie rule '{rule_name}' not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    new_name = str(data.get('new_name') or '').strip() or rule_name
+
+    movie_rules[rule_name].update(_normalize_movie_rule_payload(data))
+    _set_default_movie_rule_on_edit(config, rule_name, new_name, bool(data.get('set_as_default', False)))
+
+    if new_name != rule_name:
+        if new_name in movie_rules:
+            return jsonify({'success': False, 'error': f"Movie rule '{new_name}' already exists"}), 409
+        movie_rules[new_name] = movie_rules.pop(rule_name)
+        if config.get('default_movie_rule') == rule_name:
+            config['default_movie_rule'] = new_name
+        config['movie_rules'] = movie_rules
+        save_config(config)
+        _swap_movie_rule_tag_on_all(rule_name, new_rule=new_name)
+    else:
+        save_config(config)
+
+    final_rule = movie_rules[new_name]
+    payload = {field: final_rule.get(field) for field in _MOVIE_RULE_FIELD_NAMES}
+    payload['name'] = new_name
+    payload['is_default'] = (config.get('default_movie_rule') == new_name)
+    return jsonify({'success': True, 'rule': payload})
+
+
+@app.route('/api/movie-rules/<rule_name>', methods=['DELETE'])
+def api_delete_movie_rule(rule_name):
+    """JSON: delete a movie rule and remove its tag from all Radarr movies."""
+    config = load_config()
+    movie_rules = config.get('movie_rules', {})
+    if rule_name not in movie_rules:
+        return jsonify({'success': False, 'error': f"Movie rule '{rule_name}' not found"}), 404
+
+    movie_rules.pop(rule_name, None)
+    if config.get('default_movie_rule') == rule_name:
+        config.pop('default_movie_rule', None)
+    save_config(config)
+    _swap_movie_rule_tag_on_all(rule_name, new_rule=None)
+
+    return jsonify({'success': True})
 
 
 @app.route('/api/movie-rules/ensure-tags', methods=['POST'])
@@ -3763,6 +3944,199 @@ def _enrich_tmdb_results(items):
     return enriched
 
 
+def _form_to_rule_dict(form):
+    """Build a rule-payload dict (matching the JSON API shape) from a form-encoded request."""
+    return {
+        'description': form.get('description', ''),
+        'get_type': form.get('get_type', 'episodes'),
+        'get_count': form.get('get_count', '').strip(),
+        'keep_type': form.get('keep_type', 'episodes'),
+        'keep_count': form.get('keep_count', '').strip(),
+        'action_option': form.get('action_option', 'monitor'),
+        'monitor_watched': 'monitor_watched' in form,
+        'grace_watched': form.get('grace_watched', '').strip(),
+        'grace_unwatched': form.get('grace_unwatched', '').strip(),
+        'dormant_days': form.get('dormant_days', '').strip(),
+        'grace_scope': form.get('grace_scope', 'series'),
+        'keep_pilot': 'keep_pilot' in form,
+        'release_keep_on_finale': 'release_keep_on_finale' in form,
+        'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in form,
+        'always_have': form.get('always_have', '').strip(),
+    }
+
+
+def _normalize_rule_payload(data, default_dry_run=False):
+    """
+    Validate + coerce a rule payload dict (from a form or a JSON body) into the
+    canonical stored shape. Returns (normalized_dict, None) on success or
+    (None, error_message) on failure.
+    """
+    def _int_or_none(value):
+        if value in (None, ''):
+            return None
+        return int(value)
+
+    get_type = data.get('get_type') or 'episodes'
+    keep_type = data.get('keep_type') or 'episodes'
+
+    always_have = str(data.get('always_have') or '').strip()
+    ah_valid, ah_error = media_processor.validate_always_have_expression(always_have)
+    if not ah_valid:
+        return None, ah_error
+
+    normalized = {
+        'description': data.get('description') or '',
+        'get_type': get_type,
+        'get_count': None if get_type == 'all' else (_int_or_none(data.get('get_count')) or 1),
+        'keep_type': keep_type,
+        'keep_count': None if keep_type == 'all' else (_int_or_none(data.get('keep_count')) or 1),
+        'action_option': data.get('action_option') or 'monitor',
+        'monitor_watched': bool(data.get('monitor_watched', False)),
+        'grace_watched': _int_or_none(data.get('grace_watched')),
+        'grace_unwatched': _int_or_none(data.get('grace_unwatched')),
+        'dormant_days': _int_or_none(data.get('dormant_days')),
+        'grace_scope': data.get('grace_scope') or 'series',
+        'keep_pilot': bool(data.get('keep_pilot', False)),
+        'release_keep_on_finale': bool(data.get('release_keep_on_finale', False)),
+        'unmonitor_on_series_ended': bool(data.get('unmonitor_on_series_ended', False)),
+        'always_have': always_have,
+        'dry_run': bool(data.get('dry_run', default_dry_run)),
+    }
+    return normalized, None
+
+
+def _set_default_rule_on_create(config, rule_name, want_default):
+    if want_default:
+        config['default_rule'] = rule_name
+
+
+def _set_default_rule_on_edit(config, rule_name, want_default):
+    if want_default:
+        config['default_rule'] = rule_name
+    elif rule_name == config.get('default_rule'):
+        # This was the default rule but is being unset - promote another rule, or clear it
+        other_rules = [r for r in config['rules'].keys() if r != rule_name]
+        if other_rules:
+            config['default_rule'] = other_rules[0]
+        else:
+            config.pop('default_rule', None)
+
+
+def _ensure_rule_tag(rule_name):
+    """Create/verify the episeerr_<rule_name> Sonarr tag exists."""
+    try:
+        tag_id = episeerr_utils.get_or_create_rule_tag_id(rule_name)
+        if tag_id:
+            app.logger.info(f"✓ Created/verified tag episeerr_{rule_name} with ID {tag_id}")
+        else:
+            app.logger.warning(f"⚠️ Could not create tag for rule '{rule_name}'")
+        return tag_id
+    except Exception as e:
+        app.logger.error(f"Error creating/verifying rule tag: {str(e)}")
+        return None
+
+
+def _check_rule_deletable(config, rule_name):
+    """Returns an error message if rule_name can't be deleted, else None."""
+    if rule_name not in config['rules']:
+        return f"Rule '{rule_name}' not found"
+    if rule_name == config.get('default_rule'):
+        return "Cannot delete the default rule"
+    if rule_name.lower() in ['select', 'default']:
+        return f"Cannot delete special tag '{rule_name}'"
+    return None
+
+
+def _cleanup_rule_tag_from_sonarr(rule_name):
+    """Remove a deleted rule's tag from all series, the delay profile, and Sonarr itself."""
+    tag_id = None
+    try:
+        tag_id = episeerr_utils.get_or_create_rule_tag_id(rule_name)
+    except Exception as e:
+        app.logger.warning(f"Could not get tag ID for '{rule_name}': {str(e)}")
+
+    tag_removed = False
+    if not tag_id:
+        return tag_removed
+
+    try:
+        headers = episeerr_utils.get_sonarr_headers()
+        series_response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+        if series_response.ok:
+            all_series = series_response.json()
+            removed_from_count = 0
+
+            for series in all_series:
+                tags = series.get('tags', [])
+                if tag_id in tags:
+                    tags.remove(tag_id)
+                    series['tags'] = tags
+                    update_resp = http.put(
+                        f"{SONARR_URL}/api/v3/series/{series['id']}",
+                        headers=headers,
+                        json=series
+                    )
+                    if update_resp.ok:
+                        removed_from_count += 1
+                        tag_removed = True
+                    else:
+                        app.logger.warning(f"Failed to remove tag from series {series['id']}")
+
+            if removed_from_count > 0:
+                app.logger.info(f"Removed deleted rule tag '{rule_name}' from {removed_from_count} series")
+            else:
+                app.logger.debug(f"No series had the tag for deleted rule '{rule_name}'")
+        else:
+            app.logger.error("Failed to fetch series list for tag cleanup")
+    except Exception as e:
+        app.logger.warning(f"Could not clean up tag for deleted rule '{rule_name}': {str(e)}")
+
+    # Remove from delay profile (only the deleted tag, don't touch others)
+    try:
+        profile_id = episeerr_utils.get_episeerr_delay_profile_id()
+        if profile_id:
+            headers = episeerr_utils.get_sonarr_headers()
+            get_resp = http.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
+            if get_resp.ok:
+                profile = get_resp.json()
+                current_tags = profile.get('tags', [])
+                if tag_id in current_tags:
+                    current_tags.remove(tag_id)
+                    profile['tags'] = current_tags
+                    put_resp = http.put(
+                        f"{SONARR_URL}/api/v3/delayprofile/{profile_id}",
+                        headers=headers,
+                        json=profile
+                    )
+                    if put_resp.ok:
+                        app.logger.info(f"Removed deleted rule tag from delay profile {profile_id}")
+                    else:
+                        app.logger.warning(f"Failed to remove tag from delay profile")
+    except Exception as e:
+        app.logger.warning(f"Could not clean up delay profile for deleted rule: {str(e)}")
+
+    # Delete the tag from Sonarr entirely (last step after all cleanup)
+    try:
+        headers = episeerr_utils.get_sonarr_headers()
+        delete_resp = http.delete(f"{SONARR_URL}/api/v3/tag/{tag_id}", headers=headers)
+        if delete_resp.ok:
+            app.logger.info(f"✓ Deleted tag 'episeerr_{rule_name}' from Sonarr (ID: {tag_id})")
+        else:
+            app.logger.warning(f"Could not delete tag from Sonarr: {delete_resp.status_code}")
+    except Exception as e:
+        app.logger.warning(f"Could not delete tag from Sonarr: {str(e)}")
+
+    return tag_removed
+
+
+_RULE_FIELD_NAMES = (
+    'description', 'get_type', 'get_count', 'keep_type', 'keep_count',
+    'action_option', 'monitor_watched', 'grace_watched', 'grace_unwatched',
+    'dormant_days', 'grace_scope', 'keep_pilot', 'release_keep_on_finale',
+    'unmonitor_on_series_ended', 'always_have', 'dry_run',
+)
+
+
 @app.route('/create-rule', methods=['GET', 'POST'])
 def create_rule():
     """Create a new rule."""
@@ -3773,70 +4147,18 @@ def create_rule():
             return redirect(url_for('index', message="Rule name is required"))
         if rule_name in config['rules']:
             return redirect(url_for('index', message=f"Rule '{rule_name}' already exists"))
-         
-        # Parse dropdown values
-        get_type = request.form.get('get_type', 'episodes')
-        get_count = request.form.get('get_count', '').strip()
-        keep_type = request.form.get('keep_type', 'episodes')
-        keep_count = request.form.get('keep_count', '').strip()
-        
-        # Convert to integer or None for 'all' type
-        get_count = None if get_type == 'all' else int(get_count) if get_count else 1
-        keep_count = None if keep_type == 'all' else int(keep_count) if keep_count else 1
-        
-        # Parse grace fields
-        grace_watched = request.form.get('grace_watched', '').strip()
-        grace_unwatched = request.form.get('grace_unwatched', '').strip()
-        dormant_days = request.form.get('dormant_days', '').strip()
-        grace_scope = request.form.get('grace_scope', 'series')  # Default to 'series'
-        
-        grace_watched = None if not grace_watched else int(grace_watched)
-        grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
-        dormant_days = None if not dormant_days else int(dormant_days)
-        
-        always_have = request.form.get('always_have', '').strip()
-        ah_valid, ah_error = media_processor.validate_always_have_expression(always_have)
-        if not ah_valid:
-            return render_template('create_rule.html', error=ah_error, always_have_value=always_have)
 
-        # Save rule
-        config['rules'][rule_name] = {
-            'description': request.form.get('description', ''),
-            'get_type': get_type,
-            'get_count': get_count,
-            'keep_type': keep_type,
-            'keep_count': keep_count,
-            'action_option': request.form.get('action_option', 'monitor'),
-            'monitor_watched': 'monitor_watched' in request.form,
-            'grace_watched': grace_watched,
-            'grace_unwatched': grace_unwatched,
-            'dormant_days': dormant_days,
-            'grace_scope': grace_scope,
-            'keep_pilot': 'keep_pilot' in request.form,
-            'release_keep_on_finale': 'release_keep_on_finale' in request.form,
-            'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in request.form,
-            'always_have': always_have,
-            'series': {},
-            'dry_run': False
-        }
-        
-        # Handle default rule setting
-        if 'set_as_default' in request.form:
-            config['default_rule'] = rule_name
-        
+        normalized, error = _normalize_rule_payload(_form_to_rule_dict(request.form), default_dry_run=False)
+        if error:
+            return render_template('create_rule.html', error=error,
+                                   always_have_value=request.form.get('always_have', '').strip())
+
+        normalized['series'] = {}
+        config['rules'][rule_name] = normalized
+        _set_default_rule_on_create(config, rule_name, 'set_as_default' in request.form)
+
         save_config(config)
-        # NOTE: No longer updating delay profile here - only control tags are in delay profile
-        try:
-            tag_id = episeerr_utils.get_or_create_rule_tag_id(rule_name)
-            if tag_id:
-                app.logger.info(f"✓ Created/verified tag episeerr_{rule_name} with ID {tag_id}")
-            else:
-                app.logger.warning(f"⚠️ Could not create tag for rule '{rule_name}'")
-        except Exception as e:
-            app.logger.error(f"Error creating rule tag: {str(e)}")
-        message = f"Rule '{rule_name}' created successfully"
-        if 'set_as_default' in request.form:
-            message += " and set as default"
+        _ensure_rule_tag(rule_name)
 
         # Always redirect to rules page after creating a rule
         return redirect(url_for('rules_page'))
@@ -3851,189 +4173,126 @@ def edit_rule(rule_name):
     app.logger.info(f"Available rules: {list(config['rules'].keys())}")
     if rule_name not in config['rules']:
         return redirect(url_for('index', message=f"Rule '{rule_name}' not found"))
-    
-    if request.method == 'POST':
-        # Parse dropdown values
-        get_type = request.form.get('get_type', 'episodes')
-        get_count = request.form.get('get_count', '').strip()
-        keep_type = request.form.get('keep_type', 'episodes')
-        keep_count = request.form.get('keep_count', '').strip()
-        
-        # Convert to integer or None for 'all' type
-        get_count = None if get_type == 'all' else int(get_count) if get_count else 1
-        keep_count = None if keep_type == 'all' else int(keep_count) if keep_count else 1
-        
-        # Parse grace fields
-        grace_watched = request.form.get('grace_watched', '').strip()
-        grace_unwatched = request.form.get('grace_unwatched', '').strip()
-        dormant_days = request.form.get('dormant_days', '').strip()
-        grace_scope = request.form.get('grace_scope', 'series')  # Default to 'series'
-        
-        grace_watched = None if not grace_watched else int(grace_watched)
-        grace_unwatched = None if not grace_unwatched else int(grace_unwatched)
-        dormant_days = None if not dormant_days else int(dormant_days)
-        
-        always_have = request.form.get('always_have', '').strip()
-        ah_valid, ah_error = media_processor.validate_always_have_expression(always_have)
-        if not ah_valid:
-            rule = config['rules'][rule_name]
-            return render_template('edit_rule.html', rule_name=rule_name, rule=rule,
-                                   config=config, error=ah_error)
 
-        # Update rule
-        config['rules'][rule_name].update({
-            'description': request.form.get('description', ''),
-            'get_type': get_type,
-            'get_count': get_count,
-            'keep_type': keep_type,
-            'keep_count': keep_count,
-            'action_option': request.form.get('action_option', 'monitor'),
-            'monitor_watched': 'monitor_watched' in request.form,
-            'grace_watched': grace_watched,
-            'grace_unwatched': grace_unwatched,
-            'dormant_days': dormant_days,
-            'grace_scope': grace_scope,
-            'keep_pilot': 'keep_pilot' in request.form,
-            'release_keep_on_finale': 'release_keep_on_finale' in request.form,
-            'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in request.form,
-            'always_have': always_have
-        })
-        
-        # Handle default rule setting
-        if 'set_as_default' in request.form:
-            config['default_rule'] = rule_name
-        elif rule_name == config.get('default_rule') and 'set_as_default' not in request.form:
-            # If this was the default rule but checkbox is unchecked, we need a new default
-            # Set the first available rule as default, or remove default if this is the only rule
-            other_rules = [r for r in config['rules'].keys() if r != rule_name]
-            if other_rules:
-                config['default_rule'] = other_rules[0]
-            else:
-                config.pop('default_rule', None)
-        
+    if request.method == 'POST':
+        existing = config['rules'][rule_name]
+        normalized, error = _normalize_rule_payload(
+            _form_to_rule_dict(request.form), default_dry_run=existing.get('dry_run', False)
+        )
+        if error:
+            return render_template('edit_rule.html', rule_name=rule_name, rule=existing,
+                                   config=config, error=error)
+
+        existing.update(normalized)
+        _set_default_rule_on_edit(config, rule_name, 'set_as_default' in request.form)
+
         save_config(config)
-        
-        # NEW: Ensure tag exists (in case it was manually deleted)
-        try:
-            tag_id = episeerr_utils.get_or_create_rule_tag_id(rule_name)
-            if tag_id:
-                app.logger.debug(f"✓ Verified tag episeerr_{rule_name}")
-        except Exception as e:
-            app.logger.error(f"Error verifying rule tag: {str(e)}")
-        
-        message = f"Rule '{rule_name}' updated successfully"
-        if 'set_as_default' in request.form and config.get('default_rule') == rule_name:
-            message += " and set as default"
-        
+        _ensure_rule_tag(rule_name)
+
         return redirect(url_for('rules_page'))
-    
+
     rule = config['rules'][rule_name]
     return render_template('edit_rule.html', rule_name=rule_name, rule=rule, config=config)
+
+
 @app.route('/delete-rule/<rule_name>', methods=['POST'])
 def delete_rule(rule_name):
     """Delete a rule and clean up its tag from Sonarr and delay profile."""
     config = load_config()
-    if rule_name not in config['rules']:
-        return redirect(url_for('index', message=f"Rule '{rule_name}' not found"))
-    
-    if rule_name == config.get('default_rule'):
-        return redirect(url_for('index', message="Cannot delete the default rule"))
-    
-    # PROTECTION: Never delete special workflow tags
-    if rule_name.lower() in ['select', 'default']:
-        return redirect(url_for('index', message=f"Cannot delete special tag '{rule_name}'"))
-    
-    # Delete rule from config
+    error = _check_rule_deletable(config, rule_name)
+    if error:
+        return redirect(url_for('index', message=error))
+
     del config['rules'][rule_name]
     save_config(config)
-    
-    # Get tag ID for the deleted rule (do this before deleting)
-    tag_id = None
-    try:
-        tag_id = episeerr_utils.get_or_create_rule_tag_id(rule_name)
-    except Exception as e:
-        app.logger.warning(f"Could not get tag ID for '{rule_name}': {str(e)}")
-    
-    # Clean up the tag from series in Sonarr
-    tag_removed = False
-    if tag_id:
-        try:
-            headers = episeerr_utils.get_sonarr_headers()
-            series_response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
-            if series_response.ok:
-                all_series = series_response.json()
-                removed_from_count = 0
-                
-                for series in all_series:
-                    tags = series.get('tags', [])
-                    if tag_id in tags:
-                        tags.remove(tag_id)
-                        series['tags'] = tags
-                        update_resp = http.put(
-                            f"{SONARR_URL}/api/v3/series/{series['id']}",
-                            headers=headers,
-                            json=series
-                        )
-                        if update_resp.ok:
-                            removed_from_count += 1
-                            tag_removed = True
-                        else:
-                            app.logger.warning(f"Failed to remove tag from series {series['id']}")
-                
-                if removed_from_count > 0:
-                    app.logger.info(f"Removed deleted rule tag '{rule_name}' from {removed_from_count} series")
-                else:
-                    app.logger.debug(f"No series had the tag for deleted rule '{rule_name}'")
-            else:
-                app.logger.error("Failed to fetch series list for tag cleanup")
-        except Exception as e:
-            app.logger.warning(f"Could not clean up tag for deleted rule '{rule_name}': {str(e)}")
-    
-    # Remove from delay profile (only the deleted tag, don't touch others)
-    if tag_id:
-        try:
-            profile_id = episeerr_utils.get_episeerr_delay_profile_id()
-            if profile_id:
-                headers = episeerr_utils.get_sonarr_headers()
-                get_resp = http.get(f"{SONARR_URL}/api/v3/delayprofile/{profile_id}", headers=headers)
-                if get_resp.ok:
-                    profile = get_resp.json()
-                    current_tags = profile.get('tags', [])
-                    if tag_id in current_tags:
-                        current_tags.remove(tag_id)
-                        profile['tags'] = current_tags
-                        put_resp = http.put(
-                            f"{SONARR_URL}/api/v3/delayprofile/{profile_id}",
-                            headers=headers,
-                            json=profile
-                        )
-                        if put_resp.ok:
-                            app.logger.info(f"Removed deleted rule tag from delay profile {profile_id}")
-                        else:
-                            app.logger.warning(f"Failed to remove tag from delay profile")
-        except Exception as e:
-            app.logger.warning(f"Could not clean up delay profile for deleted rule: {str(e)}")
-    
-    # Delete the tag from Sonarr entirely (last step after all cleanup)
-    if tag_id:
-        try:
-            headers = episeerr_utils.get_sonarr_headers()
-            delete_resp = http.delete(
-                f"{SONARR_URL}/api/v3/tag/{tag_id}",
-                headers=headers
-            )
-            if delete_resp.ok:
-                app.logger.info(f"✓ Deleted tag 'episeerr_{rule_name}' from Sonarr (ID: {tag_id})")
-            else:
-                app.logger.warning(f"Could not delete tag from Sonarr: {delete_resp.status_code}")
-        except Exception as e:
-            app.logger.warning(f"Could not delete tag from Sonarr: {str(e)}")
-    
-    message = f"Rule '{rule_name}' deleted successfully"
-    if tag_removed:
-        message += " (tag cleaned up from Sonarr)"
-    
+    _cleanup_rule_tag_from_sonarr(rule_name)
+
     return redirect(url_for('rules_page'))
+
+
+@app.route('/api/rules/<rule_name>', methods=['GET'])
+def api_get_rule(rule_name):
+    """JSON: fetch a single rule's full editable field set (for a native client's edit screen)."""
+    config = load_config()
+    if rule_name not in config['rules']:
+        return jsonify({'success': False, 'error': f"Rule '{rule_name}' not found"}), 404
+
+    rule = config['rules'][rule_name]
+    payload = {field: rule.get(field) for field in _RULE_FIELD_NAMES}
+    payload['name'] = rule_name
+    payload['is_default'] = (rule_name == config.get('default_rule'))
+    payload['series_count'] = len(rule.get('series', {}))
+    return jsonify({'success': True, 'rule': payload})
+
+
+@app.route('/api/rules', methods=['POST'])
+def api_create_rule():
+    """JSON: create a rule. Body: {rule_name, set_as_default, ...rule fields}."""
+    config = load_config()
+    data = request.get_json(silent=True) or {}
+    rule_name = str(data.get('rule_name', '')).strip()
+    if not rule_name:
+        return jsonify({'success': False, 'error': 'Rule name is required'}), 400
+    if rule_name in config['rules']:
+        return jsonify({'success': False, 'error': f"Rule '{rule_name}' already exists"}), 409
+
+    normalized, error = _normalize_rule_payload(data, default_dry_run=False)
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+
+    normalized['series'] = {}
+    config['rules'][rule_name] = normalized
+    _set_default_rule_on_create(config, rule_name, bool(data.get('set_as_default', False)))
+
+    save_config(config)
+    _ensure_rule_tag(rule_name)
+
+    payload = {field: normalized.get(field) for field in _RULE_FIELD_NAMES}
+    payload['name'] = rule_name
+    payload['is_default'] = (config.get('default_rule') == rule_name)
+    return jsonify({'success': True, 'rule': payload}), 201
+
+
+@app.route('/api/rules/<rule_name>', methods=['PUT'])
+def api_edit_rule(rule_name):
+    """JSON: update a rule. Body: {set_as_default, ...rule fields}."""
+    config = load_config()
+    if rule_name not in config['rules']:
+        return jsonify({'success': False, 'error': f"Rule '{rule_name}' not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    existing = config['rules'][rule_name]
+    normalized, error = _normalize_rule_payload(data, default_dry_run=existing.get('dry_run', False))
+    if error:
+        return jsonify({'success': False, 'error': error}), 400
+
+    existing.update(normalized)
+    _set_default_rule_on_edit(config, rule_name, bool(data.get('set_as_default', False)))
+
+    save_config(config)
+    _ensure_rule_tag(rule_name)
+
+    payload = {field: existing.get(field) for field in _RULE_FIELD_NAMES}
+    payload['name'] = rule_name
+    payload['is_default'] = (config.get('default_rule') == rule_name)
+    return jsonify({'success': True, 'rule': payload})
+
+
+@app.route('/api/rules/<rule_name>', methods=['DELETE'])
+def api_delete_rule(rule_name):
+    """JSON: delete a rule and clean up its Sonarr tag."""
+    config = load_config()
+    error = _check_rule_deletable(config, rule_name)
+    if error:
+        status = 404 if 'not found' in error else 400
+        return jsonify({'success': False, 'error': error}), status
+
+    del config['rules'][rule_name]
+    save_config(config)
+    tag_removed = _cleanup_rule_tag_from_sonarr(rule_name)
+
+    return jsonify({'success': True, 'tag_cleaned_up': tag_removed})
+
 
 @app.route('/assign-rules', methods=['POST'])
 def assign_rules():
