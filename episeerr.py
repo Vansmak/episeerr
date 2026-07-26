@@ -1878,6 +1878,31 @@ def delete_movie_rule(rule_name):
     return redirect(url_for('movie_rules_page'))
 
 
+@app.route('/api/movie-rules', methods=['GET'])
+def api_movie_rules_list():
+    """JSON: summary list of movie rules, for a native client's list screen."""
+    try:
+        config = load_config()
+        default_rule = config.get('default_movie_rule')
+        movie_rules = config.get('movie_rules', {})
+
+        rules_list = []
+        for rule_name, rule_details in sorted(movie_rules.items()):
+            rules_list.append({
+                'name': rule_name,
+                'display_name': rule_name.replace('_', ' ').title(),
+                'description': rule_details.get('description', ''),
+                'movie_count': len(rule_details.get('movies', {})),
+                'is_default': (rule_name == default_rule)
+            })
+
+        rules_list.sort(key=lambda x: (not x['is_default'], x['display_name']))
+
+        return jsonify({'success': True, 'rules': rules_list, 'total_count': len(rules_list)})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/movie-rules/<rule_name>', methods=['GET'])
 def api_get_movie_rule(rule_name):
     """JSON: fetch a single movie rule's full editable field set."""
