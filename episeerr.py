@@ -4545,45 +4545,39 @@ def api_delete_rule(rule_name):
     return jsonify({'success': True, 'tag_cleaned_up': tag_removed})
 
 
-@app.route('/assign-rules', methods=['POST'])
-def assign_rules():
-    """Assign series to rules while preserving activity data."""
-    config = load_config()
-    rule_name = request.form.get('rule_name')
-    series_ids = request.form.getlist('series_ids')
-    if not rule_name or rule_name not in config['rules']:
-        referer = request.referrer or ''
-        if '/rules' in referer:
-            return redirect(url_for('rules_page'))
-        return redirect(url_for('index', message="Invalid rule selected"))
-    
+def _assign_series_ids_to_rule(config, rule_name, series_ids):
+    """
+    Move the given Sonarr series IDs (as strings) into rule_name: preserves
+    per-series activity data across the move, processes always_have
+    (additive only), and syncs the episeerr_<rule> tag to Sonarr for each.
+    Returns (preserved_count, tag_sync_success, tag_sync_failed).
+    """
     # STEP 1: Collect existing activity data BEFORE removing
     existing_activity = {}
     for series_id in series_ids:
         for rule, details in config['rules'].items():
             series_dict = details.get('series', {})
             if series_id in series_dict and isinstance(series_dict[series_id], dict):
-                # Preserve the complete activity data
                 existing_activity[series_id] = series_dict[series_id].copy()
                 break
-    
+
     # STEP 2: Remove from old rules
     for rule, details in config['rules'].items():
         series_dict = details.get('series', {})
         for series_id in series_ids:
             if series_id in series_dict:
                 del series_dict[series_id]
-    
+
     # STEP 3: Add to new rule WITH preserved activity data
     target_series_dict = config['rules'][rule_name].get('series', {})
     preserved_count = 0
     for series_id in series_ids:
         if series_id in existing_activity:
-            target_series_dict[series_id] = existing_activity[series_id]  # Preserve complete data!
+            target_series_dict[series_id] = existing_activity[series_id]
             preserved_count += 1
         else:
-            target_series_dict[series_id] = {'activity_date': None}  # New series
-    
+            target_series_dict[series_id] = {'activity_date': None}
+
     save_config(config)
 
     # Process always_have for newly assigned series (additive only - never unmonitors)
@@ -4595,10 +4589,9 @@ def assign_rules():
             except Exception as e:
                 app.logger.error(f"always_have processing failed for series {sid}: {e}")
 
-    # NEW STEP 4: Sync tags to Sonarr
+    # Sync tags to Sonarr
     tag_sync_success = 0
     tag_sync_failed = 0
-
     for series_id in series_ids:
         try:
             success = episeerr_utils.sync_rule_tag_to_sonarr(int(series_id), rule_name)
@@ -4610,22 +4603,96 @@ def assign_rules():
         except Exception as e:
             tag_sync_failed += 1
             app.logger.error(f"Error syncing tag for series {series_id}: {str(e)}")
-    
+
+    return preserved_count, tag_sync_success, tag_sync_failed
+
+
+@app.route('/assign-rules', methods=['POST'])
+def assign_rules():
+    """Assign series to rules while preserving activity data."""
+    config = load_config()
+    rule_name = request.form.get('rule_name')
+    series_ids = request.form.getlist('series_ids')
+    if not rule_name or rule_name not in config['rules']:
+        referer = request.referrer or ''
+        if '/rules' in referer:
+            return redirect(url_for('rules_page'))
+        return redirect(url_for('index', message="Invalid rule selected"))
+
+    preserved_count, tag_sync_success, tag_sync_failed = _assign_series_ids_to_rule(
+        config, rule_name, series_ids
+    )
+
     # Build result message
     message = f"Assigned {len(series_ids)} series to rule '{rule_name}'"
     if preserved_count > 0:
         message += f" (preserved activity data for {preserved_count} series)"
-    
+
     if tag_sync_success > 0:
         message += f" - synced {tag_sync_success} tags to Sonarr"
     if tag_sync_failed > 0:
         message += f" ({tag_sync_failed} tag syncs failed)"
-    
+
     # Redirect back to where they came from
     referer = request.referrer or ''
     if '/rules' in referer:
         return redirect(url_for('rules_page'))
     return redirect(url_for('index', message=message))
+
+
+@app.route('/api/series-list')
+def api_series_list():
+    """JSON: all Sonarr series with poster + assigned rule, for a native client's series browser."""
+    try:
+        config = load_config()
+        all_series = get_sonarr_series()
+
+        rules_mapping = {}
+        for rule_name, details in config['rules'].items():
+            for series_id in details.get('series', {}).keys():
+                rules_mapping[str(series_id)] = rule_name
+
+        result = []
+        for series in all_series:
+            poster = next(
+                (img['remoteUrl'] for img in series.get('images', []) if img.get('coverType') == 'poster'),
+                None
+            )
+            result.append({
+                'id': series['id'],
+                'title': series.get('title', ''),
+                'year': series.get('year'),
+                'monitored': series.get('monitored', False),
+                'poster': poster,
+                'assigned_rule': rules_mapping.get(str(series['id'])),
+            })
+        result.sort(key=lambda x: x['title'].lower())
+        return jsonify({'success': True, 'series': result})
+    except requests.exceptions.ConnectionError:
+        return jsonify({'success': False, 'error': 'Sonarr not reachable'}), 503
+    except Exception as e:
+        app.logger.error(f"Error fetching series list: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/rules/assign', methods=['POST'])
+def api_assign_rule():
+    """JSON: assign a single series to a rule (mirrors /assign-rules for one series)."""
+    data = request.get_json(silent=True) or {}
+    series_id = data.get('series_id')
+    rule_name = (data.get('rule_name') or '').strip()
+
+    if not series_id:
+        return jsonify({'success': False, 'error': 'series_id required'}), 400
+    if not rule_name:
+        return jsonify({'success': False, 'error': 'rule_name required'}), 400
+
+    config = load_config()
+    if rule_name not in config['rules']:
+        return jsonify({'success': False, 'error': f"Rule '{rule_name}' not found"}), 404
+
+    _assign_series_ids_to_rule(config, rule_name, [str(series_id)])
+    return jsonify({'success': True, 'assigned_rule': rule_name})
 
 @app.context_processor
 def inject_service_urls():
