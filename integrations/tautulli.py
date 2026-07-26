@@ -146,14 +146,15 @@ def process_watch_event(data: dict) -> dict:
             "themoviedb_id":   themoviedb_id,
             "sonarr_series_id": series_id,
             "rule":            final_rule,
+            "source":          "tautulli",
         }
 
-        temp_path = os.path.join(temp_dir, 'data_from_server.json')
+        temp_path = os.path.join(temp_dir, f'data_from_server_{os.urandom(4).hex()}.json')
         with open(temp_path, 'w') as fh:
             json.dump(payload, fh)
 
         result = subprocess.run(
-            ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+            ["python3", os.path.join(os.getcwd(), "media_processor.py"), temp_path],
             capture_output=True,
             text=True,
         )

@@ -1,6 +1,12 @@
 # Changelog
 
-## 📱 New: Companion App (Optional)
+## v3.8.1
+
+### 🐛 Bug Fixes
+
+- **Concurrent webhook events could clobber each other's temp file** — Plex, Jellyfin, and Tautulli integrations all wrote the per-event payload to a fixed filename (`data_from_server.json`) before handing off to `media_processor.py`. Two watch events firing close together (e.g. two viewers, or a native webhook + Tautulli both reporting) could race and have one overwrite the other's file mid-read. Now each event gets a unique temp filename and passes its path explicitly to `media_processor.py` instead of relying on a shared default. (`integrations/plex.py`, `integrations/jellyfin.py`, `integrations/emby.py`, `integrations/tautulli.py`)
+
+### 📱 New: Companion App (Optional)
 
 [EpiseerrApp](https://github.com/vansmak/EpiseerrApp) is now available — an Android client (phone or Android TV) for managing rules, pending approvals, and service config without opening a browser. Entirely optional; Episeerr runs fully without it. See [README](README.md#companion-app-optional) for install instructions.
 
