@@ -2079,92 +2079,84 @@ def recent_cleanup_activity():
         return jsonify({'success': False, 'error': 'Log file not found'})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
+ALLOWED_LOG_FILES = ['episeerr.log', 'cleanup.log', 'app.log']
+
+
+def _read_log_lines(log_file, lines, level, search):
+    """
+    Shared log-reading logic for the HTML /logs page and the JSON /api/logs
+    endpoint. Returns a dict: {log_file, log_lines, total_lines, log_size}.
+    """
+    import os
+
+    if log_file not in ALLOWED_LOG_FILES:
+        log_file = 'episeerr.log'
+
+    log_path = os.path.join(os.getcwd(), 'logs', log_file)
+
+    if not os.path.exists(log_path):
+        return {'log_file': log_file, 'log_lines': [], 'total_lines': 0, 'log_size': '0 KB'}
+
+    file_size = os.path.getsize(log_path)
+    if file_size < 1024:
+        log_size = f"{file_size} bytes"
+    elif file_size < 1024 * 1024:
+        log_size = f"{file_size/1024:.1f} KB"
+    else:
+        log_size = f"{file_size/(1024*1024):.1f} MB"
+
+    with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+        total_lines = sum(1 for _ in f)
+        f.seek(0)
+        all_lines = f.readlines()
+        log_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+
+    if level != 'ALL':
+        log_lines = [line for line in log_lines if level in line]
+    if search:
+        log_lines = [line for line in log_lines if search.lower() in line.lower()]
+
+    log_lines = [line.rstrip('\n') for line in log_lines]
+
+    return {'log_file': log_file, 'log_lines': log_lines, 'total_lines': total_lines, 'log_size': log_size}
+
+
 @app.route('/logs')
 def view_logs():
     """View and filter log files."""
-    import os
     from datetime import datetime
-    
-    # Get parameters
+
     log_file = request.args.get('log_file', 'episeerr.log')
     lines = int(request.args.get('lines', 100))
     level = request.args.get('level', 'ALL')
     search = request.args.get('search', '')
     download = request.args.get('download', 'false') == 'true'
-    
-    # Security: Only allow specific log files
-    allowed_logs = ['episeerr.log', 'cleanup.log', 'app.log']
-    if log_file not in allowed_logs:
-        log_file = 'episeerr.log'
-    
-    # Get log file path
-    log_path = os.path.join(os.getcwd(), 'logs', log_file)
-    
-    if not os.path.exists(log_path):
-        return render_template('view_logs.html', 
-                             log_file=log_file,
-                             log_lines=[],
-                             total_lines=0,
-                             lines=lines,
-                             level=level,
-                             search=search,
-                             log_size='0 KB',
-                             current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
+
     try:
-        # Get file size
-        file_size = os.path.getsize(log_path)
-        if file_size < 1024:
-            log_size = f"{file_size} bytes"
-        elif file_size < 1024*1024:
-            log_size = f"{file_size/1024:.1f} KB"
-        else:
-            log_size = f"{file_size/(1024*1024):.1f} MB"
-        
-        # Read last N lines efficiently
-        with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
-            # Get total line count
-            total_lines = sum(1 for _ in f)
-            
-            # Go back to start and read last N lines
-            f.seek(0)
-            all_lines = f.readlines()
-            log_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-        
-        # Filter by log level
-        if level != 'ALL':
-            log_lines = [line for line in log_lines if level in line]
-        
-        # Filter by search text
-        if search:
-            log_lines = [line for line in log_lines if search.lower() in line.lower()]
-        
-        # Strip newlines for display
-        log_lines = [line.rstrip('\n') for line in log_lines]
-        
-        # Download filtered logs
+        result = _read_log_lines(log_file, lines, level, search)
+
         if download:
             from flask import Response
-            content = '\n'.join(log_lines)
+            content = '\n'.join(result['log_lines'])
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{log_file.replace('.log', '')}_{timestamp}.txt"
-            
+            filename = f"{result['log_file'].replace('.log', '')}_{timestamp}.txt"
+
             return Response(
                 content,
                 mimetype='text/plain',
                 headers={'Content-Disposition': f'attachment; filename={filename}'}
             )
-        
+
         return render_template('view_logs.html',
-                             log_file=log_file,
-                             log_lines=log_lines,
-                             total_lines=total_lines,
+                             log_file=result['log_file'],
+                             log_lines=result['log_lines'],
+                             total_lines=result['total_lines'],
                              lines=lines,
                              level=level,
                              search=search,
-                             log_size=log_size,
+                             log_size=result['log_size'],
                              current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
+
     except Exception as e:
         app.logger.error(f"Error reading log file: {str(e)}")
         return render_template('view_logs.html',
@@ -2176,6 +2168,29 @@ def view_logs():
                              search=search,
                              log_size='Unknown',
                              current_time=datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+
+
+@app.route('/api/logs')
+def api_view_logs():
+    """JSON: same log reading/filtering as /logs, for a native client's log viewer."""
+    log_file = request.args.get('log_file', 'episeerr.log')
+    lines = int(request.args.get('lines', 200))
+    level = request.args.get('level', 'ALL')
+    search = request.args.get('search', '')
+
+    try:
+        result = _read_log_lines(log_file, lines, level, search)
+        return jsonify({
+            'success': True,
+            'log_file': result['log_file'],
+            'log_lines': result['log_lines'],
+            'total_lines': result['total_lines'],
+            'log_size': result['log_size'],
+            'available_logs': ALLOWED_LOG_FILES
+        })
+    except Exception as e:
+        app.logger.error(f"Error reading log file via API: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/logs/clear', methods=['POST'])
