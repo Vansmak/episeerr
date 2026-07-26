@@ -120,6 +120,18 @@
                             </div>
 
                             <div class="mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="unmonitor_on_series_ended"
+                                           name="unmonitor_on_series_ended"
+                                           {% if rule.get('unmonitor_on_series_ended') %}checked{% endif %}>
+                                    <label class="form-check-label" for="unmonitor_on_series_ended">
+                                        <i class="fas fa-lock text-secondary me-1"></i>Unmonitor on Series Ended
+                                    </label>
+                                    <div class="form-text">When Sonarr reports a series has ended, unmonitor the watched season and the series itself after a watch event.</div>
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
                                 <label for="always_have" class="form-label"><i class="fas fa-lock text-success me-1"></i>Always Have</label>
                                 {% if error %}
                                 <div class="alert alert-danger py-1 px-2 mb-1 small">{{ error }}</div>
