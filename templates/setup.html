@@ -318,7 +318,26 @@
                                     </small>
                                 </div>
                             </div>
-                            
+
+                            {% if integration.get_dashboard_widget() %}
+                            <!-- Dashboard Pill Option -->
+                            <div class="mb-3">
+                                <div class="form-check">
+                                    <input type="checkbox"
+                                        class="form-check-input"
+                                        id="{{ integration.service_name }}-show_dashboard_pill"
+                                        name="{{ integration.service_name }}-show_dashboard_pill"
+                                        {% if integration_configs[integration.service_name].saved_values.get('show_dashboard_pill', true) %}checked{% endif %}>
+                                    <label class="form-check-label" for="{{ integration.service_name }}-show_dashboard_pill">
+                                        Show pill on Dashboard
+                                    </label>
+                                    <small class="form-text text-muted d-block">
+                                        Uncheck to keep this service configured without cluttering the dashboard's top stats row
+                                    </small>
+                                </div>
+                            </div>
+                            {% endif %}
+
                             {% if integration.get_custom_setup_html is defined %}
                                 {{ integration.get_custom_setup_html(integration_configs[integration.service_name].saved_values) | safe }}
                             {% endif %}
