@@ -21,7 +21,6 @@ This project started as scratching my own itch - I wanted more granular series m
 - [Quick Start](#quick-start)
 - [Installation](#installation)
   - [Docker Compose](#docker-compose-recommended)
-  - [Unraid](#unraid)
   - [Environment Variables](#environment-variables)
 - [Plex Watchlist Sync](#plex-watchlist-sync)
   - [Setup](#setup)
@@ -41,6 +40,7 @@ This project started as scratching my own itch - I wanted more granular series m
 - [Configuration Examples](#configuration-examples)
 - [Troubleshooting](#troubleshooting)
 - [Screenshots](#screenshots)
+- [Companion App (Optional)](#companion-app-optional)
 - [FAQ](#faq)
 - [Support](#support)
 
@@ -206,60 +206,6 @@ docker-compose up -d
 ```
 http://your-server:5002
 ```
-
----
-
-### Unraid  Untested by me
-
-**1. Add Custom Template**
-
-Create `/boot/config/plugins/community.applications/private/episeerr/my-episeerr.xml`:
-
-```xml
-<?xml version="1.0"?>
-<Container version="2">
-  <Name>episeerr</Name>
-  <Repository>vansmak/episeerr:latest</Repository>
-  <Registry>https://hub.docker.com/r/vansmak/episeerr</Registry>
-  <Network>bridge</Network>
-  <Shell>sh</Shell>
-  <Privileged>false</Privileged>
-  <Support>https://github.com/Vansmak/episeerr/issues</Support>
-  <Project>https://github.com/Vansmak/episeerr</Project>
-  <Overview>Smart episode management for Sonarr</Overview>
-  <Category>MediaApp:Video</Category>
-  <WebUI>http://[IP]:[PORT:5002]</WebUI>
-  <Icon>https://raw.githubusercontent.com/Vansmak/episeerr/main/static/logo_icon.png</Icon>
-  
-  <Config Name="WebUI Port" Target="5002" Default="5002" Mode="tcp" Description="Episeerr WebUI" Type="Port" Display="always" Required="true" Mask="false"/>
-  
-  <Config Name="Config" Target="/app/config" Default="/mnt/user/appdata/episeerr/config" Mode="rw" Description="Configuration files" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Logs" Target="/app/logs" Default="/mnt/user/appdata/episeerr/logs" Mode="rw" Description="Log files" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Data" Target="/app/data" Default="/mnt/user/appdata/episeerr/data" Mode="rw" Description="Database files" Type="Path" Display="always" Required="true" Mask="false"/>
-  <Config Name="Temp" Target="/app/temp" Default="/mnt/user/appdata/episeerr/temp" Mode="rw" Description="Temporary files" Type="Path" Display="always" Required="false" Mask="false"/>
-  
-  <Config Name="SONARR_URL" Target="SONARR_URL" Default="" Description="Sonarr base URL (e.g., http://sonarr:8989)" Type="Variable" Display="always" Required="true" Mask="false"/>
-  <Config Name="SONARR_API_KEY" Target="SONARR_API_KEY" Default="" Description="Sonarr API key" Type="Variable" Display="always" Required="true" Mask="true"/>
-  <Config Name="TMDB_API_KEY" Target="TMDB_API_KEY" Default="" Description="TMDB Read Access Token (not API key)" Type="Variable" Display="always" Required="true" Mask="true"/>
-  
-  <Config Name="TAUTULLI_URL" Target="TAUTULLI_URL" Default="" Description="Tautulli URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  <Config Name="TAUTULLI_API_KEY" Target="TAUTULLI_API_KEY" Default="" Description="Tautulli API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
-  
-  <Config Name="JELLYFIN_URL" Target="JELLYFIN_URL" Default="" Description="Jellyfin URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  <Config Name="JELLYFIN_API_KEY" Target="JELLYFIN_API_KEY" Default="" Description="Jellyfin API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
-  <Config Name="JELLYFIN_USER_ID" Target="JELLYFIN_USER_ID" Default="" Description="Jellyfin Username (required if using Jellyfin)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  
-  <Config Name="JELLYSEERR_URL" Target="JELLYSEERR_URL" Default="" Description="Jellyseerr URL (optional)" Type="Variable" Display="always" Required="false" Mask="false"/>
-  <Config Name="JELLYSEERR_API_KEY" Target="JELLYSEERR_API_KEY" Default="" Description="Jellyseerr API Key (optional)" Type="Variable" Display="always" Required="false" Mask="true"/>
-</Container>
-```
-
-**2. Install from Apps**
-
-1. Unraid → Apps
-2. Search "episeerr"
-3. Click Install
-4. Fill in required fields
 
 ---
 
@@ -578,8 +524,10 @@ If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold 
    ```
 4. **Save**
 
-> For non-held series (no `+` modifier), playback start events are silently ignored — no risk of double-processing.
-> Do not add `"notification_type"` to the "Watched" agent's template — leave it out there, since a hardcoded `"playback start"` on the Watched agent would make watched events get ignored too.
+> **The "Watched" agent alone is enough — Playback Start is purely optional.** Unlike Jellyfin/Emby's polling mode, Tautulli's "Watched" trigger already fires on its own once your **TV Episode Watched Percent** setting (below) is crossed — Episeerr never needs to poll anything for Tautulli. Adding "Playback Start" doesn't change *whether* or *when* watch detection happens; it only adds an earlier, optional prefetch.
+> If you do configure it, Playback Start runs in **prefetch-only** mode: your get-count is applied, so the next episode is staged as soon as you start watching. Everything triggered by *finishing* an episode — keep-window deletion, finale keep-release, sequential season advance, series-ended unmonitor — is deferred to the "Watched" event, so nothing is ever deleted while you're mid-episode. Held series (`+` modifier) are the exception: their activation episode releases the hold and processes fully on play start, as before.
+> Since both agents fire for the same episode ~however long you take to finish it, the next episode may get searched for twice (once at start, once at watched) — Sonarr no-ops the repeat, so this is harmless, just slightly redundant.
+> Do not add `"notification_type"` to the "Watched" agent's template — leave it out there, since a hardcoded `"playback start"` on the Watched agent would make watched events prefetch-only and never clean up.
 
 In Tautulli → Settings → General, set **TV Episode Watched Percent** between 50–95% (recommended: 80%).
 
@@ -1324,6 +1272,15 @@ docker logs episeerr | grep "Jellyfin"
 
 <img width="1869" height="1040" alt="image" src="https://github.com/user-attachments/assets/b03ad3a3-c5eb-4805-a3ec-929a69469d82" />
 
+---
+
+## Companion App (Optional)
+
+**[EpiseerrApp](https://github.com/vansmak/EpiseerrApp)** is an Android client (phone or Android TV) for managing your Episeerr instance — rules, pending approvals, and service config, without opening a browser. It's entirely optional: Episeerr runs fully without it.
+
+- **Download:** [latest release](https://github.com/vansmak/EpiseerrApp/releases/latest), or grab the newest build from the repo's [Actions tab](https://github.com/vansmak/EpiseerrApp/actions) after any push to `main`
+- **Install:** sideload on Android TV or mobile — see the [EpiseerrApp README](https://github.com/vansmak/EpiseerrApp#readme) for step-by-step instructions
+- Point it at your Episeerr server URL on first launch, same as any other client
 
 ## FAQ
 

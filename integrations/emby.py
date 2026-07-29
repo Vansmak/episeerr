@@ -433,19 +433,25 @@ class EmbyIntegration(ServiceIntegration):
                 'themoviedb_id': None,
                 'sonarr_series_id': series_id,
                 'rule': final_rule,
-                'source': 'emby'
+                'source': 'emby',
+                'user': user_name
             }
 
-            temp_file_path = os.path.join(temp_dir, 'data_from_server.json')
+            temp_file_path = os.path.join(temp_dir, f'data_from_server_{os.urandom(4).hex()}.json')
             with open(temp_file_path, 'w') as f:
                 json.dump(episode_data, f)
 
             # Run media_processor
             result = subprocess.run(
-                ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+                ["python3", os.path.join(os.getcwd(), "media_processor.py"), temp_file_path],
                 capture_output=True,
                 text=True
             )
+
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass
 
             if result.returncode != 0:
                 logger.error(f"media_processor failed (rc={result.returncode}): {result.stderr}")

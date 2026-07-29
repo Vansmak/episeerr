@@ -323,6 +323,40 @@ fi
 
 echo "✅ Docker operations completed"
 
+# Step 3: GitHub Release (so the tag actually shows up under the Releases tab,
+# not just as a bare git tag). Best-effort - never fails the release over this.
+if [ "$IS_TEST" = false ]; then
+    echo ""
+    echo "📣 Step 3: Creating GitHub Release for v$VERSION"
+    echo "------------------------------------------------"
+    if command -v gh >/dev/null 2>&1; then
+        NOTES_FILE=$(mktemp)
+        awk -v ver="## v$VERSION" '
+            $0 == ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+        ' CHANGELOG.md > "$NOTES_FILE"
+
+        if [ ! -s "$NOTES_FILE" ]; then
+            echo "v$VERSION" > "$NOTES_FILE"
+        fi
+
+        GH_RELEASE_ARGS=(--title "Episeerr v$VERSION" --notes-file "$NOTES_FILE")
+        if [ "$IS_PRERELEASE" = true ]; then
+            GH_RELEASE_ARGS+=(--prerelease)
+        fi
+
+        if gh release create "v$VERSION" "${GH_RELEASE_ARGS[@]}"; then
+            echo "  ✅ GitHub Release created: v$VERSION"
+        else
+            echo "  ⚠️  GitHub Release creation failed (non-fatal) - tag v$VERSION is still pushed"
+        fi
+        rm -f "$NOTES_FILE"
+    else
+        echo "  ⚠️  gh CLI not found - skipping GitHub Release (tag v$VERSION is still pushed)"
+    fi
+fi
+
 # Summary
 echo ""
 echo "🎉 Release Summary"

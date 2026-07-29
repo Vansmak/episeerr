@@ -224,7 +224,6 @@
                  {% if not integration_configs[integration.service_name].enabled %}style="opacity:0.6"{% endif %}>
                 <div class="card-header d-flex justify-content-between align-items-center">
                     <div class="d-flex align-items-center gap-3">
-                        <!-- Enable/disable toggle — first thing visible, prominent -->
                         <div class="form-check form-switch mb-0" title="Enable or disable this service">
                             <input class="form-check-input" type="checkbox" role="switch"
                                    id="{{ integration.service_name }}-enabled-toggle"
@@ -246,9 +245,15 @@
                             <small class="text-muted">{{ integration.description }}</small>
                         </div>
                     </div>
-                    <button class="btn btn-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#{{ integration.service_name }}-config">
-                        <i class="fas fa-cog me-1"></i>
-                    </button>
+                    <div class="d-flex align-items-center gap-2">
+                        <button class="btn btn-outline-danger btn-sm" title="Remove this service's saved configuration"
+                                onclick="removeService('{{ integration.service_name }}', '{{ integration.display_name }}')">
+                            <i class="fas fa-trash-alt"></i>
+                        </button>
+                        <button class="btn btn-primary btn-sm" data-bs-toggle="collapse" data-bs-target="#{{ integration.service_name }}-config">
+                            <i class="fas fa-cog me-1"></i>
+                        </button>
+                    </div>
                 </div>
                 <div id="{{ integration.service_name }}-config" class="collapse">
                     <div class="card-body">
@@ -498,6 +503,22 @@ function toggleServiceEnabled(service, enabled) {
         const cb = document.getElementById(`${service}-enabled-toggle`);
         if (cb) cb.checked = !enabled;
     });
+}
+
+function removeService(service, displayName) {
+    if (!confirm(`Remove ${displayName}'s saved configuration? You'll need to re-enter its URL/API key to use it again.`)) {
+        return;
+    }
+    fetch(`/api/delete-service/${service}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                window.location.reload();
+            } else {
+                alert(`Failed to remove ${displayName}: ${data.message || 'Unknown error'}`);
+            }
+        })
+        .catch(err => alert(`Failed to remove ${displayName}: ${err}`));
 }
 
 async function loadQualityProfiles(serviceName, selectEl) {

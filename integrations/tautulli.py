@@ -32,19 +32,24 @@ logger = logging.getLogger(__name__)
 
 def process_watch_event(data: dict) -> dict:
     """
-    Handle a Tautulli webhook payload — "watched", or "playback start" for
-    held-activation series (e.g. always_have's e1+ modifier).
+    Handle a Tautulli webhook payload — "watched", or "playback start".
 
-    A "playback start" event is only ever treated as a watch: for every other
-    series it's a no-op, since playback starting is not playback finishing —
-    processing it as a full watched event would fire keep-window and
-    finale-release cleanup on an episode someone just started playing, which
-    is exactly the "episode you're mid-watch on gets deleted" bug (#62). The
-    only reason to act on it at all is to release a held e1+-style hold,
-    which is explicitly designed to trigger on playback start rather than
-    completion. This guard lives here (not in a route handler) so it applies
-    to every caller, including the legacy /webhook backward-compatibility
-    route in webhooks.py, which delegates straight to this function.
+    A "playback start" event is not a watch: processing it as a full watched
+    event would fire keep-window and finale-release cleanup on an episode
+    someone just started playing, which is exactly the "episode you're
+    mid-watch on gets deleted" bug (#62). It is not a no-op either — staging
+    the next episode as soon as you start one is the feature #62 asked for.
+
+    So playback start runs in prefetch-only mode: the get_count fetch runs,
+    every completion-triggered step (keep-window deletion, finale release,
+    sequential advance, series-ended unmonitor) is suppressed until the real
+    watched event arrives. Held e1+-style series are the one exception — an
+    activation episode releases its hold and processes fully, since that hold
+    is designed to release on playback start rather than completion.
+
+    This lives here (not in a route handler) so it applies to every caller,
+    including the legacy /webhook backward-compatibility route in webhooks.py,
+    which delegates straight to this function.
 
     Extracts series/episode identifiers, performs Sonarr tag-sync and
     drift correction, then spawns media_processor.py to process the
@@ -56,6 +61,7 @@ def process_watch_event(data: dict) -> dict:
     """
     try:
         notification_type = (data.get('notification_type') or '').strip().lower()
+        prefetch_only = False
 
         if notification_type == 'playback start':
             ps_series_title  = (data.get('plex_title') or data.get('server_title') or '').strip()
@@ -70,19 +76,20 @@ def process_watch_event(data: dict) -> dict:
             is_activation, _ = is_held_activation_episode(
                 ps_series_title, int(ps_season_number), int(ps_episode_number)
             )
-            if not is_activation:
+            if is_activation:
                 logger.info(
-                    f"[Tautulli] Playback start for non-held series "
-                    f"({ps_series_title} S{ps_season_number}E{ps_episode_number}) — ignored"
+                    f"[Tautulli] Held activation: {ps_series_title} "
+                    f"S{ps_season_number}E{ps_episode_number} — releasing hold on play start"
                 )
-                return {'status': 'success', 'message': 'Playback start noted'}
-
-            logger.info(
-                f"[Tautulli] Held activation: {ps_series_title} "
-                f"S{ps_season_number}E{ps_episode_number} — releasing hold on play start"
-            )
-            # Fall through to normal processing below — activation is
-            # designed to release on playback start, same as a watched event.
+                # Full processing — the hold is designed to release on playback
+                # start, same as a watched event.
+            else:
+                prefetch_only = True
+                logger.info(
+                    f"[Tautulli] Playback start: {ps_series_title} "
+                    f"S{ps_season_number}E{ps_episode_number} — prefetch only "
+                    f"(cleanup deferred to watched event)"
+                )
 
         # {show_name} is TV-only in Tautulli; movies send it empty — fall back to {title}
         series_title   = (data.get('plex_title') or data.get('plex_movie_title') or
@@ -101,6 +108,16 @@ def process_watch_event(data: dict) -> dict:
         is_movie = (media_type_field == 'movie') or (_absent(season_number) and _absent(episode_number))
 
         if is_movie:
+            # A movie has no "next episode" to stage, so prefetch-only has
+            # nothing to do — and recording it watched on playback start would
+            # be wrong. Wait for the watched event.
+            if prefetch_only:
+                logger.info(
+                    f"[Tautulli] Playback start for movie '{series_title}' — "
+                    f"ignored (nothing to prefetch)"
+                )
+                return {'status': 'success', 'message': 'Playback start noted'}
+
             logger.info(f"[Tautulli] Movie watched: '{series_title}' (tmdb={themoviedb_id or 'unknown'})")
             if themoviedb_id:
                 try:
@@ -146,27 +163,36 @@ def process_watch_event(data: dict) -> dict:
             "themoviedb_id":   themoviedb_id,
             "sonarr_series_id": series_id,
             "rule":            final_rule,
+            "source":          "tautulli",
+            "prefetch_only":   prefetch_only,
         }
 
-        temp_path = os.path.join(temp_dir, 'data_from_server.json')
+        temp_path = os.path.join(temp_dir, f'data_from_server_{os.urandom(4).hex()}.json')
         with open(temp_path, 'w') as fh:
             json.dump(payload, fh)
 
         result = subprocess.run(
-            ["python3", os.path.join(os.getcwd(), "media_processor.py")],
+            ["python3", os.path.join(os.getcwd(), "media_processor.py"), temp_path],
             capture_output=True,
             text=True,
         )
+
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
 
         if result.returncode != 0:
             logger.error(
                 f"[Tautulli] media_processor failed (rc={result.returncode}): {result.stderr}"
             )
         else:
-            logger.info(f"[Tautulli] Processed {series_title} S{season_number}E{episode_number}")
+            action = "Prefetched for" if prefetch_only else "Processed"
+            logger.info(f"[Tautulli] {action} {series_title} S{season_number}E{episode_number}")
 
-        # Update Plex Watchlist watched status for TV
-        if themoviedb_id:
+        # Update Plex Watchlist watched status for TV — not on playback start,
+        # the episode hasn't been watched yet.
+        if themoviedb_id and not prefetch_only:
             try:
                 from integrations.plex import PlexIntegration
                 PlexIntegration().mark_item_watched(str(themoviedb_id), 'tv')
@@ -359,7 +385,9 @@ class TautulliIntegration(ServiceIntegration):
             Configure in Tautulli:
               Settings → Notification Agents → Webhook
               Trigger: Watched  (primary)
-              Trigger: Playback Start  (optional — enables held activation)
+              Trigger: Playback Start  (optional — stages the next episode
+                                        as soon as you start watching, and
+                                        enables held activation)
               URL: http://<episeerr-host>:5002/api/integration/tautulli/webhook
 
             For playback start support, add a hardcoded literal
@@ -368,6 +396,11 @@ class TautulliIntegration(ServiceIntegration):
             {notification_type} placeholder, so a template using braces
             there sends back the literal unsubstituted text and this guard
             never fires. Leave the field out of the Watched agent's template.
+
+            Playback start runs prefetch-only: get-count applies, but every
+            completion-triggered step (keep-window deletion, finale release,
+            sequential advance, series-ended unmonitor) waits for the Watched
+            event, so nothing is deleted mid-episode.
             """
             logger.info("[Tautulli] Webhook received")
             data = request.get_json(silent=True) or {}

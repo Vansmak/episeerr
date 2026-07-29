@@ -1006,6 +1006,40 @@ function getTimeAgo(date) {
     return Math.floor(seconds / 86400) + 'd ago';
 }
 
+// ────────────────────────────────────────────────
+// Trakt Watchlist
+// ────────────────────────────────────────────────
+function loadTraktWatchlist() {
+    const section = document.getElementById('trakt-watchlist-section');
+    const container = document.getElementById('trakt-watchlist-container');
+    if (!section || !container) return;
+    fetch('/api/integration/trakt/watchlist-html')
+        .then(r => { if (!r.ok) return null; return r.text(); })
+        .then(html => {
+            if (html && html.trim()) {
+                section.style.display = '';
+                container.innerHTML = html;
+            }
+        })
+        .catch(() => {});
+}
+
+function toggleTraktWatchlist() {
+    const body = document.getElementById('trakt-watchlist-body');
+    const icon = document.getElementById('trakt-watchlist-toggle-icon');
+    if (!body) return;
+    const hidden = body.style.display === 'none';
+    body.style.display = hidden ? '' : 'none';
+    if (icon) icon.style.transform = hidden ? '' : 'rotate(-90deg)';
+}
+
+function syncTraktWatchlist() {
+    fetch('/api/integration/trakt/sync', {method: 'POST'})
+        .then(r => r.json())
+        .then(() => { setTimeout(loadTraktWatchlist, 1500); })
+        .catch(err => console.error('Trakt sync failed:', err));
+}
+
 // Cleanup intervals
 window.addEventListener('beforeunload', () => {
     if (statsInterval) clearInterval(statsInterval);

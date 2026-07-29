@@ -588,6 +588,100 @@ def test_connection(service):
         update_service_test_result(service, 'default', 'failed')
         return jsonify({'status': 'error', 'message': f'Connection failed: {str(e)}'}), 400
 
+# Replace save_service_config in episeerr.py with this:
+
+def _create_service_row_from_env(service_type, enabled):
+    """Create a services row from env-var fallback config, if any exists.
+
+    Used by toggle_service_enabled() when a service was configured entirely
+    via env vars and never saved through the Setup UI, so it has no DB row
+    for the toggle to UPDATE. Returns True if a row was created, False if
+    there's no env config to seed it with (nothing to toggle).
+    """
+    if service_type == 'tmdb':
+        apikey = os.getenv('TMDB_API_KEY')
+        if not apikey:
+            return False
+        save_service('tmdb', 'default', '', apikey, enabled=enabled)
+        return True
+
+    from settings_db import (
+        get_sonarr_config, get_radarr_config, get_jellyfin_config,
+        get_plex_config, get_tautulli_config, get_emby_config,
+    )
+    getters = {
+        'sonarr': get_sonarr_config,
+        'radarr': get_radarr_config,
+        'jellyfin': get_jellyfin_config,
+        'plex': get_plex_config,
+        'tautulli': get_tautulli_config,
+        'emby': get_emby_config,
+    }
+    getter = getters.get(service_type)
+    if not getter:
+        return False
+
+    cfg = getter()
+    if not cfg or not cfg.get('url'):
+        return False
+
+    extra_config = {k: v for k, v in cfg.items() if k not in ('url', 'api_key')}
+    save_service(service_type, 'default', cfg['url'], cfg.get('api_key'),
+                 config=extra_config or None, enabled=enabled)
+    return True
+
+
+@app.route('/api/toggle-service/<service>', methods=['POST'])
+def toggle_service_enabled(service):
+    """Enable or disable a service without changing its config."""
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get('enabled', True))
+    try:
+        import sqlite3 as _sql
+        from settings_db import DB_PATH as _DB
+        conn = _sql.connect(_DB)
+        result = conn.execute(
+            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
+            "WHERE service_type = ? AND name = 'default'",
+            (1 if enabled else 0, service)
+        )
+        conn.commit()
+        conn.close()
+
+        if result.rowcount == 0:
+            # No row yet — likely configured only via env vars and never
+            # saved through Setup. Seed a row from that env config so the
+            # toggle has something to persist instead of silently 404ing.
+            if not _create_service_row_from_env(service, enabled):
+                return jsonify({
+                    'ok': False,
+                    'error': f'No configuration found for {service!r}. Save its settings first.'
+                }), 404
+
+        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        reload_module_configs()
+
+        # Start/stop background schedulers (Plex/Trakt watchlist sync, etc.)
+        # to match the new enabled state. reload_module_configs() only
+        # reloads sonarr_utils/media_processor, so without this a disabled
+        # service keeps polling until the container restarts.
+        integration = get_integration(service)
+        if integration and hasattr(integration, 'on_after_save'):
+            try:
+                if enabled:
+                    current = get_service(service, 'default')
+                    integration.on_after_save((current or {}).get('config') or {})
+                else:
+                    integration.on_after_save({})
+            except Exception as e:
+                app.logger.warning(f"on_after_save scheduler sync failed for {service}: {e}")
+
+        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
+    except Exception as exc:
+        app.logger.error("toggle_service_enabled %s: %s", service, exc)
+        return jsonify({'ok': False, 'error': str(exc)}), 500
+
+
 # Replace save_service_config in episeerr.py:
 
 @app.route('/api/save-service/<service>', methods=['POST'])
@@ -783,83 +877,51 @@ def save_service_config(service):
             'message': f'Error saving: {str(e)}'
         }), 500
 
-def _create_service_row_from_env(service_type, enabled):
-    """Create a services row from env-var fallback config, if any exists.
+@app.route('/api/delete-service/<service>', methods=['POST'])
+def delete_service_config(service):
+    """Fully remove a service's saved configuration (not just disable it)."""
+    from settings_db import get_all_quick_links, delete_quick_link
 
-    Used by toggle_service_enabled() when a service was configured entirely
-    via env vars and never saved through the Setup UI, so it has no DB row
-    for the toggle to UPDATE. Returns True if a row was created, False if
-    there's no env config to seed it with (nothing to toggle).
-    """
-    if service_type == 'tmdb':
-        apikey = os.getenv('TMDB_API_KEY')
-        if not apikey:
-            return False
-        save_service('tmdb', 'default', '', apikey, enabled=enabled)
-        return True
-
-    from settings_db import (
-        get_sonarr_config, get_radarr_config, get_jellyfin_config,
-        get_plex_config, get_tautulli_config, get_emby_config,
-    )
-    getters = {
-        'sonarr': get_sonarr_config,
-        'radarr': get_radarr_config,
-        'jellyfin': get_jellyfin_config,
-        'plex': get_plex_config,
-        'tautulli': get_tautulli_config,
-        'emby': get_emby_config,
-    }
-    getter = getters.get(service_type)
-    if not getter:
-        return False
-
-    cfg = getter()
-    if not cfg or not cfg.get('url'):
-        return False
-
-    extra_config = {k: v for k, v in cfg.items() if k not in ('url', 'api_key')}
-    save_service(service_type, 'default', cfg['url'], cfg.get('api_key'),
-                 config=extra_config or None, enabled=enabled)
-    return True
-
-
-@app.route('/api/toggle-service/<service>', methods=['POST'])
-def toggle_service_enabled(service):
-    """Enable or disable a service without changing its config.
-    When disabled, get_service() returns None so ALL API calls for that
-    service are skipped — no polling, no dashboard stats, no retries.
-    """
-    data = request.get_json(silent=True) or {}
-    enabled = bool(data.get('enabled', True))
     try:
-        import sqlite3 as _sql
-        from settings_db import DB_PATH as _DB
-        conn = _sql.connect(_DB)
-        result = conn.execute(
-            "UPDATE services SET enabled = ?, updated_at = CURRENT_TIMESTAMP "
-            "WHERE service_type = ? AND name = 'default'",
-            (1 if enabled else 0, service)
-        )
-        conn.commit()
-        conn.close()
+        existing = get_service(service, 'default') or {}
+        if not existing:
+            # get_service filters enabled=1; check the raw row too so a
+            # disabled service can still be removed.
+            import sqlite3 as _sql
+            from settings_db import DB_PATH as _DB
+            conn = _sql.connect(_DB)
+            conn.row_factory = _sql.Row
+            row = conn.execute(
+                "SELECT * FROM services WHERE service_type = ? AND name = 'default'",
+                (service,)
+            ).fetchone()
+            conn.close()
+            if row:
+                existing = dict(row)
 
-        if result.rowcount == 0:
-            # No row yet — likely configured only via env vars and never
-            # saved through Setup. Seed a row from that env config so the
-            # toggle has something to persist instead of silently 404ing.
-            if not _create_service_row_from_env(service, enabled):
-                return jsonify({
-                    'ok': False,
-                    'error': f'No configuration found for {service!r}. Save its settings first.'
-                }), 404
+        integration = get_integration(service)
+        if integration and hasattr(integration, 'on_after_save'):
+            try:
+                integration.on_after_save({})
+            except Exception as e:
+                app.logger.warning(f"on_after_save cleanup failed for {service}: {e}")
 
-        app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
+        delete_service(service, 'default')
+
+        # Clean up the auto-added quick link so it doesn't keep linking to
+        # a now-deleted (possibly stale/wrong) URL.
+        if existing.get('url'):
+            normalized_url = existing['url'].rstrip('/').lower()
+            for link in get_all_quick_links():
+                if not link.get('custom') and link['url'].rstrip('/').lower() == normalized_url:
+                    delete_quick_link(link['id'])
+
         reload_module_configs()
-        return jsonify({'ok': True, 'service': service, 'enabled': enabled})
-    except Exception as exc:
-        app.logger.error("toggle_service_enabled %s: %s", service, exc)
-        return jsonify({'ok': False, 'error': str(exc)}), 500
+        app.logger.info(f"Removed {service} configuration")
+        return jsonify({'status': 'success', 'message': f'{service} removed'})
+    except Exception as e:
+        app.logger.error(f"Delete service error for {service}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
 @app.route('/api/quick-links', methods=['GET', 'POST'])
