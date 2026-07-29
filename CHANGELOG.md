@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.8.4
+
+### 🐛 Bug Fixes
+
+- **Disabling a service didn't stop its background sync** — toggling a service off in Setup only flipped the DB flag; it never told the integration to stop. Plex/Trakt's watchlist-sync scheduler kept polling (and erroring on stale config) after being "disabled." The toggle now calls the integration's start/stop hook so disabling actually disables. (`episeerr.py`)
+- **No way to fully remove a service's saved config** — switching media servers (e.g. Plex → Jellyfin) left the old config in place with no way to clear it, so it kept getting polled with stale/wrong values. Each integration card in Setup now has a Remove button that deletes its saved config, stops any running scheduler, and cleans up the matching auto-added quick link. (`episeerr.py`, `settings_db.py`, `templates/setup.html`)
+
+## v3.8.3
+
+### 🐛 Bug Fixes
+
+- **Tautulli "Playback Start" did nothing for non-held series (regression from v3.7.18)** — the v3.7.18 fix for #62 (full watched-processing on playback start deleting the episode being played) correctly made the guard fire, but the guard suppressed *everything* on non-held playback start, including the harmless next-episode prefetch that #62 also asked for. Playback start now runs in **prefetch-only** mode instead: the next episode is staged immediately, while everything triggered by *finishing* an episode (keep-window deletion, finale keep-release, sequential season advance, series-ended unmonitor, unmonitoring the current episode) still waits for the "Watched" event. Held (`+` modifier) series are unchanged — their activation episode still releases the hold and processes fully on play start. Movies are unaffected (nothing to prefetch). Configuring "Playback Start" in Tautulli remains entirely optional — watch detection itself is unaffected either way, unlike Jellyfin/Emby's polling mode which does depend on it. Contributed by @smoochy. (`integrations/tautulli.py`, `media_processor.py`)
+
+## v3.8.2
+
+### 🐛 Bug Fixes
+
+- **Watched events silently stopped fetching next episodes (regression from v3.8.1)** — v3.8.1 switched the Jellyfin/Emby/Tautulli/Plex integrations to write each webhook's payload to a per-event randomized temp filename instead of a shared fixed one, to stop concurrent watch events from clobbering each other's file. `media_processor.py` was never updated to read that path, so every watched event fell through to cleanup mode instead of being processed — next episodes stopped being fetched entirely for anyone on v3.8.1. `media_processor.py` now reads the per-event file it's actually handed, falling back to the old fixed path for cleanup/manual runs. (`media_processor.py`)
+- **Per-event temp files were never cleaned up** — a side effect of the same v3.8.1 change: unlike the old shared fixed filename (which just got overwritten each time), the new per-event files had nothing removing them, so `/app/temp/` would accumulate one JSON file per watch event indefinitely. Each integration now deletes its temp file once `media_processor.py` returns. (`integrations/jellyfin.py`, `integrations/emby.py`, `integrations/tautulli.py`, `integrations/plex.py`)
+
 ## v3.8.1
 
 ### 🐛 Bug Fixes

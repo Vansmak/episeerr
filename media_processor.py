@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import requests
 import logging
 from logging.handlers import RotatingFileHandler
@@ -471,10 +472,11 @@ def get_episode_tracking_key(series_name, season, episode, user_name):
     return f"{series_name}:S{season}E{episode}:{user_name}"
 
 
-def get_server_activity():
+def get_server_activity(filepath=None):
     """Read current viewing details from server webhook stored data."""
     try:
-        filepath = '/app/temp/data_from_server.json'
+        if filepath is None:
+            filepath = '/app/temp/data_from_server.json'
         if not os.path.exists(filepath):
             filepath = '/app/temp/data_from_tautulli.json'
 
@@ -494,16 +496,21 @@ def get_server_activity():
             season_number = data.get('plex_season_num')
             episode_number = data.get('plex_ep_num')
         
+        # Playback-start events set this: stage the next episode, but leave
+        # every completion-triggered step to the later watched event.
+        prefetch_only = bool(data.get('prefetch_only', False))
+
         if all([series_title, season_number, episode_number]):
-            return series_title, int(season_number), int(episode_number), thetvdb_id, themoviedb_id
-            
+            return (series_title, int(season_number), int(episode_number),
+                    thetvdb_id, themoviedb_id, prefetch_only)
+
         logger.error(f"Required data fields not found in {filepath}")
-        return None, None, None, None, None
-        
+        return None, None, None, None, None, False
+
     except Exception as e:
         logger.error(f"Failed to read or parse data from server webhook: {str(e)}")
-    
-    return None, None, None, None, None
+
+    return None, None, None, None, None, False
 
 def better_partial_match(webhook_title, sonarr_title):
     webhook_clean = webhook_title.lower().strip()
@@ -1196,7 +1203,8 @@ def _find_episodes_in_keep_window(all_episodes, keep_type, keep_count, last_watc
     ]
 
 
-def process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_title=None):
+def process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_title=None,
+                                 prefetch_only=False):
     """
     Clean webhook processing - ONLY handles real-time episode management.
     Grace cleanup happens separately during scheduled cleanup (every 6 hours).
@@ -1210,6 +1218,15 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
     Sequential mode (eN+ without s prefix):
       After normal processing, if the watched episode is the season finale the
       next season's activation episode is grabbed and set to held.
+
+    Prefetch-only mode (playback start):
+      Starting an episode is not finishing it, so a playback-start event runs
+      the get_count fetch (staging the next episode, issue #62) and nothing
+      else.  Every step whose trigger is *completion* is suppressed: keep-window
+      deletion, finale keep-release, sequential season advance, series-ended
+      unmonitor, and unmonitoring the episode currently being played.  Those all
+      run later on the real watched event.  This is what keeps the "episode you
+      are mid-watch on gets deleted" bug fixed while still allowing the prefetch.
     """
     try:
         logger.info(f"Processing webhook for series {series_id}: S{season_number}E{episode_number}")
@@ -1273,7 +1290,9 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
             logger.error(f"Could not find current episode S{season_number}E{episode_number}")
             return
 
-        if not rule.get('monitor_watched', True):
+        # Unmonitoring the current episode means "done with it" — on playback
+        # start it is still being played, so leave it monitored until watched.
+        if not rule.get('monitor_watched', True) and not prefetch_only:
             unmonitor_episodes([current_episode['id']])
 
         if not skip_rule_processing:
@@ -1288,6 +1307,13 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                     series_id, series_title, get_type
                 )
                 logger.info(f"Processed {len(next_episode_ids)} next episodes")
+
+            if prefetch_only:
+                logger.info(
+                    f"Prefetch-only (playback start) for {series_title or series_id} "
+                    f"S{season_number}E{episode_number} — skipping keep-window cleanup"
+                )
+                return
 
             # IMMEDIATE DELETION: Episodes leaving keep block (real-time cleanup)
             episodes_leaving_keep_block = find_episodes_leaving_keep_block(
@@ -1331,7 +1357,7 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                     )
 
         # ── Season finale: release keep protection when no next season exists ─
-        if rule.get('release_keep_on_finale', False) and not skip_rule_processing:
+        if rule.get('release_keep_on_finale', False) and not skip_rule_processing and not prefetch_only:
             season_eps = sorted(
                 [ep for ep in all_episodes
                  if ep['seasonNumber'] == season_number and ep['seasonNumber'] > 0],
@@ -1391,13 +1417,13 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
 
         # ── Sequential mode: advance to next season on finale ──────────────
         if (parsed_ah and parsed_ah['has_plus'] and parsed_ah['is_sequential']
-                and not skip_rule_processing):
+                and not skip_rule_processing and not prefetch_only):
             _advance_sequential_if_finale(
                 series_id, season_number, episode_number, rule, series_title, all_episodes
             )
 
         # ── Series ended: unmonitor season + series (opt-in) ────────────────
-        if rule.get('unmonitor_on_series_ended', False) and not skip_rule_processing:
+        if rule.get('unmonitor_on_series_ended', False) and not skip_rule_processing and not prefetch_only:
             _unmonitor_if_series_ended(
                 series_id, season_number, series_title
             )
@@ -3226,12 +3252,15 @@ def main():
         logger.info("⏸️ Automation held - skipping webhook/cleanup processing")
         return False
 
-    # Check if this is a webhook call (has recent webhook data)
-    series_name, season_number, episode_number, thetvdb_id, themoviedb_id = get_server_activity()
+    # Webhook payload path: each integration (Jellyfin/Emby/Tautulli/Plex) now
+    # writes its own per-event temp file and passes it as argv[1], so
+    # concurrent events can't clobber each other's file. Cleanup/manual runs
+    # (webhooks.py's legacy /webhook route, scheduled cleanup) call this with
+    # no argv and fall back to the fixed legacy path.
+    webhook_file = sys.argv[1] if len(sys.argv) > 1 else '/app/temp/data_from_server.json'
 
-    # ONLY process as webhook if this was called BY a webhook (not manual cleanup)
-    # Add a flag or check timestamp to distinguish
-    webhook_file = '/app/temp/data_from_server.json'
+    # Check if this is a webhook call (has recent webhook data)
+    series_name, season_number, episode_number, thetvdb_id, themoviedb_id, prefetch_only = get_server_activity(webhook_file)
 
     try:
         # Check if webhook file is recent (within last few minutes)
@@ -3245,6 +3274,7 @@ def main():
 
     if series_name and is_recent_webhook:
         # Webhook mode - process the episode that was just watched
+        # (or just started, when the integration flagged it prefetch-only)
         series_id = get_series_id(series_name, thetvdb_id, themoviedb_id)
         if series_id:
             config = load_config()
@@ -3254,7 +3284,8 @@ def main():
 
             if config_rule:
                 rule = config['rules'][config_rule]
-                process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_name)
+                process_episodes_for_webhook(series_id, season_number, episode_number, rule, series_name,
+                                             prefetch_only=prefetch_only)
             else:
                 update_activity_date(series_id, season_number, episode_number)
             return True

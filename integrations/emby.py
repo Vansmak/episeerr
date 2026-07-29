@@ -448,6 +448,11 @@ class EmbyIntegration(ServiceIntegration):
                 text=True
             )
 
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass
+
             if result.returncode != 0:
                 logger.error(f"media_processor failed (rc={result.returncode}): {result.stderr}")
                 return False

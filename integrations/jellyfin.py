@@ -464,7 +464,12 @@ class JellyfinIntegration(ServiceIntegration):
                 capture_output=True,
                 text=True
             )
-            
+
+            try:
+                os.remove(temp_file_path)
+            except OSError:
+                pass
+
             if result.returncode != 0:
                 logger.error(f"❌ media_processor failed (rc={result.returncode})")
                 if result.stderr:

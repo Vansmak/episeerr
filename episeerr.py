@@ -1,4 +1,4 @@
-__version__ = "3.7.7"
+__version__ = "3.8.4"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -639,6 +639,22 @@ def toggle_service_enabled(service):
 
         app.logger.info("Service %s %s", service, "enabled" if enabled else "disabled")
         reload_module_configs()
+
+        # Start/stop background schedulers (Plex/Trakt watchlist sync, etc.)
+        # to match the new enabled state. reload_module_configs() only
+        # reloads sonarr_utils/media_processor, so without this a disabled
+        # service keeps polling until the container restarts.
+        integration = get_integration(service)
+        if integration and hasattr(integration, 'on_after_save'):
+            try:
+                if enabled:
+                    current = get_service(service, 'default')
+                    integration.on_after_save((current or {}).get('config') or {})
+                else:
+                    integration.on_after_save({})
+            except Exception as e:
+                app.logger.warning(f"on_after_save scheduler sync failed for {service}: {e}")
+
         return jsonify({'ok': True, 'service': service, 'enabled': enabled})
     except Exception as exc:
         app.logger.error("toggle_service_enabled %s: %s", service, exc)
@@ -835,6 +851,53 @@ def save_service_config(service):
             'status': 'error',
             'message': f'Error saving: {str(e)}'
         }), 500
+
+@app.route('/api/delete-service/<service>', methods=['POST'])
+def delete_service_config(service):
+    """Fully remove a service's saved configuration (not just disable it)."""
+    from settings_db import get_all_quick_links, delete_quick_link
+
+    try:
+        existing = get_service(service, 'default') or {}
+        if not existing:
+            # get_service filters enabled=1; check the raw row too so a
+            # disabled service can still be removed.
+            import sqlite3 as _sql
+            from settings_db import DB_PATH as _DB
+            conn = _sql.connect(_DB)
+            conn.row_factory = _sql.Row
+            row = conn.execute(
+                "SELECT * FROM services WHERE service_type = ? AND name = 'default'",
+                (service,)
+            ).fetchone()
+            conn.close()
+            if row:
+                existing = dict(row)
+
+        integration = get_integration(service)
+        if integration and hasattr(integration, 'on_after_save'):
+            try:
+                integration.on_after_save({})
+            except Exception as e:
+                app.logger.warning(f"on_after_save cleanup failed for {service}: {e}")
+
+        delete_service(service, 'default')
+
+        # Clean up the auto-added quick link so it doesn't keep linking to
+        # a now-deleted (possibly stale/wrong) URL.
+        if existing.get('url'):
+            normalized_url = existing['url'].rstrip('/').lower()
+            for link in get_all_quick_links():
+                if not link.get('custom') and link['url'].rstrip('/').lower() == normalized_url:
+                    delete_quick_link(link['id'])
+
+        reload_module_configs()
+        app.logger.info(f"Removed {service} configuration")
+        return jsonify({'status': 'success', 'message': f'{service} removed'})
+    except Exception as e:
+        app.logger.error(f"Delete service error for {service}: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
 
 @app.route('/api/quick-links', methods=['GET', 'POST'])
 def manage_quick_links():

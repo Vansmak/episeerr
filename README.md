@@ -524,8 +524,10 @@ If you use the `+` activation modifier (`s*e1+`, `e1+`, etc.) and want the hold 
    ```
 4. **Save**
 
-> For non-held series (no `+` modifier), playback start events are silently ignored — no risk of double-processing.
-> Do not add `"notification_type"` to the "Watched" agent's template — leave it out there, since a hardcoded `"playback start"` on the Watched agent would make watched events get ignored too.
+> **The "Watched" agent alone is enough — Playback Start is purely optional.** Unlike Jellyfin/Emby's polling mode, Tautulli's "Watched" trigger already fires on its own once your **TV Episode Watched Percent** setting (below) is crossed — Episeerr never needs to poll anything for Tautulli. Adding "Playback Start" doesn't change *whether* or *when* watch detection happens; it only adds an earlier, optional prefetch.
+> If you do configure it, Playback Start runs in **prefetch-only** mode: your get-count is applied, so the next episode is staged as soon as you start watching. Everything triggered by *finishing* an episode — keep-window deletion, finale keep-release, sequential season advance, series-ended unmonitor — is deferred to the "Watched" event, so nothing is ever deleted while you're mid-episode. Held series (`+` modifier) are the exception: their activation episode releases the hold and processes fully on play start, as before.
+> Since both agents fire for the same episode ~however long you take to finish it, the next episode may get searched for twice (once at start, once at watched) — Sonarr no-ops the repeat, so this is harmless, just slightly redundant.
+> Do not add `"notification_type"` to the "Watched" agent's template — leave it out there, since a hardcoded `"playback start"` on the Watched agent would make watched events prefetch-only and never clean up.
 
 In Tautulli → Settings → General, set **TV Episode Watched Percent** between 50–95% (recommended: 80%).
 

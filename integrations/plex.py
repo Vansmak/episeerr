@@ -1613,6 +1613,11 @@ class PlexIntegration(ServiceIntegration):
                 capture_output=True, text=True,
             )
 
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
             if result.returncode != 0:
                 logger.error(f"[Plex] media_processor failed (rc={result.returncode}): {result.stderr}")
                 return False
