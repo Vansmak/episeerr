@@ -909,7 +909,7 @@ The season selection page shows a **rule dropdown** at the top regardless of how
 
 **Define a baseline of episodes that are always present and protected from cleanup.**
 
-This is about setting up the show, not ongoing watching. When a show enters a rule with Always Have, those episodes get downloaded immediately. Grace and Keep cleanup will never touch them — only Dormant (which is intentionally nuclear) overrides this.
+This is about setting up the show, not ongoing watching. When a show enters a rule with Always Have, those episodes get downloaded immediately. Grace and Keep cleanup will never touch them — only Dormant overrides this, on purpose. (Keep Pilot, if enabled, still survives even Dormant — leave it off if you want Dormant to remove a series completely.)
 
 **Base expressions:**
 
@@ -979,12 +979,12 @@ Watch E5 → Get E6, E7 → Keep E5 → Delete E1-E4
 |--------------|---------|--------------|
 | **Grace Watched** | X days inactive | Deletes old watched episodes, keeps last as bookmark |
 | **Grace Unwatched** | X days inactive | Deletes unwatched episodes, keeps first as bookmark |
-| **Dormant** | X days + low storage | Deletes EVERYTHING from abandoned shows |
+| **Dormant** | X days inactive | Deletes everything from abandoned shows, bypassing Always Have (Keep Pilot, if enabled, still survives) |
 
 **Storage Gate:**
 - Set threshold: "Keep 20GB free"
-- Cleanup only runs when below threshold
-- Stops when back above threshold
+- When set, all three cleanup tiers (Dormant, Grace Watched, Grace Unwatched) process series oldest-inactivity-first and stop as soon as free space clears the threshold — so cleanup only deletes as much as it actually needs
+- Without a threshold set, cleanup runs on day-count alone, same as always
 
 **Bookmarks:**
 - Grace cleanup ALWAYS keeps at least 1 episode
@@ -1312,7 +1312,7 @@ A: No! Only set up webhooks for features you want:
 - Full automation: All webhooks
 
 **Q: What does Always Have do?**  
-A: It's an expression on a rule that defines episodes to always keep. When a show enters the rule, those episodes get downloaded immediately. Grace and Keep cleanup won't delete them. Only Dormant (which is intentionally nuclear) overrides it. Add `+` to create an activation gate (get-count held until the episode is watched) or `-` to make the episode removable after it's watched.
+A: It's an expression on a rule that defines episodes to always keep. When a show enters the rule, those episodes get downloaded immediately. Grace and Keep cleanup won't delete them. Only Dormant overrides it, on purpose (Keep Pilot, if enabled, still survives). Add `+` to create an activation gate (get-count held until the episode is watched) or `-` to make the episode removable after it's watched.
 
 **Q: Does Always Have apply when I move a show to a different rule?**  
 A: Yes. Whether it's a new show or a reassignment, the Always Have expression runs and ensures those episodes are monitored.
@@ -1383,8 +1383,8 @@ A: KEEP rule deletes in real-time when watching. This is by design. To prevent t
 
 **Q: What's the difference between Grace and Dormant?**  
 A:
-- **Grace:** Time-based cleanup of specific episode types (watched/unwatched)
-- **Dormant:** Nuclear option - deletes EVERYTHING from completely abandoned shows
+- **Grace:** Time-based cleanup of specific episode types (watched/unwatched), always respects Always Have
+- **Dormant:** Deletes everything from completely abandoned shows, bypassing Always Have on purpose (Keep Pilot, if enabled, still survives)
 
 ---
 
