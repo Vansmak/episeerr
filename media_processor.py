@@ -2076,8 +2076,12 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
     - Keep rule cleanup (seasons/episodes)
     - Manual unmonitor operations
 
-    NOTE: pass check_always_have=False from dormant cleanup - dormant is
-    intentionally nuclear and should not respect always_have expressions.
+    NOTE: pass check_always_have=False from dormant cleanup - dormant
+    intentionally bypasses always_have expressions. keep_pilot is checked
+    separately below and is NOT bypassed: it's a permanent breadcrumb that
+    survives even dormant cleanup, by design. If you want a rule where
+    dormant removes a series completely, leave keep_pilot off and don't
+    set always_have on it.
 
     Modifier semantics for always_have:
       no modifier : always anchor if expression matches (original behaviour)
@@ -2352,15 +2356,113 @@ def delete_episodes_in_sonarr_with_logging(
 # CLEANUP FUNCTIONS - Your new simplified 3-function system
 # ============================================================================
 
-def run_grace_watched_cleanup():
+def _fetch_sonarr_series_lookup():
+    """Fetch the full Sonarr series list once. Shared by run_unified_cleanup
+    and the three cleanup phases so a single cleanup cycle doesn't issue a
+    separate GET /api/v3/series per phase. Returns (all_series, series_lookup).
+    """
+    headers = {'X-Api-Key': SONARR_API_KEY}
+    response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
+    all_series = response.json() if response.ok else []
+    return all_series, {s['id']: s for s in all_series}
+
+
+def _scan_grace_candidates(config, series_lookup, current_time, day_field, global_dry_run):
+    """
+    Shared Phase 1 for grace_watched/grace_unwatched cleanup: find every
+    series whose rule has `day_field` ('grace_watched' or 'grace_unwatched')
+    set and whose days-since-activity exceeds it. Skips series already
+    flagged grace_cleaned (see the grace_cleaned coupling note in
+    run_grace_watched_cleanup). Returns an unsorted list of candidate dicts;
+    callers sort by days_since_activity before Phase 2 processing.
+    """
+    candidates = []
+    for rule_name, rule in config['rules'].items():
+        day_threshold = rule.get(day_field)
+        if not day_threshold:
+            continue
+
+        cleanup_logger.info(f"📋 Rule '{rule_name}': {day_field}={day_threshold}d")
+
+        rule_dry_run = rule.get('dry_run', False)
+        if global_dry_run:
+            is_dry_run = True
+            cleanup_logger.info(f"   🛡️ Global dry run enforced")
+        else:
+            is_dry_run = rule_dry_run
+
+        series_dict = rule.get('series', {})
+        for series_id_str, series_data in series_dict.items():
+            try:
+                series_id = int(series_id_str)
+                series_info = series_lookup.get(series_id)
+                if not series_info:
+                    continue
+
+                series_title = series_info['title']
+
+                # grace_cleaned is a shared flag: only run_grace_unwatched_cleanup
+                # ever sets it (once a bookmark episode is established), but both
+                # grace tiers skip on it here as a pure efficiency short-circuit.
+                # It's not required for correctness on the watched side - watched
+                # cleanup is naturally idempotent once only 1 watched episode is
+                # left (see the len(watched_episodes) > 1 check below) - it just
+                # avoids redoing the activity-date lookup/episode fetch every
+                # cycle once a series has fully settled.
+                if isinstance(series_data, dict) and series_data.get('grace_cleaned', False):
+                    cleanup_logger.debug(f"⏭️ {series_title}: Already cleaned, skipping")
+                    continue
+
+                result = get_activity_date_with_hierarchy(series_id, series_title, return_complete=True)
+                if isinstance(result, tuple) and len(result) == 3:
+                    activity_date, last_season, last_episode = result
+                else:
+                    activity_date = result
+                    last_season, last_episode = 1, 1
+
+                if not activity_date:
+                    cleanup_logger.debug(f"⏭️ {series_title}: No activity date, skipping")
+                    continue
+
+                days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
+
+                if days_since_activity > day_threshold:
+                    candidates.append({
+                        'rule_name': rule_name,
+                        'day_threshold': day_threshold,
+                        'is_dry_run': is_dry_run,
+                        'series_id': series_id,
+                        'series_title': series_title,
+                        'series_data': series_data,
+                        'activity_date': activity_date,
+                        'last_season': last_season,
+                        'last_episode': last_episode,
+                        'days_since_activity': days_since_activity,
+                    })
+                else:
+                    cleanup_logger.debug(f"🛡️ {series_title}: Protected - {days_since_activity:.1f}d since activity")
+
+            except (ValueError, TypeError) as e:
+                cleanup_logger.error(f"Error processing series {series_id_str}: {str(e)}")
+                continue
+
+    return candidates
+
+
+def run_grace_watched_cleanup(series_lookup=None):
     """
     Grace Watched Cleanup - Keep last watched episode as reference point.
-    
+
     NEW BEHAVIOR:
     - Deletes all watched episodes EXCEPT the last one
     - Last watched episode = reference point to catch up from
     - Does NOT apply Get rule (that's only for watch webhooks)
     - Does NOT update activity_date (preserves real watch timestamp)
+
+    When a global storage gate (global_storage_min_gb) is configured, eligible
+    series are processed oldest-inactivity-first and processing stops as soon
+    as free space clears the threshold - same incremental behavior as dormant
+    cleanup, so this tier only deletes as much as the gate actually needs.
     """
     try:
         cleanup_logger.info("🟡 GRACE WATCHED CLEANUP: Checking inactive series")
@@ -2376,125 +2478,97 @@ def run_grace_watched_cleanup():
         if global_dry_run:
             cleanup_logger.info("🛡️ Global dry run mode ENABLED - all deletions will be queued for approval")
 
+        storage_min_gb = global_settings.get('global_storage_min_gb')
+
         total_deleted = 0
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
-        all_series = response.json() if response.ok else []
-        series_lookup = {s['id']: s for s in all_series}
+        if series_lookup is None:
+            _, series_lookup = _fetch_sonarr_series_lookup()
         current_time = int(time.time())
 
-        for rule_name, rule in config['rules'].items():
-            grace_watched_days = rule.get('grace_watched')
-            if not grace_watched_days:
-                continue
-            
-            cleanup_logger.info(f"📋 Rule '{rule_name}': grace_watched={grace_watched_days}d")
-            
-            # Apply master safety switch
-            rule_dry_run = rule.get('dry_run', False)
-            if global_dry_run:
-                is_dry_run = True
-                cleanup_logger.info(f"   🛡️ Global dry run enforced")
-            else:
-                is_dry_run = rule_dry_run
-            
-            series_dict = rule.get('series', {})
-            for series_id_str, series_data in series_dict.items():
-                try:
-                    series_id = int(series_id_str)
-                    series_info = series_lookup.get(series_id)
-                    if not series_info:
-                        continue
-                    
-                    series_title = series_info['title']
-                    
-                    # CHECK: Already cleaned?
-                    if isinstance(series_data, dict) and series_data.get('grace_cleaned', False):
-                        cleanup_logger.debug(f"⏭️ {series_title}: Already cleaned, skipping")
-                        continue
-                    
-                    # Get activity date
-                    result = get_activity_date_with_hierarchy(series_id, series_title, return_complete=True)
-                    if isinstance(result, tuple) and len(result) == 3:
-                        activity_date, last_season, last_episode = result
-                    else:
-                        activity_date = result
-                        last_season, last_episode = 1, 1
-                    
-                    if not activity_date:
-                        cleanup_logger.debug(f"⏭️ {series_title}: No activity date, skipping")
-                        continue
-                    
-                    days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
-                    
-                    if days_since_activity > grace_watched_days:
-                        cleanup_logger.info(f"🟡 {series_title}: Inactive {days_since_activity:.1f}d > {grace_watched_days}d")
-                        cleanup_logger.info(f"   📺 Last watched: S{last_season}E{last_episode}")
-                        
-                        # Get all episodes
-                        all_episodes = fetch_all_episodes(series_id)
-                        
-                        # Find watched episodes
-                        watched_episodes = []
-                        for episode in all_episodes:
-                            if not episode.get('hasFile'):
-                                continue
-                            season_num = episode.get('seasonNumber', 0)
-                            episode_num = episode.get('episodeNumber', 0)
-                            
-                            if (season_num < last_season or 
-                                (season_num == last_season and episode_num <= last_episode)):
-                                watched_episodes.append(episode)
-                        
-                        # Sort by season/episode
-                        watched_episodes.sort(key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
-                        
-                        if len(watched_episodes) > 1:
-                            # Keep last watched, delete rest
-                            keep_episode = watched_episodes[-1]
-                            delete_episodes = watched_episodes[:-1]
-                            
-                            # Filter out anchor episodes (S01E01)
-                            delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
+        # ── Phase 1: find every series past its grace_watched threshold ────
+        candidates = _scan_grace_candidates(config, series_lookup, current_time, 'grace_watched', global_dry_run)
 
-                            episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+        # ── Phase 2: process oldest-inactivity-first, honoring the storage
+        # gate incrementally so this tier only deletes as much as it needs ──
+        candidates.sort(key=lambda c: c['days_since_activity'], reverse=True)
 
-                            if episodes_with_files:
-                                cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} old watched episodes")
-                                cleanup_logger.info(f"   🔖 Keeping S{keep_episode['seasonNumber']}E{keep_episode['episodeNumber']} as reference")
+        for candidate in candidates:
+            if storage_min_gb and not candidate['is_dry_run']:
+                current_disk = get_sonarr_disk_space()
+                if current_disk and current_disk['free_space_gb'] >= storage_min_gb:
+                    cleanup_logger.info("🎯 Storage target reached - stopping grace watched cleanup")
+                    break
 
-                                from datetime import datetime
-                                activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
+            series_id = candidate['series_id']
+            series_title = candidate['series_title']
+            rule_name = candidate['rule_name']
+            grace_watched_days = candidate['day_threshold']
+            is_dry_run = candidate['is_dry_run']
+            activity_date = candidate['activity_date']
+            last_season = candidate['last_season']
+            last_episode = candidate['last_episode']
+            days_since_activity = candidate['days_since_activity']
 
-                                delete_episodes_in_sonarr_with_logging(
-                                    episodes_with_files,
-                                    series_id,
-                                    is_dry_run,
-                                    series_title,
-                                    reason=f"Grace Watched ({grace_watched_days}d) - Keep Last Watched",
-                                    date_source="Last Activity",
-                                    date_value=activity_date_str,
-                                    rule_name=rule_name
-                                )
-                                total_deleted += len(episodes_with_files)
-                        elif len(watched_episodes) == 1:
-                            cleanup_logger.info(f"   🔖 Only 1 watched episode - keeping as reference")
-                        else:
-                            cleanup_logger.info(f"   ⏭️ No watched episodes to delete")
-                        
-                        # Mark as cleaned (unwatched cleanup will verify bookmark exists)
-                        # Don't mark here - let unwatched cleanup decide
-                        
-                    else:
-                        cleanup_logger.debug(f"🛡️ {series_title}: Protected - {days_since_activity:.1f}d since activity")
-                
-                except (ValueError, TypeError) as e:
-                    cleanup_logger.error(f"Error processing series {series_id_str}: {str(e)}")
+            cleanup_logger.info(f"🟡 {series_title}: Inactive {days_since_activity:.1f}d > {grace_watched_days}d")
+            cleanup_logger.info(f"   📺 Last watched: S{last_season}E{last_episode}")
+
+            # Get all episodes
+            all_episodes = fetch_all_episodes(series_id)
+
+            # Find watched episodes
+            watched_episodes = []
+            for episode in all_episodes:
+                if not episode.get('hasFile'):
                     continue
-        
+                season_num = episode.get('seasonNumber', 0)
+                episode_num = episode.get('episodeNumber', 0)
+
+                if (season_num < last_season or
+                        (season_num == last_season and episode_num <= last_episode)):
+                    watched_episodes.append(episode)
+
+            # Sort by season/episode
+            watched_episodes.sort(key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
+
+            if len(watched_episodes) > 1:
+                # Keep last watched, delete rest
+                keep_episode = watched_episodes[-1]
+                delete_episodes = watched_episodes[:-1]
+
+                # Filter out anchor episodes (S01E01)
+                delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
+
+                episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+
+                if episodes_with_files:
+                    cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} old watched episodes")
+                    cleanup_logger.info(f"   🔖 Keeping S{keep_episode['seasonNumber']}E{keep_episode['episodeNumber']} as reference")
+
+                    from datetime import datetime
+                    activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
+
+                    delete_episodes_in_sonarr_with_logging(
+                        episodes_with_files,
+                        series_id,
+                        is_dry_run,
+                        series_title,
+                        reason=f"Grace Watched ({grace_watched_days}d) - Keep Last Watched",
+                        date_source="Last Activity",
+                        date_value=activity_date_str,
+                        rule_name=rule_name
+                    )
+                    total_deleted += len(episodes_with_files)
+            elif len(watched_episodes) == 1:
+                cleanup_logger.info("   🔖 Only 1 watched episode - keeping as reference")
+            else:
+                cleanup_logger.info("   ⏭️ No watched episodes to delete")
+
+            # Mark as cleaned (unwatched cleanup will verify bookmark exists)
+            # Don't mark here - let unwatched cleanup decide
+
         cleanup_logger.info(f"🟡 Grace watched cleanup: Deleted {total_deleted} episodes")
         return total_deleted
-        
+
     except Exception as e:
         cleanup_logger.error(f"Error in grace_watched cleanup: {str(e)}")
         return 0
@@ -2504,15 +2578,20 @@ def run_grace_watched_cleanup():
 # REPLACE run_grace_unwatched_cleanup() WITH THIS
 # ==============================================================================
 
-def run_grace_unwatched_cleanup():
+def run_grace_unwatched_cleanup(series_lookup=None):
     """
     Grace Unwatched Cleanup - Keep first unwatched as bookmark.
-    
+
     NEW BEHAVIOR:
     - Keeps first unwatched episode (after last watched) as bookmark
     - Deletes all other unwatched episodes
     - Marks series as cleaned if bookmark exists
     - Keeps checking if no next episode exists yet (waits for grab webhook)
+
+    When a global storage gate (global_storage_min_gb) is configured, eligible
+    series are processed oldest-inactivity-first and processing stops as soon
+    as free space clears the threshold - same incremental behavior as dormant
+    cleanup, so this tier only deletes as much as the gate actually needs.
     """
     try:
         cleanup_logger.info("⏰ GRACE UNWATCHED CLEANUP: Checking inactive series")
@@ -2528,137 +2607,110 @@ def run_grace_unwatched_cleanup():
         if global_dry_run:
             cleanup_logger.info("🛡️ Global dry run mode ENABLED - all deletions will be queued for approval")
 
+        storage_min_gb = global_settings.get('global_storage_min_gb')
+
         total_deleted = 0
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        response = http.get(f"{SONARR_URL}/api/v3/series", headers=headers)
-        all_series = response.json() if response.ok else []
-        series_lookup = {s['id']: s for s in all_series}
+        if series_lookup is None:
+            _, series_lookup = _fetch_sonarr_series_lookup()
         current_time = int(time.time())
 
-        for rule_name, rule in config['rules'].items():
-            grace_unwatched_days = rule.get('grace_unwatched')
-            if not grace_unwatched_days:
-                continue
-            
-            cleanup_logger.info(f"📋 Rule '{rule_name}': grace_unwatched={grace_unwatched_days}d")
-            
-            # Apply master safety switch
-            rule_dry_run = rule.get('dry_run', False)
-            if global_dry_run:
-                is_dry_run = True
-                cleanup_logger.info(f"   🛡️ Global dry run enforced")
-            else:
-                is_dry_run = rule_dry_run
-            
-            series_dict = rule.get('series', {})
-            for series_id_str, series_data in series_dict.items():
-                try:
-                    series_id = int(series_id_str)
-                    series_info = series_lookup.get(series_id)
-                    if not series_info:
-                        continue
-                    
-                    series_title = series_info['title']
-                    
-                    # CHECK: Already cleaned?
-                    if isinstance(series_data, dict) and series_data.get('grace_cleaned', False):
-                        cleanup_logger.debug(f"⏭️ {series_title}: Already cleaned, skipping")
-                        continue
-                    
-                    # Get activity date
-                    result = get_activity_date_with_hierarchy(series_id, series_title, return_complete=True)
-                    if isinstance(result, tuple) and len(result) == 3:
-                        activity_date, last_season, last_episode = result
-                    else:
-                        activity_date = result
-                        last_season, last_episode = 1, 1
-                    
-                    if not activity_date:
-                        cleanup_logger.debug(f"⏭️ {series_title}: No activity date, skipping")
-                        continue
-                    
-                    days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
-                    
-                    if days_since_activity > grace_unwatched_days:
-                        cleanup_logger.info(f"⏰ {series_title}: Inactive {days_since_activity:.1f}d > {grace_unwatched_days}d")
-                        cleanup_logger.info(f"   📺 Last watched: S{last_season}E{last_episode}")
-                        
-                        # Get all episodes
-                        all_episodes = fetch_all_episodes(series_id)
-                        
-                        # Find unwatched episodes (AFTER last watched)
-                        unwatched_episodes = []
-                        for episode in all_episodes:
-                            if not episode.get('hasFile'):
-                                continue
-                            season_num = episode.get('seasonNumber', 0)
-                            episode_num = episode.get('episodeNumber', 0)
-                            
-                            if (season_num > last_season or 
-                                (season_num == last_season and episode_num > last_episode)):
-                                unwatched_episodes.append(episode)
-                        
-                        # Sort by season/episode
-                        unwatched_episodes.sort(key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
-                        
-                        if len(unwatched_episodes) > 1:
-                            # Keep first unwatched, delete rest
-                            bookmark_episode = unwatched_episodes[0]
-                            delete_episodes = unwatched_episodes[1:]
-                            
-                            # Filter out anchor episodes (S01E01)
-                            delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
+        # ── Phase 1: find every series past its grace_unwatched threshold ──
+        candidates = _scan_grace_candidates(config, series_lookup, current_time, 'grace_unwatched', global_dry_run)
 
-                            episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+        # ── Phase 2: process oldest-inactivity-first, honoring the storage
+        # gate incrementally so this tier only deletes as much as it needs ──
+        candidates.sort(key=lambda c: c['days_since_activity'], reverse=True)
 
-                            if episodes_with_files:
-                                cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} extra unwatched episodes")
-                                cleanup_logger.info(f"   🔖 Keeping S{bookmark_episode['seasonNumber']}E{bookmark_episode['episodeNumber']} as bookmark")
+        for candidate in candidates:
+            if storage_min_gb and not candidate['is_dry_run']:
+                current_disk = get_sonarr_disk_space()
+                if current_disk and current_disk['free_space_gb'] >= storage_min_gb:
+                    cleanup_logger.info("🎯 Storage target reached - stopping grace unwatched cleanup")
+                    break
 
-                                from datetime import datetime
-                                activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
+            series_id = candidate['series_id']
+            series_title = candidate['series_title']
+            series_data = candidate['series_data']
+            rule_name = candidate['rule_name']
+            grace_unwatched_days = candidate['day_threshold']
+            is_dry_run = candidate['is_dry_run']
+            activity_date = candidate['activity_date']
+            last_season = candidate['last_season']
+            last_episode = candidate['last_episode']
+            days_since_activity = candidate['days_since_activity']
 
-                                delete_episodes_in_sonarr_with_logging(
-                                    episodes_with_files,
-                                    series_id,
-                                    is_dry_run,
-                                    series_title,
-                                    reason=f"Grace Unwatched ({grace_unwatched_days}d) - Keep First Unwatched",
-                                    date_source="Last Activity",
-                                    date_value=activity_date_str,
-                                    rule_name=rule_name
-                                )
-                                total_deleted += len(episodes_with_files)
-                            
-                            # Mark as cleaned - has bookmark
-                            if isinstance(series_data, dict):
-                                series_data['grace_cleaned'] = True
-                                save_config(config)
-                                cleanup_logger.info(f"   ✅ Bookmark established - marked as cleaned")
-                        
-                        elif len(unwatched_episodes) == 1:
-                            cleanup_logger.info(f"   🔖 Has 1 unwatched episode as bookmark")
-                            # Mark as cleaned - already has bookmark
-                            if isinstance(series_data, dict):
-                                series_data['grace_cleaned'] = True
-                                save_config(config)
-                                cleanup_logger.info(f"   ✅ Bookmark exists - marked as cleaned")
-                        
-                        else:
-                            cleanup_logger.info(f"   ⏭️ No unwatched episodes - waiting for next episode")
-                            cleanup_logger.info(f"   🔄 Will keep checking until grab webhook")
-                            # DON'T mark as cleaned - keep checking
-                    
-                    else:
-                        cleanup_logger.debug(f"🛡️ {series_title}: Protected - {days_since_activity:.1f}d since activity")
-                
-                except (ValueError, TypeError) as e:
-                    cleanup_logger.error(f"Error processing series {series_id_str}: {str(e)}")
+            cleanup_logger.info(f"⏰ {series_title}: Inactive {days_since_activity:.1f}d > {grace_unwatched_days}d")
+            cleanup_logger.info(f"   📺 Last watched: S{last_season}E{last_episode}")
+
+            # Get all episodes
+            all_episodes = fetch_all_episodes(series_id)
+
+            # Find unwatched episodes (AFTER last watched)
+            unwatched_episodes = []
+            for episode in all_episodes:
+                if not episode.get('hasFile'):
                     continue
-        
+                season_num = episode.get('seasonNumber', 0)
+                episode_num = episode.get('episodeNumber', 0)
+
+                if (season_num > last_season or
+                        (season_num == last_season and episode_num > last_episode)):
+                    unwatched_episodes.append(episode)
+
+            # Sort by season/episode
+            unwatched_episodes.sort(key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
+
+            if len(unwatched_episodes) > 1:
+                # Keep first unwatched, delete rest
+                bookmark_episode = unwatched_episodes[0]
+                delete_episodes = unwatched_episodes[1:]
+
+                # Filter out anchor episodes (S01E01)
+                delete_episodes = [ep for ep in delete_episodes if not is_anchor_episode(ep, series_id)]
+
+                episodes_with_files = [ep for ep in delete_episodes if ep.get('episodeFileId')]
+
+                if episodes_with_files:
+                    cleanup_logger.info(f"   📊 Deleting {len(episodes_with_files)} extra unwatched episodes")
+                    cleanup_logger.info(f"   🔖 Keeping S{bookmark_episode['seasonNumber']}E{bookmark_episode['episodeNumber']} as bookmark")
+
+                    from datetime import datetime
+                    activity_date_str = datetime.fromtimestamp(activity_date).strftime('%Y-%m-%d')
+
+                    delete_episodes_in_sonarr_with_logging(
+                        episodes_with_files,
+                        series_id,
+                        is_dry_run,
+                        series_title,
+                        reason=f"Grace Unwatched ({grace_unwatched_days}d) - Keep First Unwatched",
+                        date_source="Last Activity",
+                        date_value=activity_date_str,
+                        rule_name=rule_name
+                    )
+                    total_deleted += len(episodes_with_files)
+
+                # Mark as cleaned - has bookmark
+                if isinstance(series_data, dict):
+                    series_data['grace_cleaned'] = True
+                    save_config(config)
+                    cleanup_logger.info("   ✅ Bookmark established - marked as cleaned")
+
+            elif len(unwatched_episodes) == 1:
+                cleanup_logger.info("   🔖 Has 1 unwatched episode as bookmark")
+                # Mark as cleaned - already has bookmark
+                if isinstance(series_data, dict):
+                    series_data['grace_cleaned'] = True
+                    save_config(config)
+                    cleanup_logger.info("   ✅ Bookmark exists - marked as cleaned")
+
+            else:
+                cleanup_logger.info("   ⏭️ No unwatched episodes - waiting for next episode")
+                cleanup_logger.info("   🔄 Will keep checking until grab webhook")
+                # DON'T mark as cleaned - keep checking
+
         cleanup_logger.info(f"⏰ Grace unwatched cleanup: Deleted {total_deleted} episodes")
         return total_deleted
-        
+
     except Exception as e:
         cleanup_logger.error(f"Error in grace_unwatched cleanup: {str(e)}")
         return 0
@@ -2667,13 +2719,13 @@ def run_grace_unwatched_cleanup():
 # UPDATED DORMANT CLEANUP WITH MASTER SAFETY SWITCH
 # Matches the same safety logic as grace watched/unwatched
 
-def run_dormant_cleanup():
+def run_dormant_cleanup(series_lookup=None):
     """
     Process dormant cleanup with optional storage gate and MASTER SAFETY SWITCH.
-    
+
     NOTE: Dormant cleanup ALWAYS uses series-wide activity (not per-season),
     as it's meant to detect completely abandoned shows.
-    
+
     MASTER SAFETY: Global dry_run_mode=true overrides all rule settings.
     """
     try:
@@ -2707,9 +2759,8 @@ def run_dormant_cleanup():
         
         # Get candidates
         candidates = []
-        headers = {'X-Api-Key': SONARR_API_KEY}
-        all_series = http.get(f"{SONARR_URL}/api/v3/series", headers=headers).json()
-        series_lookup = {s['id']: s for s in all_series}
+        if series_lookup is None:
+            _, series_lookup = _fetch_sonarr_series_lookup()
         current_time = int(time.time())
         
         for rule_name, rule in config['rules'].items():
@@ -2754,7 +2805,7 @@ def run_dormant_cleanup():
                     days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
                     if days_since_activity > dormant_days:
                         all_episodes = fetch_all_episodes(series_id)
-                        # Dormant cleanup is nuclear: respect keep_pilot but NOT always_have
+                        # Dormant cleanup bypasses always_have but still respects keep_pilot
                         deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and ep.get('episodeFileId') and not is_anchor_episode(ep, series_id, check_always_have=False)]
 
                         if deletable_episodes:
@@ -3069,7 +3120,11 @@ def run_unified_cleanup():
             # No storage gate - always run
             cleanup_logger.info("⏰ No storage gate - running all cleanup functions")
             storage_gated = False
-        
+
+        # Fetch the Sonarr series list once and reuse it across every phase
+        # below instead of each phase issuing its own GET /api/v3/series.
+        all_series, series_lookup = _fetch_sonarr_series_lookup()
+
         # ==================== PHASE 0 - TAG RECONCILIATION ====================
         cleanup_logger.info("=" * 80)
         cleanup_logger.info("🏷️  Phase 0: Tag reconciliation (drift + orphaned)")
@@ -3087,13 +3142,11 @@ def run_unified_cleanup():
                 for rule_details in config['rules'].values()
                 for sid in rule_details.get('series', {}).keys()
             }
-            all_series = get_sonarr_series()
             orphaned_ids = [
                 s['id'] for s in all_series
                 if str(s['id']) not in config_series_ids
             ]
 
-            series_lookup = {s['id']: s for s in all_series}
             reconciled = 0
             for series_id in known_ids + orphaned_ids:
                 try:
@@ -3126,7 +3179,7 @@ def run_unified_cleanup():
 
         # PRIORITY 1: DORMANT (oldest, most aggressive)
         cleanup_logger.info("🔴 Phase 1: Dormant cleanup (delete ALL episodes from abandoned series)")
-        dormant_count = run_dormant_cleanup()
+        dormant_count = run_dormant_cleanup(series_lookup=series_lookup)
         total_processed += dormant_count
         cleanup_logger.info(f"🔴 Dormant result: {dormant_count} operations")
         
@@ -3140,7 +3193,7 @@ def run_unified_cleanup():
         
         # PRIORITY 2: GRACE WATCHED (delete watched episodes from inactive series)
         cleanup_logger.info("🟡 Phase 2: Grace watched cleanup (delete watched episodes from inactive series)")
-        watched_count = run_grace_watched_cleanup()
+        watched_count = run_grace_watched_cleanup(series_lookup=series_lookup)
         total_processed += watched_count
         cleanup_logger.info(f"🟡 Grace watched result: {watched_count} operations")
         
@@ -3154,7 +3207,7 @@ def run_unified_cleanup():
         
         # PRIORITY 3: GRACE UNWATCHED (delete unwatched episodes past deadline)
         cleanup_logger.info("⏰ Phase 3: Grace unwatched cleanup (delete unwatched episodes past deadline)")
-        unwatched_count = run_grace_unwatched_cleanup()
+        unwatched_count = run_grace_unwatched_cleanup(series_lookup=series_lookup)
         total_processed += unwatched_count
         cleanup_logger.info(f"⏰ Grace unwatched result: {unwatched_count} operations")
         

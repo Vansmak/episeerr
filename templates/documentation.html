@@ -452,7 +452,7 @@
                 <div class="col-12">
                     <h5><i class="fas fa-anchor text-info me-2"></i>Always Have (Optional)</h5>
                     <p>An expression that defines episodes to always keep downloaded and protected from cleanup. Think of it as the baseline state of a show — these episodes are always there regardless of what Get/Keep does.</p>
-                    <p>When a show is assigned to a rule with Always Have, those episodes get monitored and searched immediately. Cleanup (grace, keep) will never delete them. Dormant cleanup is the only exception — dormant is nuclear and ignores Always Have.</p>
+                    <p>When a show is assigned to a rule with Always Have, those episodes get monitored and searched immediately. Cleanup (grace, keep) will never delete them. Dormant cleanup is the only exception — it bypasses Always Have on purpose. If a rule also has Keep Pilot enabled, that episode still survives dormant cleanup; leave Keep Pilot off if you want dormant to remove a series completely.</p>
 
                     <h6 class="mt-3">Base expressions</h6>
                     <table class="table table-sm">
@@ -562,7 +562,7 @@
                 <p class="mb-1"><strong>Get</strong> = what to download next when you watch (ongoing)</p>
                 <p class="mb-1"><strong>Keep</strong> = how many watched episodes to retain (immediate cleanup after watching)</p>
                 <p class="mb-1"><strong>Grace</strong> = time-based cleanup for inactive shows (days since last watch)</p>
-                <p class="mb-0"><strong>Dormant</strong> = nuclear cleanup for abandoned shows (ignores everything)</p>
+                <p class="mb-0"><strong>Dormant</strong> = cleanup for abandoned shows (bypasses Always Have; Keep Pilot still survives)</p>
                 <p class="mt-2 mb-0">They're all independent — use any combination. A show can have Always Have + Get + Grace with no Keep, or just Get with no cleanup at all.</p>
             </div>
 
@@ -742,13 +742,13 @@
                             <h6><i class="fas fa-ban text-danger me-2"></i>Dormant Timer</h6>
                         </div>
                         <div class="card-body">
-                            <p><strong>What:</strong> Nuclear option for abandoned shows</p>
-                            <p><strong>When it expires:</strong> Deletes EVERYTHING (all episodes)</p>
+                            <p><strong>What:</strong> Complete cleanup for abandoned shows — bypasses Always Have</p>
+                            <p><strong>When it expires:</strong> Deletes all episodes (Keep Pilot, if enabled, still survives)</p>
                             <p><strong>Reset by:</strong> Watching ANY episode in the series</p>
                             <p><strong>Use case:</strong> Final cleanup for shows you'll never return to</p>
                             <p><strong>Example:</strong> Dormant: 60 days<br>
                             → No activity for 60 days<br>
-                            → Delete entire show (no bookmarks)</p>
+                            → Delete entire show (no bookmarks, no Always Have protection)</p>
                         </div>
                     </div>
                 </div>
@@ -828,7 +828,7 @@
                             <tr>
                                 <td><strong>Dormant</strong></td>
                                 <td>After X days of inactivity</td>
-                                <td>Deletes EVERYTHING (nuclear, ignores Always Have)</td>
+                                <td>Deletes all episodes, ignores Always Have (Keep Pilot still survives)</td>
                                 <td>No (complete removal)</td>
                             </tr>
                         </tbody>
