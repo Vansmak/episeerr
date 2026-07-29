@@ -60,6 +60,7 @@ class TraktIntegration(ServiceIntegration):
 
     _sync_thread: Optional[threading.Thread] = None
     _sync_running: bool = False
+    _refresh_lock: threading.Lock = threading.Lock()
 
     # ── Metadata ──────────────────────────────────────────────────
 
@@ -427,66 +428,99 @@ class TraktIntegration(ServiceIntegration):
             'Content-Type': 'application/json',
         }
 
-    def _maybe_refresh_token(self, cfg: dict) -> dict:
-        """Refresh access token if expired or within 24 hours of expiry."""
+    def _needs_refresh(self, cfg: dict) -> bool:
         expires_at = cfg.get('expires_at')
         if not expires_at or not cfg.get('refresh_token') or not cfg.get('client_id'):
-            return cfg
+            return False
         try:
             exp = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
-            now = datetime.now(timezone.utc)
-            if (exp - now).total_seconds() > 86400:
-                return cfg  # more than 24h remaining — no refresh needed
+            return (exp - datetime.now(timezone.utc)).total_seconds() <= 86400
+        except Exception:
+            return False
 
-            logger.info("[Trakt] Refreshing access token ...")
-            resp = http.post(f"{TRAKT_API_BASE}/oauth/token", json={
-                'refresh_token': cfg['refresh_token'],
-                'client_id': cfg['client_id'],
-                'client_secret': cfg.get('client_secret', ''),
-                'grant_type': 'refresh_token',
-            }, timeout=15)
+    def _maybe_refresh_token(self, cfg: dict) -> dict:
+        """Refresh access token if expired or within 24 hours of expiry.
 
-            if not resp.ok:
-                logger.error(f"[Trakt] Token refresh failed: {resp.status_code}")
-                return cfg
-
-            token_data = resp.json()
-            new_access = token_data.get('access_token', cfg['access_token'])
-            new_refresh = token_data.get('refresh_token', cfg['refresh_token'])
-            expires_in = token_data.get('expires_in', 7776000)
-            new_expires = datetime.now(timezone.utc).timestamp() + expires_in
-            new_expires_iso = datetime.fromtimestamp(new_expires, tz=timezone.utc).isoformat()
-
-            # Persist refreshed tokens
-            try:
-                from settings_db import get_service, save_service
-                svc = get_service('trakt', 'default') or {}
-                existing_cfg = svc.get('config') or {}
-                existing_cfg.update({
-                    'access_token': new_access,
-                    'refresh_token': new_refresh,
-                    'expires_at': new_expires_iso,
-                })
-                save_service(
-                    service_type='trakt',
-                    name='default',
-                    url=svc.get('url', ''),
-                    api_key=svc.get('api_key', cfg['client_id']),
-                    config=existing_cfg
-                )
-            except Exception as exc:
-                logger.error(f"[Trakt] Could not persist refreshed token: {exc}")
-
-            cfg = dict(cfg)
-            cfg['access_token'] = new_access
-            cfg['refresh_token'] = new_refresh
-            cfg['expires_at'] = new_expires_iso
-            logger.info("[Trakt] Token refreshed successfully")
+        Multiple threads (dashboard widget load, scheduled sync, a manual
+        Sync click) can all decide a refresh is needed around the same
+        moment, e.g. right after a container restart. Trakt's refresh
+        tokens are single-use - whichever request wins gets a new
+        refresh_token and the old one is dead, so a concurrent second
+        request retrying with the stale token gets a 400 and, if its
+        failure path ever persisted anything, could clobber the DB back to
+        an already-invalidated token, wedging the integration until manual
+        re-auth. _refresh_lock plus a re-check of fresh DB state after
+        acquiring it (double-checked locking) makes sure only one thread
+        ever actually calls Trakt's token endpoint per expiry window; any
+        thread that loses the race just picks up the winner's fresh token.
+        """
+        if not self._needs_refresh(cfg):
             return cfg
 
-        except Exception as exc:
-            logger.error(f"[Trakt] Token refresh error: {exc}", exc_info=True)
-        return cfg
+        with self._refresh_lock:
+            # Re-check against the latest DB state - another thread may have
+            # already refreshed while we were waiting for the lock.
+            from settings_db import get_service, save_service
+            svc = get_service('trakt', 'default') or {}
+            current_cfg = svc.get('config') or {}
+            fresh_cfg = dict(cfg)
+            fresh_cfg.update({
+                'access_token': current_cfg.get('access_token', cfg.get('access_token')),
+                'refresh_token': current_cfg.get('refresh_token', cfg.get('refresh_token')),
+                'expires_at': current_cfg.get('expires_at', cfg.get('expires_at')),
+            })
+            if not self._needs_refresh(fresh_cfg):
+                return fresh_cfg
+            cfg = fresh_cfg
+
+            try:
+                logger.info("[Trakt] Refreshing access token ...")
+                resp = http.post(f"{TRAKT_API_BASE}/oauth/token", json={
+                    'refresh_token': cfg['refresh_token'],
+                    'client_id': cfg['client_id'],
+                    'client_secret': cfg.get('client_secret', ''),
+                    'grant_type': 'refresh_token',
+                }, timeout=15)
+
+                if not resp.ok:
+                    logger.error(f"[Trakt] Token refresh failed: {resp.status_code}")
+                    return cfg
+
+                token_data = resp.json()
+                new_access = token_data.get('access_token', cfg['access_token'])
+                new_refresh = token_data.get('refresh_token', cfg['refresh_token'])
+                expires_in = token_data.get('expires_in', 7776000)
+                new_expires = datetime.now(timezone.utc).timestamp() + expires_in
+                new_expires_iso = datetime.fromtimestamp(new_expires, tz=timezone.utc).isoformat()
+
+                # Persist refreshed tokens
+                try:
+                    existing_cfg = svc.get('config') or {}
+                    existing_cfg.update({
+                        'access_token': new_access,
+                        'refresh_token': new_refresh,
+                        'expires_at': new_expires_iso,
+                    })
+                    save_service(
+                        service_type='trakt',
+                        name='default',
+                        url=svc.get('url', ''),
+                        api_key=svc.get('api_key', cfg['client_id']),
+                        config=existing_cfg
+                    )
+                except Exception as exc:
+                    logger.error(f"[Trakt] Could not persist refreshed token: {exc}")
+
+                cfg = dict(cfg)
+                cfg['access_token'] = new_access
+                cfg['refresh_token'] = new_refresh
+                cfg['expires_at'] = new_expires_iso
+                logger.info("[Trakt] Token refreshed successfully")
+                return cfg
+
+            except Exception as exc:
+                logger.error(f"[Trakt] Token refresh error: {exc}", exc_info=True)
+            return cfg
 
     # ── Trakt API calls ───────────────────────────────────────────
 
