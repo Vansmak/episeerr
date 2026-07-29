@@ -21,8 +21,14 @@ General improvements go to both `dev` and `custom`. Xadarr-specific code stays i
 docker cp ~/projects/episeerr_custom/<file> episeerr:/app/<file> && docker restart episeerr
 
 # Bake into Docker image
-cd ~/projects/episeerr_custom && ./release_dev.sh custom
+cd ~/projects/episeerr_custom && ./release_custom.sh custom
 ```
+
+`release_dev.sh` also exists in this directory but builds from `episeerr_dev`, not from here — don't run it expecting a custom build.
+
+## Staying in Sync with dev/main
+
+This branch carries 100+ custom-only commits (Xadarr, Dispatcharr) on top of shared Episeerr code, and can silently drift behind dev/main for months if fixes land there without being ported back. When catching up after a gap, prefer `git merge origin/main` (or `origin/dev`) over hand-porting diffs — conflicts are almost always mechanical: custom has an extra Xadarr-only block that the other side simply doesn't have (empty on one side of the conflict marker), not a real logic collision. Files most likely to conflict: `episeerr.py`, `webhooks.py`, `media_processor.py`, `integrations/tautulli.py`, `integrations/dispatcharr.py`. Before assuming a conflict is Xadarr-sensitive and pausing, actually read both sides first — most of the time it isn't.
 
 ## Key Files
 
@@ -48,9 +54,11 @@ cd ~/projects/episeerr_custom && ./release_dev.sh custom
 Services live in the `services` SQLite table (`enabled BOOLEAN DEFAULT 1`).
 
 - `get_service('name', 'default')` filters `WHERE enabled = 1` — returns `None` when disabled
-- Toggle: `POST /api/toggle-service/<service>` with `{"enabled": true/false}`
+- Toggle: `POST /api/toggle-service/<service>` with `{"enabled": true/false}` — also calls the integration's `on_after_save()` hook to start/stop background schedulers (Plex/Trakt watchlist sync), so a disabled service actually stops polling
+- Remove entirely: `POST /api/delete-service/<service>` — deletes the saved config row, stops any scheduler, cleans up the matching auto-added quick link (trash-icon button on every Setup card)
 - Setup route reads enabled state via raw SQL (no `enabled=1` filter) so toggle reflects actual DB value
 - **Do NOT** gate widget display on `config is not None` — hides env-var services with no DB row
+- EpiseerrApp (the Android companion, separate repo) only calls the toggle endpoint, not delete — see `~/projects/EpiseerrApp` if service-management parity matters
 
 ## Trakt
 
