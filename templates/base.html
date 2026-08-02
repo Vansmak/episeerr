@@ -417,36 +417,15 @@
         flex-shrink: 0;
     }
 
-    /* Sidebar Live Stats (dashboard pills, moved into sidebar) */
-    .sidebar-stats {
-        padding: 6px 0;
-        border-bottom: 1px solid var(--border-color, #2d3142);
-    }
-
-    .sidebar-stat-pill {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 20px;
-        color: var(--nav-text, #9ca3af);
-        font-size: 0.8rem;
-    }
-
-    .sidebar-stat-pill img {
-        width: 16px;
-        height: 16px;
+    /* Live stat text shown inline next to a Quick Link (was a separate
+       "dashboard pills" bar; now attached to the matching link instead) */
+    .sidebar-link-stat {
+        font-size: 0.7rem;
+        color: var(--text-muted, #6b7280);
+        white-space: nowrap;
         flex-shrink: 0;
-        object-fit: contain;
-    }
-
-    .sidebar-stat-pill i {
-        width: 16px;
-        text-align: center;
-        flex-shrink: 0;
-    }
-
-    .sidebar-stat-pill strong {
-        color: var(--nav-hover-text, #fff);
+        margin-left: auto;
+        padding-left: 6px;
     }
 
     /* Sidebar quick-links group headers */
@@ -498,9 +477,6 @@
                 <span class="sidebar-search-hint">Ctrl+K</span>
             </div>
         </div>
-
-        <!-- Per-page Live Stats (e.g. dashboard stat pills) -->
-        {% block sidebar_stats %}{% endblock %}
 
         <!-- Navigation -->
         <nav class="sidebar-nav">
@@ -683,6 +659,10 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Populate system links
     populateSystemLinks();
+
+    // Refresh live stats next to quick links periodically (links themselves
+    // rarely change, so only the stats need to be re-fetched)
+    setInterval(populateQuickLinkStats, 60000);
 
     // Check for pending requests (same as original)
     checkForNewRequests();
@@ -897,6 +877,8 @@ function populateSystemLinks() {
                 No services configured
                 <a href="/setup" style="color: var(--accent-color);">Configure in Setup</a>
             </div>`;
+
+        populateQuickLinkStats();
     })
     .catch(err => {
         console.error('Error loading quick links:', err);
@@ -909,18 +891,65 @@ function renderSidebarLink(link) {
     const iconHtml = isImageIcon
         ? `<img src="${link.icon}" alt="${link.name}" class="sidebar-icon-img" />`
         : `<i class="${link.icon || 'fas fa-link'}"></i>`;
+    const svc = (link.name || '').toLowerCase();
     if (link.open_in_iframe) {
         const href = link.iframe_url || `/iframe/${link.id}`;
-        return `<a href="${href}" class="sidebar-rule-item" title="${link.name}">
+        return `<a href="${href}" class="sidebar-rule-item" title="${link.name}" data-svc="${svc}">
                     ${iconHtml}
                     <span class="sidebar-rule-name">${link.name}</span>
+                    <span class="sidebar-link-stat"></span>
                 </a>`;
     }
-    return `<a href="${link.url}" target="_blank" class="sidebar-rule-item" title="${link.name}">
+    return `<a href="${link.url}" target="_blank" class="sidebar-rule-item" title="${link.name}" data-svc="${svc}">
                 ${iconHtml}
                 <span class="sidebar-rule-name">${link.name}</span>
+                <span class="sidebar-link-stat"></span>
                 <i class="fas fa-external-link-alt ms-1" style="font-size:0.7rem;opacity:0.6;"></i>
             </a>`;
+}
+
+// Live stat text next to each Quick Link (e.g. "94 · 130 eps" next to
+// Sonarr, "23 (503 GB)" next to Radarr) — replaces the old dashboard pills.
+function populateQuickLinkStats() {
+    if (!document.getElementById('systemLinksContainer')) return;
+
+    Promise.all([
+        fetch('/api/dashboard/integrations').then(r => r.json()).catch(() => ({success: false})),
+        fetch('/api/dashboard/stats').then(r => r.json()).catch(() => ({success: false}))
+    ]).then(([integrationsData, statsData]) => {
+        if (!statsData.success) return;
+        const stats = statsData.stats || {};
+
+        // Sonarr is core (not part of the generic integrations list)
+        const sonarr = stats.sonarr;
+        if (sonarr && sonarr.configured && !sonarr.error) {
+            setQuickLinkStat('sonarr', `${sonarr.series_count ?? '--'} · ${sonarr.episode_count ?? '--'} eps`);
+        }
+
+        if (integrationsData.success && Array.isArray(integrationsData.integrations)) {
+            integrationsData.integrations.forEach(integration => {
+                const widget = integration.widget;
+                if (!widget || !widget.enabled || !widget.pill) return;
+
+                const serviceStats = stats[integration.service_name];
+                if (!serviceStats || !serviceStats.configured || serviceStats.error) return;
+
+                const text = formatQuickLinkStat(widget.pill.template, serviceStats);
+                setQuickLinkStat(integration.service_name, text);
+            });
+        }
+    })
+    .catch(err => console.error('Error loading quick link stats:', err));
+}
+
+function setQuickLinkStat(serviceName, text) {
+    const row = document.querySelector(`#systemLinksContainer [data-svc="${serviceName}"]`);
+    const el = row && row.querySelector('.sidebar-link-stat');
+    if (el) el.textContent = text;
+}
+
+function formatQuickLinkStat(template, data) {
+    return template.replace(/\{(\w+)\}/g, (match, field) => data[field] !== undefined ? data[field] : '--');
 }
     
 // Populate Containers in Sidebar

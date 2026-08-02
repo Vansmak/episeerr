@@ -2,29 +2,6 @@
 
 {% block title %}Dashboard - Episeerr{% endblock %}
 
-{% block sidebar_stats %}
-<div class="sidebar-stats" id="stats-pills-container">
-  <!-- Sonarr (Core - Always Visible) -->
-  <div class="sidebar-stat-pill">
-    <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png">
-    <span>
-      <strong id="sonarr-series">--</strong>
-      <small class="text-muted" id="sonarr-size">(-- GB)</small>
-      <small class="text-muted">•</small>
-      <small class="text-muted"><strong id="episodes-count">--</strong> eps</small>
-    </span>
-  </div>
-
-  <!-- Sonarr Queue (Core - Always Visible) -->
-  <div class="sidebar-stat-pill">
-    <i class="fas fa-list text-info"></i>
-    <span>Queue: <strong id="sonarr-queue">--</strong></span>
-  </div>
-
-  <!-- Integration Pills will be inserted here by JavaScript -->
-</div>
-{% endblock %}
-
 {% block content %}
 <div class="container-fluid">
   <!-- Plex Watchlist Section (hidden until /api/integration/plex/watchlist confirms Plex is configured) -->
@@ -306,8 +283,7 @@
 
 <script>
 // Global intervals
-let statsInterval, activityInterval, sonosInterval;
-let integrationMetadata = {};  // Store integration widget configs
+let activityInterval, sonosInterval;
 let sonosSelectedZone = null;  // null = auto (first playing, else first)
 
 // ── Sonos zone switching ────────────────────────────────────────────────────
@@ -330,59 +306,17 @@ function _refreshSonosWidget(idx) {
 // ────────────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Load integrations first, then stats
-    loadIntegrations().then(() => {
-        loadDashboardStats();
-        loadCalendar();
-        loadActivitySlim();
-        loadIntegrationWidgets();
-        loadPlexWatchlist();
-        loadTraktWatchlist();
-        loadJellyfinFavorites();
-        loadEmbyFavorites();
-        // Set intervals
-        statsInterval = setInterval(loadDashboardStats, 60000);
-        activityInterval = setInterval(loadActivitySlim, 60000);
-
-        setInterval(loadIntegrationWidgets, 60000);
-    });
+    loadCalendar();
+    loadActivitySlim();
+    loadIntegrationWidgets();
+    loadPlexWatchlist();
+    loadTraktWatchlist();
+    loadJellyfinFavorites();
+    loadEmbyFavorites();
+    // Set intervals
+    activityInterval = setInterval(loadActivitySlim, 60000);
+    setInterval(loadIntegrationWidgets, 60000);
 });
-
-// Load integration metadata and create pills
-function loadIntegrations() {
-    return fetch('/api/dashboard/integrations')
-        .then(r => r.json())
-        .then(data => {
-            if (!data.success || !data.integrations) return;
-
-            const container = document.getElementById('stats-pills-container');
-
-            data.integrations.forEach(integration => {
-                // Store metadata for later use
-                integrationMetadata[integration.service_name] = integration;
-
-                // Only create pill if widget is enabled
-                if (!integration.widget || !integration.widget.enabled) return;
-
-                // Create pill element
-                const pill = document.createElement('div');
-                pill.className = 'sidebar-stat-pill';
-                pill.style.cssText = 'display:none;';
-                pill.id = `${integration.service_name}-pill`;
-
-                pill.innerHTML = `
-                    <img src="${integration.icon}" onerror="this.style.display='none'">
-                    <span id="${integration.service_name}-content">--</span>
-                `;
-
-                // Append to end of container
-                container.appendChild(pill);
-            });
-        })
-        .catch(err => {
-            console.error('Error loading integrations:', err);
-        });
-}
 
 // Load integration widgets (generic - works for any integration)
 function loadIntegrationWidgets() {
@@ -434,61 +368,6 @@ function loadIntegrationWidgets() {
             }
         })
         .catch(err => console.error('Widget load error:', err));
-}
-
-// Stats (top pills)
-function loadDashboardStats() {
-    fetch('/api/dashboard/stats')
-        .then(r => r.json())
-        .then(data => {
-            console.log('Stats loaded:', data);
-
-            if (data.success) {
-                const stats = data.stats;
-
-                // Core Sonarr stats
-                if (stats.sonarr) {
-                    document.getElementById('sonarr-series').textContent = stats.sonarr.series_count || '--';
-                    document.getElementById('sonarr-size').textContent = '(' + (stats.sonarr.size_gb || '--') + ' GB)';
-                    document.getElementById('episodes-count').textContent = stats.sonarr.episode_count || '--';
-
-                    const sonarrQueue = stats.sonarr.queue_count ?? 0;
-                    document.getElementById('sonarr-queue').textContent = sonarrQueue;
-                }
-
-                // Integration pills (automatic)
-                Object.keys(integrationMetadata).forEach(serviceName => {
-                    const integration = integrationMetadata[serviceName];
-                    const serviceStats = stats[serviceName];
-
-                    // Skip if no widget or disabled
-                    if (!integration.widget || !integration.widget.enabled) return;
-
-                    // Skip if not configured or has error
-                    if (!serviceStats || !serviceStats.configured || serviceStats.error) {
-                        document.getElementById(`${serviceName}-pill`).style.display = 'none';
-                        return;
-                    }
-
-                    // Format using plugin's template
-                    const content = formatTemplate(
-                        integration.widget.pill.template,
-                        serviceStats
-                    );
-
-                    document.getElementById(`${serviceName}-content`).innerHTML = content;
-                    document.getElementById(`${serviceName}-pill`).style.display = 'flex';
-                });
-            }
-        })
-        .catch(err => console.error('Stats error:', err));
-}
-
-// Format template string with data
-function formatTemplate(template, data) {
-    return template.replace(/\{(\w+)\}/g, (match, field) => {
-        return data[field] !== undefined ? data[field] : '--';
-    });
 }
 
 // Slim Activity (3rd column)
@@ -1004,7 +883,6 @@ function syncTraktWatchlist() {
 
 // Cleanup intervals
 window.addEventListener('beforeunload', () => {
-    if (statsInterval) clearInterval(statsInterval);
     if (activityInterval) clearInterval(activityInterval);
     if (sonosInterval) clearInterval(sonosInterval);
 });
