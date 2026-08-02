@@ -438,6 +438,62 @@ def _xw_reconcile_watchlist_with_trakt(blob: dict) -> list:
     return kept
 
 
+def _xw_plex_configured() -> bool:
+    try:
+        from settings_db import get_plex_config
+        cfg = get_plex_config()
+        return bool(cfg and cfg.get("api_key"))
+    except Exception:
+        return False
+
+
+def _xw_fetch_plex_watchlist_items() -> list:
+    """
+    Live Plex watchlist, mapped into the same item shape watchlistByProfile
+    entries use (posterPath/backdropPath as full TMDB URLs, tmdbId,
+    mediaType "movie"/"show") — shared by the standalone /watchlist/plex
+    route and web_get_watchlist()'s dashboard display, so both surfaces stay
+    in sync automatically. Returns [] whenever Plex isn't configured or the
+    fetch fails, so callers can treat that as "nothing to show" without a
+    separate error branch — matches the /pending route's convention.
+    """
+    try:
+        from settings_db import get_plex_config
+        from integrations.plex import PlexIntegration
+        plex_cfg = get_plex_config()
+        if not plex_cfg or not plex_cfg.get("api_key"):
+            return []
+        raw_items = PlexIntegration().fetch_watchlist(plex_cfg["api_key"])
+    except Exception as exc:
+        logger.error(f"[Xadarr] Plex watchlist fetch failed: {exc}")
+        return []
+
+    items = []
+    for raw in raw_items:
+        tmdb_id = raw.get("tmdb_id")
+        if not tmdb_id:
+            continue
+        try:
+            tmdb_id = int(tmdb_id)
+        except (TypeError, ValueError):
+            continue
+        media_type = "show" if raw.get("type") == "show" else "movie"
+        tmdb_path = "/tv/" if media_type == "show" else "/movie/"
+        tmdb_data = _xw_tmdb(tmdb_path + str(tmdb_id)) or {}
+        items.append({
+            "tmdbId": tmdb_id,
+            "title": raw.get("title") or tmdb_data.get("title") or tmdb_data.get("name") or "",
+            "mediaType": media_type,
+            "posterPath": ("https://image.tmdb.org/t/p/w342" + tmdb_data["poster_path"])
+                if tmdb_data.get("poster_path") else "",
+            "backdropPath": ("https://image.tmdb.org/t/p/w780" + tmdb_data["backdrop_path"])
+                if tmdb_data.get("backdrop_path") else "",
+            "addedAt": None,
+            "sourceOrder": 0,
+        })
+    return items
+
+
 def _xw_tmdb(path: str, params: dict = None):
     blob = _load_json(_SETTINGS_FILE, {})
     key = blob.get("tmdb_api_key", "")
@@ -1110,6 +1166,29 @@ class XadarrIntegration(ServiceIntegration):
                 })
 
             return jsonify(items), 200
+
+        # ── GET /watchlist/plex ──────────────────────────────────────────────────
+        @bp.route("/watchlist/plex", methods=["GET"])
+        def get_plex_watchlist():
+            """
+            Live Plex watchlist, TMDB-shaped, for Xadarr's Watchlist row —
+            same shared helper web_get_watchlist() uses when Plex is configured,
+            so this route and the dashboard never drift out of sync. Returns []
+            (not an error) whenever Plex isn't configured or the fetch fails.
+            """
+            items = _xw_fetch_plex_watchlist_items()
+            return jsonify([
+                {
+                    "id": it["tmdbId"],
+                    "tmdbId": it["tmdbId"],
+                    "title": it["title"],
+                    "mediaType": it["mediaType"],
+                    "posterPath": it["posterPath"],
+                    "backdropPath": it["backdropPath"],
+                    "addedAt": it["addedAt"],
+                }
+                for it in items
+            ]), 200
 
         # ── GET /settings ─────────────────────────────────────────────────────
         @bp.route("/settings", methods=["GET"])
@@ -1792,9 +1871,15 @@ class XadarrIntegration(ServiceIntegration):
         # ── Watchlist ─────────────────────────────────────────────────────────
         @web_bp.route("/media/watchlist", methods=["GET"])
         def web_get_watchlist():
-            blob = _xw_blob()
-            _xw_flush_trakt_outbox(blob)
-            items = _xw_reconcile_watchlist_with_trakt(blob)
+            # Plex is preferred whenever it's configured — Trakt remains the
+            # fallback for setups without Plex (Joe, 2026-07-31: keep Trakt
+            # available, don't remove it globally).
+            if _xw_plex_configured():
+                items = _xw_fetch_plex_watchlist_items()
+            else:
+                blob = _xw_blob()
+                _xw_flush_trakt_outbox(blob)
+                items = _xw_reconcile_watchlist_with_trakt(blob)
             return jsonify(_xw_watchlist_to_web(items))
 
         @web_bp.route("/media/watchlist", methods=["POST"])
