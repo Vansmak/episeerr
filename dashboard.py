@@ -388,7 +388,8 @@ def calendar_data():
 def dashboard_integrations():
     """Get metadata for all integrations (for auto-generating UI)"""
     from integrations import get_all_integrations
-    
+    from settings_db import get_service
+
     integrations_data = []
     for integration in get_all_integrations():
         widget = integration.get_dashboard_widget() or {}
@@ -409,13 +410,20 @@ def dashboard_integrations():
             # _row[0] == 1  → explicitly enabled → leave widget['enabled'] as-is
         except Exception:
             pass  # DB error → leave widget unchanged, fail safe
+
+        # Per-integration opt-out (Setup page "Show pill on Dashboard"
+        # checkbox) - defaults to shown so nothing changes for anyone
+        # who hasn't touched it.
+        config = get_service(integration.service_name, 'default')
+        show_pill = (config or {}).get('config', {}).get('show_dashboard_pill', True)
+        widget['enabled'] = widget.get('enabled', True) and show_pill
         integrations_data.append({
             'service_name': integration.service_name,
             'display_name': integration.display_name,
             'icon': integration.icon,
             'widget': widget
         })
-    
+
     return jsonify({
         'success': True,
         'integrations': integrations_data

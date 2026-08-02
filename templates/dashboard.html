@@ -4,26 +4,36 @@
 
 {% block content %}
 <div class="container-fluid">
-  <!-- Slim Stats Bar -->
+  <!-- Slim Stats Bar (collapsible, collapsed by default) -->
   <div class="row mb-2">
     <div class="col-12">
-      <div class="d-flex flex-wrap gap-1 justify-content-start align-items-center" id="stats-pills-container">
-        <!-- Sonarr (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
-          <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-1" style="width: 16px; height: 16px;">
-          <strong id="sonarr-series">--</strong>
-          <small class="text-muted ms-1" id="sonarr-size">(-- GB)</small>
-          <small class="text-muted ms-1">•</small>
-          <small class="text-muted ms-1"><strong id="episodes-count">--</strong> eps</small>
+      <div class="card border-0 shadow-lg">
+        <div class="card-header d-flex justify-content-between align-items-center bg-dark border-bottom py-1" onclick="toggleStats()" style="cursor: pointer;">
+          <h6 class="mb-0" style="font-size:0.82rem;">
+            <i class="fas fa-chart-bar me-2"></i>Stats
+            <i id="stats-toggle-icon" class="fas fa-chevron-down ms-2" style="transition: transform 0.2s; font-size: 0.8em; transform: rotate(-90deg);"></i>
+          </h6>
         </div>
+        <div class="card-body py-2" style="display: none;">
+          <div class="d-flex flex-wrap gap-1 justify-content-start align-items-center" id="stats-pills-container">
+            <!-- Sonarr (Core - Always Visible) -->
+            <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
+              <img src="https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/sonarr.png" class="me-1" style="width: 16px; height: 16px;">
+              <strong id="sonarr-series">--</strong>
+              <small class="text-muted ms-1" id="sonarr-size">(-- GB)</small>
+              <small class="text-muted ms-1">•</small>
+              <small class="text-muted ms-1"><strong id="episodes-count">--</strong> eps</small>
+            </div>
 
-        <!-- Sonarr Queue (Core - Always Visible) -->
-        <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
-          <i class="fas fa-list me-1 text-info"></i>
-          <strong id="sonarr-queue">--</strong>
+            <!-- Sonarr Queue (Core - Always Visible) -->
+            <div class="stat-pill flex-grow-1 flex-md-grow-0 bg-dark border border-secondary rounded-pill px-2 py-1 px-md-3 py-md-1 text-center text-md-start" style="font-size: 0.875rem;">
+              <i class="fas fa-list me-1 text-info"></i>
+              <strong id="sonarr-queue">--</strong>
+            </div>
+
+            <!-- Integration Pills will be inserted here by JavaScript -->
+          </div>
         </div>
-
-        <!-- Integration Pills will be inserted here by JavaScript -->
       </div>
     </div>
   </div>
@@ -327,6 +337,24 @@ function _refreshSonosWidget(idx) {
         .then(r => r.json())
         .then(data => { if (data.success && data.html) container.innerHTML = data.html; })
         .catch(() => {});
+}
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── Stats bar collapse (same pattern as toggleWatchlist/toggleCalendar) ─────
+function toggleStats() {
+    const container = document.getElementById('stats-pills-container');
+    const chevron = document.querySelector('#stats-toggle-icon');
+    const cardBody = container.closest('.card-body');
+
+    if (cardBody.style.display === 'none') {
+        cardBody.style.display = 'block';
+        chevron.style.transform = 'rotate(0deg)';
+    } else {
+        cardBody.style.display = 'none';
+        chevron.style.transform = 'rotate(-90deg)';
+    }
+
+    localStorage.setItem('stats_collapsed', cardBody.style.display === 'none');
 }
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1087,6 +1115,11 @@ window.addEventListener('DOMContentLoaded', function() {
     if (originalDOMContentLoaded) originalDOMContentLoaded();
 
     setTimeout(() => {
+        // Stats bar starts collapsed in markup (unlike the sections below,
+        // which start expanded) — only expand it if the user had it open.
+        if (localStorage.getItem('stats_collapsed') === 'false') {
+            toggleStats();
+        }
         if (localStorage.getItem('calendar_collapsed') === 'true') {
             toggleCalendar();
         }
