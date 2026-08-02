@@ -417,6 +417,38 @@
         flex-shrink: 0;
     }
 
+    /* Sidebar Live Stats (dashboard pills, moved into sidebar) */
+    .sidebar-stats {
+        padding: 6px 0;
+        border-bottom: 1px solid var(--border-color, #2d3142);
+    }
+
+    .sidebar-stat-pill {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 20px;
+        color: var(--nav-text, #9ca3af);
+        font-size: 0.8rem;
+    }
+
+    .sidebar-stat-pill img {
+        width: 16px;
+        height: 16px;
+        flex-shrink: 0;
+        object-fit: contain;
+    }
+
+    .sidebar-stat-pill i {
+        width: 16px;
+        text-align: center;
+        flex-shrink: 0;
+    }
+
+    .sidebar-stat-pill strong {
+        color: var(--nav-hover-text, #fff);
+    }
+
     /* Sidebar quick-links group headers */
     .sidebar-link-group-header {
         padding: 4px 12px 2px;
@@ -466,6 +498,9 @@
                 <span class="sidebar-search-hint">Ctrl+K</span>
             </div>
         </div>
+
+        <!-- Per-page Live Stats (e.g. dashboard stat pills) -->
+        {% block sidebar_stats %}{% endblock %}
 
         <!-- Navigation -->
         <nav class="sidebar-nav">
