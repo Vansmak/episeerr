@@ -3038,6 +3038,16 @@ def reconcile_future_seasons():
                     if not monitored_ids:
                         continue  # Already fully unmonitored — nothing to fix
 
+                    # If this season is exactly the one the rule's own get-next
+                    # tracking (last_season) would advance into, any monitoring
+                    # found here is that rule's own get-count logic doing its job —
+                    # for any show, series-monitored or not, whole season or a
+                    # single pre-fetched episode. Only Sonarr's own unrelated
+                    # auto-monitor-new-season behavior should be corrected below.
+                    last_season = series_data.get('last_season')
+                    if last_season is not None and season_num == last_season + 1:
+                        continue
+
                     # Step 1: unmonitor everything in this future season
                     unmon_resp = http.put(
                         f"{SONARR_URL}/api/v3/episode/monitor",
