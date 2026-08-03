@@ -565,7 +565,7 @@ def get_series_id(series_name, thetvdb_id=None, themoviedb_id=None):
             if series['title'].lower() == series_name.lower():
                 logger.info(f"Found exact match: {series['title']}")
                 return series['id']
-        
+
         # 4. Match without year suffixes
         webhook_title_clean = re.sub(r'\s*\(\d{4}\)$', '', series_name).strip()
         for series in series_list:
@@ -573,17 +573,23 @@ def get_series_id(series_name, thetvdb_id=None, themoviedb_id=None):
             if sonarr_title_clean.lower() == webhook_title_clean.lower():
                 logger.info(f"Found match ignoring year: '{series['title']}' matches '{series_name}'")
                 return series['id']
-        
-        
-        
-        # 5. Alternate title match (covers localized titles, e.g. Plex "Es - Welcome to Derry")
+
+        # 4.5 Normalized title match (treats "&" and "and" as equivalent, strips punctuation)
         def _norm(s):
             s = s.lower()
+            s = s.replace('&', ' and ')
             s = re.sub(r'[^\w\s]', '', s)
             s = re.sub(r'\s+', ' ', s).strip()
             return s
 
-        incoming_norm = _norm(series_name)
+        webhook_norm = _norm(series_name)
+        for series in series_list:
+            if _norm(series['title']) == webhook_norm:
+                logger.info(f"Found normalized title match: '{series['title']}' matches '{series_name}'")
+                return series['id']
+
+        # 5. Alternate title match (covers localized titles, e.g. Plex "Es - Welcome to Derry")
+        incoming_norm = webhook_norm
         for series in series_list:
             for alt in series.get('alternateTitles', []):
                 alt_title = alt.get('title', '')
