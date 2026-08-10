@@ -2782,6 +2782,41 @@ def run_grace_unwatched_cleanup(series_lookup=None):
 # UPDATED DORMANT CLEANUP WITH MASTER SAFETY SWITCH
 # Matches the same safety logic as grace watched/unwatched
 
+def _ensure_series_monitored(series_id, headers, series_title=None):
+    """Ensure the series itself is monitored in Sonarr.
+
+    A monitored episode under an unmonitored series is an inconsistent state
+    that Sonarr allows but that also silently hides the show from any
+    calendar-based "upcoming" view (Xadarr's Upcoming row, notably) — those
+    filter on series.monitored regardless of episode-level state. Caught
+    live: Tires, The Gentlemen, and The Rookie all had series.monitored=False
+    despite Sonarr status='continuing', while every other successfully
+    surfaced premiere had series.monitored=True — leftover inconsistency
+    from how each show was originally added, not anything this reconciler
+    caused, but worth correcting the moment it catches a premiere for that
+    series so the show doesn't stay invisible.
+    """
+    try:
+        sr = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, timeout=10)
+        if not sr.ok:
+            return
+        series = sr.json()
+        if series.get('monitored', True):
+            return
+        series['monitored'] = True
+        put_resp = http.put(
+            f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, json=series, timeout=10
+        )
+        if put_resp.ok:
+            cleanup_logger.info(
+                f"  📡 Series-level monitor restored for "
+                f"'{series_title or series.get('title', series_id)}' — was unmonitored "
+                f"despite a caught premiere, which hid it from calendar-based upcoming views"
+            )
+    except Exception as e:
+        cleanup_logger.debug(f"Could not ensure series monitored for {series_id}: {e}")
+
+
 def run_dormant_cleanup(series_lookup=None):
     """
     Process dormant cleanup with optional storage gate and MASTER SAFETY SWITCH.
@@ -3164,6 +3199,7 @@ def reconcile_future_seasons():
                                     cleanup_logger.debug(
                                         f"Could not send premiere-caught notification: {notify_err}"
                                     )
+                                _ensure_series_monitored(series_id, headers, _series_title())
                                 # Step 3: record this season as handled so tomorrow's run
                                 # doesn't unmonitor-then-remonitor-then-research it again
                                 # every single day until it airs. + modifier gets the
@@ -3245,6 +3281,7 @@ def reconcile_future_seasons():
                                 cleanup_logger.debug(
                                     f"Could not send premiere-caught notification: {notify_err}"
                                 )
+                            _ensure_series_monitored(series_id, headers, _series_title())
                             # Record as handled so this doesn't unmonitor/remonitor/
                             # research on a loop every day until the premiere airs.
                             if 'activation_seasons' not in series_data:
