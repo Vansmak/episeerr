@@ -3148,6 +3148,22 @@ def reconcile_future_seasons():
                                         f"  ✗ Search trigger failed for '{_series_title()}' "
                                         f"S{season_num}: {search_resp.text}"
                                     )
+                                try:
+                                    from notifications import send_notification
+                                    notify_candidates = [e for e in eps if e['id'] in to_remonitor]
+                                    notify_ep = min(notify_candidates, key=lambda e: e.get('episodeNumber', 0))
+                                    send_notification(
+                                        "episode_search_pending",
+                                        series=_series_title(),
+                                        season=season_num,
+                                        episode=notify_ep.get('episodeNumber'),
+                                        air_date=notify_ep.get('airDateUtc'),
+                                        series_id=series_id
+                                    )
+                                except Exception as notify_err:
+                                    cleanup_logger.debug(
+                                        f"Could not send premiere-caught notification: {notify_err}"
+                                    )
                                 # Step 3: record this season as handled so tomorrow's run
                                 # doesn't unmonitor-then-remonitor-then-research it again
                                 # every single day until it airs. + modifier gets the
@@ -3210,6 +3226,24 @@ def reconcile_future_seasons():
                                 cleanup_logger.error(
                                     f"  ✗ Premiere search trigger failed for "
                                     f"'{_series_title()}' S{season_num}: {search_resp.text}"
+                                )
+                            # This path never goes through monitor_or_search_episodes
+                            # (the webhook flow's notifier), so without this call a
+                            # caught premiere is otherwise completely silent — nothing
+                            # short of manually checking Sonarr would ever surface it.
+                            try:
+                                from notifications import send_notification
+                                send_notification(
+                                    "episode_search_pending",
+                                    series=_series_title(),
+                                    season=season_num,
+                                    episode=premiere_ep.get('episodeNumber'),
+                                    air_date=premiere_ep.get('airDateUtc'),
+                                    series_id=series_id
+                                )
+                            except Exception as notify_err:
+                                cleanup_logger.debug(
+                                    f"Could not send premiere-caught notification: {notify_err}"
                                 )
                             # Record as handled so this doesn't unmonitor/remonitor/
                             # research on a loop every day until the premiere airs.
