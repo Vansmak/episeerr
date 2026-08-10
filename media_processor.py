@@ -2926,7 +2926,12 @@ def reconcile_future_seasons():
     Actions taken per future season:
       1. Unmonitor all currently-monitored episodes in that season.
       2. Re-apply the rule's always_have expression to that season (if present and
-         not sequential mode) so the correct episodes end up monitored.
+         not sequential mode) so the correct episodes end up monitored, and trigger
+         a search for whatever gets (re-)monitored so it doesn't just wait on Sonarr's
+         own RSS timing. Sequential mode (e1+) is left alone — the on-finale advance
+         logic owns it. Rules with no always_have at all fall back to monitoring +
+         searching just the season's premiere episode, so a plain episode-count rule
+         still catches new seasons instead of leaving them unmonitored forever.
       3. If the always_have expression carries a + modifier, record the season as
          'held' in activation_seasons (skipped when series already has watch history).
 
@@ -3077,6 +3082,16 @@ def reconcile_future_seasons():
                                     f"  🔒 Always Have re-applied: '{_series_title()}' S{season_num} — "
                                     f"monitored {len(to_remonitor)} episodes ('{always_have}')"
                                 )
+                                search_resp = http.post(
+                                    f"{SONARR_URL}/api/v3/command",
+                                    headers=headers,
+                                    json={"name": "EpisodeSearch", "episodeIds": to_remonitor}
+                                )
+                                if not search_resp.ok:
+                                    cleanup_logger.error(
+                                        f"  ✗ Search trigger failed for '{_series_title()}' "
+                                        f"S{season_num}: {search_resp.text}"
+                                    )
                                 # Step 3: set held state for + modifier
                                 if has_plus:
                                     already_watched = series_data.get('activity_date') is not None
@@ -3103,6 +3118,40 @@ def reconcile_future_seasons():
                             f"  ↪ Sequential mode ('{always_have}'): S{season_num} left fully "
                             f"unmonitored — sequential advance will handle it on finale"
                         )
+                    else:
+                        # No always_have expression at all: still catch the season
+                        # premiere by default. Without this, a plain episode-count
+                        # rule (get_type: episodes, no always_have) has zero mechanism
+                        # to ever pick a newly-announced/renewed season back up once
+                        # Sonarr's auto-monitor is undone above — it stays unmonitored
+                        # forever with no retry path.
+                        premiere_ep = min(eps, key=lambda e: e.get('episodeNumber', 0))
+                        mon_resp = http.put(
+                            f"{SONARR_URL}/api/v3/episode/monitor",
+                            headers=headers,
+                            json={"episodeIds": [premiere_ep['id']], "monitored": True}
+                        )
+                        if mon_resp.ok:
+                            cleanup_logger.info(
+                                f"  🎬 Premiere caught: '{_series_title()}' "
+                                f"S{season_num}E{premiere_ep.get('episodeNumber', '?')} monitored "
+                                f"(rule '{rule_name}' has no always_have)"
+                            )
+                            search_resp = http.post(
+                                f"{SONARR_URL}/api/v3/command",
+                                headers=headers,
+                                json={"name": "EpisodeSearch", "episodeIds": [premiere_ep['id']]}
+                            )
+                            if not search_resp.ok:
+                                cleanup_logger.error(
+                                    f"  ✗ Premiere search trigger failed for "
+                                    f"'{_series_title()}' S{season_num}: {search_resp.text}"
+                                )
+                        else:
+                            cleanup_logger.error(
+                                f"  ✗ Failed to monitor premiere for "
+                                f"'{_series_title()}' S{season_num}: {mon_resp.text}"
+                            )
 
             except Exception as e:
                 cleanup_logger.error(
