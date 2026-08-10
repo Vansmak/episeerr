@@ -308,17 +308,54 @@ def update_activity_date(series_id, season_number=None, episode_number=None, tim
                     if season_key not in series_data['seasons']:
                         series_data['seasons'][season_key] = {}
                     
+                    # Rewatching an earlier episode of this season shouldn't move
+                    # tracked position backward (it previously made a season that
+                    # was actually finished look mid-season again) — but a rewatch
+                    # is still real engagement, so activity_date always refreshes.
+                    existing_last_ep = series_data['seasons'][season_key].get('last_episode')
                     series_data['seasons'][season_key]['activity_date'] = current_time
-                    series_data['seasons'][season_key]['last_episode'] = episode_number
-                    
+                    if existing_last_ep is None or episode_number >= existing_last_ep:
+                        series_data['seasons'][season_key]['last_episode'] = episode_number
+                    else:
+                        logger.info(
+                            f"📺 Rewatch detected for series {series_id} S{season_number}: "
+                            f"E{episode_number} behind tracked E{existing_last_ep} — "
+                            f"activity refreshed, position kept"
+                        )
+
                     logger.info(f"📺 Updated PER-SEASON activity for series {series_id} Season {season_number}: S{season_number}E{episode_number} at {datetime.fromtimestamp(current_time)}")
                 else:
                     # PER-SERIES TRACKING (default/legacy behavior)
-                    series_dict[str(series_id)] = {
-                        'activity_date': current_time,
-                        'last_season': season_number,
-                        'last_episode': episode_number
-                    }
+                    # Merge onto the existing entry rather than replacing it
+                    # wholesale — a full replace here was silently wiping out
+                    # activation_seasons/grace_cleaned/etc. on every watch event.
+                    # Also keep last_season/last_episode forward-only: a rewatch
+                    # of an earlier episode is still real engagement (activity_date
+                    # always refreshes) but shouldn't regress tracked position —
+                    # that previously made an already-finished season look
+                    # mid-season again and defeated the premiere-catch reconcile.
+                    existing = series_dict.get(str(series_id))
+                    if not isinstance(existing, dict):
+                        existing = {}
+                    existing_season = existing.get('last_season')
+                    existing_episode = existing.get('last_episode')
+                    is_forward_or_new = (
+                        existing_season is None
+                        or (season_number, episode_number) >= (existing_season, existing_episode or 0)
+                    )
+                    updated_data = dict(existing)
+                    updated_data['activity_date'] = current_time
+                    if is_forward_or_new:
+                        updated_data['last_season'] = season_number
+                        updated_data['last_episode'] = episode_number
+                    else:
+                        logger.info(
+                            f"📺 Rewatch detected for series {series_id}: "
+                            f"S{season_number}E{episode_number} behind tracked "
+                            f"S{existing_season}E{existing_episode} — activity refreshed, "
+                            f"position kept"
+                        )
+                    series_dict[str(series_id)] = updated_data
                     logger.info(f"📺 Updated PER-SERIES activity for series {series_id}: S{season_number}E{episode_number} at {datetime.fromtimestamp(current_time)}")
                 
                 updated = True
@@ -2745,6 +2782,54 @@ def run_grace_unwatched_cleanup(series_lookup=None):
 # UPDATED DORMANT CLEANUP WITH MASTER SAFETY SWITCH
 # Matches the same safety logic as grace watched/unwatched
 
+def _last_watched_position(series_data):
+    """Best-effort (season, episode) tuple for how far a series has been
+    watched, supporting both per-series (last_season/last_episode) and
+    per-season (seasons: {season: {last_episode}}) activity tracking."""
+    if not isinstance(series_data, dict):
+        return None, None
+    if 'last_season' in series_data:
+        return series_data.get('last_season'), series_data.get('last_episode')
+    best = None
+    for season_key, season_data in (series_data.get('seasons') or {}).items():
+        try:
+            sn = int(season_key)
+        except (TypeError, ValueError):
+            continue
+        ep = season_data.get('last_episode') if isinstance(season_data, dict) else None
+        if ep is None:
+            continue
+        if best is None or (sn, ep) > best:
+            best = (sn, ep)
+    return best if best else (None, None)
+
+
+def _caught_up_to_frontier(all_episodes, last_season, last_episode):
+    """True when there's no already-aired episode beyond (last_season,
+    last_episode) — i.e. the user has watched everything actually released
+    so far and is waiting on the next episode/season, not just not watching."""
+    if last_season is None or last_episode is None:
+        return False
+    now = datetime.now(timezone.utc)
+    for ep in all_episodes:
+        sn = ep.get('seasonNumber', 0)
+        if sn == 0:
+            continue
+        en = ep.get('episodeNumber', 0)
+        if (sn, en) <= (last_season, last_episode):
+            continue
+        air_str = ep.get('airDateUtc', '')
+        if not air_str:
+            continue  # Not scheduled yet — doesn't count as unwatched backlog
+        try:
+            air_dt = datetime.fromisoformat(air_str.replace('Z', '+00:00'))
+        except Exception:
+            continue
+        if air_dt <= now:
+            return False  # A real, already-aired episode is sitting unwatched
+    return True
+
+
 def run_dormant_cleanup(series_lookup=None):
     """
     Process dormant cleanup with optional storage gate and MASTER SAFETY SWITCH.
@@ -2831,6 +2916,23 @@ def run_dormant_cleanup(series_lookup=None):
                     days_since_activity = (current_time - activity_date) / (24 * 60 * 60)
                     if days_since_activity > dormant_days:
                         all_episodes = fetch_all_episodes(series_id)
+
+                        # A still-continuing show the user is caught up on isn't
+                        # abandoned — it's waiting on the next episode/season,
+                        # which can take weeks (weekly airing) or years (renewal
+                        # gap). Only treat it as dormant once Sonarr says the show
+                        # has ended, or there's a real backlog of aired-but-unwatched
+                        # episodes the user just isn't getting to.
+                        if series_info.get('status') != 'ended':
+                            last_season, last_episode = _last_watched_position(series_data)
+                            if _caught_up_to_frontier(all_episodes, last_season, last_episode):
+                                cleanup_logger.info(
+                                    f"⏸️  {series_info['title']}: caught up to the latest "
+                                    f"aired episode and still continuing — exempt from "
+                                    f"dormant cleanup"
+                                )
+                                continue
+
                         # Dormant cleanup bypasses always_have but still respects keep_pilot
                         deletable_episodes = [ep for ep in all_episodes if ep.get('hasFile') and ep.get('episodeFileId') and not is_anchor_episode(ep, series_id, check_always_have=False)]
 
