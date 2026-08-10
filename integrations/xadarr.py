@@ -69,6 +69,11 @@ _DATA_DIR      = os.path.join(os.getcwd(), "data")
 _SETTINGS_FILE = os.path.join(_DATA_DIR, "xadarr_settings.json")
 _HISTORY_FILE  = os.path.join(_DATA_DIR, "xadarr_history.json")
 _TRAKT_OUTBOX_FILE = os.path.join(_DATA_DIR, "xadarr_trakt_outbox.json")
+# Same file activity_storage.py's save_watch_event()/get_last_watch() write/read
+# (data/activity/watched.json) — read directly here rather than importing that
+# module, since get_last_watch() only exposes the single latest event globally
+# and this route needs the latest-per-series view of the whole rolling log.
+_WATCHED_ACTIVITY_FILE = os.path.join(_DATA_DIR, "activity", "watched.json")
 
 # ── Rule-processing dedup ─────────────────────────────────────────────────────
 # Prevents triggering Sonarr rule processing more than once per watch session.
@@ -1166,6 +1171,33 @@ class XadarrIntegration(ServiceIntegration):
                 })
 
             return jsonify(items), 200
+
+        # ── GET /recently-watched ────────────────────────────────────────────────
+        @bp.route("/recently-watched", methods=["GET"])
+        def get_recently_watched():
+            """
+            Latest watch event per series from the 7-day rolling activity log
+            (data/activity/watched.json, written by activity_storage.save_watch_event()
+            on Tautulli/Jellyfin watch webhooks — cross-service, not Plex-only counters).
+            Used by Xadarr's Shows screen for a Continue Watching row; series_title is
+            matched client-side against the user's live Plex library by title.
+            """
+            events = _load_json(_WATCHED_ACTIVITY_FILE, [])
+            latest_by_series: Dict[Any, Dict[str, Any]] = {}
+            for e in events:
+                sid = e.get("series_id")
+                if sid is None:
+                    continue
+                if sid not in latest_by_series or e.get("timestamp", 0) > latest_by_series[sid].get("timestamp", 0):
+                    latest_by_series[sid] = e
+            items = sorted(latest_by_series.values(), key=lambda e: e.get("timestamp", 0), reverse=True)
+            return jsonify([{
+                "seriesTitle": e.get("series_title", ""),
+                "season": e.get("season"),
+                "episode": e.get("episode"),
+                "timestamp": e.get("timestamp"),
+                "backdropUrl": e.get("backdrop_url"),
+            } for e in items]), 200
 
         # ── GET /watchlist/plex ──────────────────────────────────────────────────
         @bp.route("/watchlist/plex", methods=["GET"])
@@ -2658,6 +2690,10 @@ class XadarrIntegration(ServiceIntegration):
         @alias_bp.route("/episeerr/pending", methods=["GET"])
         def alias_episeerr_pending():
             return get_pending()
+
+        @alias_bp.route("/episeerr/recently-watched", methods=["GET"])
+        def alias_episeerr_recently_watched():
+            return get_recently_watched()
 
         @alias_bp.route("/episeerr/rules", methods=["GET"])
         def alias_episeerr_rules():
