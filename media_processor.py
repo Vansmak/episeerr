@@ -2932,8 +2932,10 @@ def reconcile_future_seasons():
          logic owns it. Rules with no always_have at all fall back to monitoring +
          searching just the season's premiere episode, so a plain episode-count rule
          still catches new seasons instead of leaving them unmonitored forever.
-      3. If the always_have expression carries a + modifier, record the season as
-         'held' in activation_seasons (skipped when series already has watch history).
+      3. Record the season in activation_seasons once handled ('held' for a +
+         modifier, 'reconciled' for a plain always_have match, 'premiere_caught' for
+         the no-always_have fallback) so it isn't reprocessed — and re-searched —
+         every single day until it airs.
 
     A season is considered "future" when:
       - Every non-special episode either has a future air date or has no air date.
@@ -3023,11 +3025,6 @@ def reconcile_future_seasons():
                     if not is_future:
                         continue
 
-                    # Only act if Sonarr auto-monitored some episodes in this season
-                    monitored_ids = [ep['id'] for ep in eps if ep.get('monitored', False)]
-                    if not monitored_ids:
-                        continue  # Already fully unmonitored — nothing to fix
-
                     # If this season is exactly the one the rule's own get-next
                     # tracking (last_season) would advance into, any monitoring
                     # found here is that rule's own get-count logic doing its job —
@@ -3038,24 +3035,30 @@ def reconcile_future_seasons():
                     if last_season is not None and season_num == last_season + 1:
                         continue
 
-                    # Step 1: unmonitor everything in this future season
-                    unmon_resp = http.put(
-                        f"{SONARR_URL}/api/v3/episode/monitor",
-                        headers=headers,
-                        json={"episodeIds": monitored_ids, "monitored": False}
-                    )
-                    if not unmon_resp.ok:
-                        cleanup_logger.error(
-                            f"Future season reconcile: failed to unmonitor "
-                            f"'{_series_title()}' S{season_num}: {unmon_resp.text}"
+                    # Step 1: unmonitor whatever Sonarr auto-monitored in this season.
+                    # A season that's already fully unmonitored (Sonarr never touched
+                    # it, or a previous run already did this step) still falls through
+                    # to Step 2 below — it's not "nothing to fix" anymore now that Step 2
+                    # has a no-always_have fallback of its own to catch the premiere.
+                    monitored_ids = [ep['id'] for ep in eps if ep.get('monitored', False)]
+                    if monitored_ids:
+                        unmon_resp = http.put(
+                            f"{SONARR_URL}/api/v3/episode/monitor",
+                            headers=headers,
+                            json={"episodeIds": monitored_ids, "monitored": False}
                         )
-                        continue
+                        if not unmon_resp.ok:
+                            cleanup_logger.error(
+                                f"Future season reconcile: failed to unmonitor "
+                                f"'{_series_title()}' S{season_num}: {unmon_resp.text}"
+                            )
+                            continue
 
-                    cleanup_logger.info(
-                        f"📅 Future season reconciled: '{_series_title()}' S{season_num} — "
-                        f"unmonitored {len(monitored_ids)} Sonarr-auto-monitored episodes"
-                    )
-                    reconciled_seasons += 1
+                        cleanup_logger.info(
+                            f"📅 Future season reconciled: '{_series_title()}' S{season_num} — "
+                            f"unmonitored {len(monitored_ids)} Sonarr-auto-monitored episodes"
+                        )
+                        reconciled_seasons += 1
 
                     # Step 2: re-apply always_have expression to this season
                     # Sequential mode (e1+) is handled by the on-finale advance logic;
@@ -3092,7 +3095,14 @@ def reconcile_future_seasons():
                                         f"  ✗ Search trigger failed for '{_series_title()}' "
                                         f"S{season_num}: {search_resp.text}"
                                     )
-                                # Step 3: set held state for + modifier
+                                # Step 3: record this season as handled so tomorrow's run
+                                # doesn't unmonitor-then-remonitor-then-research it again
+                                # every single day until it airs. + modifier gets the
+                                # existing 'held' state (consumed by is_anchor_episode);
+                                # anything else just needs a marker to satisfy the
+                                # activation_seasons guard at the top of this loop.
+                                if 'activation_seasons' not in series_data:
+                                    series_data['activation_seasons'] = {}
                                 if has_plus:
                                     already_watched = series_data.get('activity_date') is not None
                                     if already_watched:
@@ -3100,13 +3110,14 @@ def reconcile_future_seasons():
                                             f"  ↪ Series has watch history — treating S{season_num} as active"
                                         )
                                     else:
-                                        if 'activation_seasons' not in series_data:
-                                            series_data['activation_seasons'] = {}
                                         series_data['activation_seasons'][season_str] = 'held'
                                         config_changed = True
                                         cleanup_logger.info(
                                             f"  🔒 Held state set: '{_series_title()}' S{season_num}"
                                         )
+                                else:
+                                    series_data['activation_seasons'][season_str] = 'reconciled'
+                                    config_changed = True
                             else:
                                 cleanup_logger.error(
                                     f"  ✗ Failed to re-apply always_have for "
@@ -3147,6 +3158,13 @@ def reconcile_future_seasons():
                                     f"  ✗ Premiere search trigger failed for "
                                     f"'{_series_title()}' S{season_num}: {search_resp.text}"
                                 )
+                            # Record as handled so this doesn't unmonitor/remonitor/
+                            # research on a loop every day until the premiere airs.
+                            if 'activation_seasons' not in series_data:
+                                series_data['activation_seasons'] = {}
+                            series_data['activation_seasons'][season_str] = 'premiere_caught'
+                            config_changed = True
+                            reconciled_seasons += 1
                         else:
                             cleanup_logger.error(
                                 f"  ✗ Failed to monitor premiere for "
