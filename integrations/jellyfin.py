@@ -106,7 +106,9 @@ class JellyfinIntegration(ServiceIntegration):
                 'help_text': (
                     'Polling: webhook fires once, polls session. Progress: constant webhook spam. '
                     'In Jellyfin webhook plugin, check both Episodes AND Movies under Item Type — '
-                    'without Movies checked, movie watch dates will not be recorded in real-time.'
+                    'without Movies checked, movie watch dates will not be recorded in real-time. '
+                    'Also add a Request Header with Key "Content-Type" (hyphen, not underscore) '
+                    'and Value "application/json" — without it Jellyfin\'s webhook will not be accepted.'
                 )
             },
             {
