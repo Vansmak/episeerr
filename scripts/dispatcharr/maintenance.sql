@@ -575,6 +575,21 @@ WHERE id IN (SELECT id FROM _pattern_deletions);
 
 SELECT COUNT(*) AS part7_channels_deleted FROM _pattern_deletions;
 
+-- ── Part 7b: Strip leading "US: " provider prefix from channel names ───────
+-- Direct-provider channel names all come through prefixed "US: <name>" (e.g.
+-- "US: ESPN HD"). Purely cosmetic noise — nothing keys off the name field for
+-- merging/whitelisting (all tvg_id-based) — but it crowds the Xadarr TV guide
+-- (Joe, 2026-08-11: "channels long with... US:", wanted a tidy guide).
+
+\echo ''
+\echo '── Part 7b: Strip "US: " channel-name prefix ──'
+
+UPDATE dispatcharr_channels_channel
+SET name = regexp_replace(name, '^US:\s*', '')
+WHERE name ~ '^US:\s*';
+
+\echo 'Part 7b — US: prefix stripped.'
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 9: Stream merging
 --
@@ -1012,6 +1027,20 @@ WHERE LOWER(tvg_id) = 'foxwsvn.us'
   AND channel_group_id = (SELECT id FROM dispatcharr_channels_channelgroup WHERE name = 'Locals');
 
 \echo 'All locals numbered.'
+
+-- ── Locals name cleanup: strip redundant "City: " prefix ───────────────────
+-- Raw provider names are "Los Angeles: CBS 2 (KCBS)", "Denver: CBS 4 (KCNC)",
+-- etc. The city is redundant once the .1/.2/.3/.4 channel-number suffix (or
+-- distinct 3-digit number for the smaller markets) already disambiguates —
+-- and it's what was crowding the Xadarr TV guide (Joe, 2026-08-11).
+UPDATE dispatcharr_channels_channel c
+SET name = regexp_replace(c.name, '^[^:]+:\s*', '')
+FROM dispatcharr_channels_channelgroup g
+WHERE g.id = c.channel_group_id
+  AND g.name = 'Locals'
+  AND c.name ~ '^[^:]+:\s*';
+
+\echo 'Locals — City: prefix stripped from names.'
 
 -- ── News 101+ ─────────────────────────────────────────────────────────────
 
