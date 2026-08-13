@@ -3120,14 +3120,30 @@ def reconcile_future_seasons():
                     monitored_ids = [ep['id'] for ep in eps if ep.get('monitored', False)]
 
                     # If this season is exactly the one the rule's own get-next
-                    # tracking (last_season) would advance into, any monitoring
-                    # found here is that rule's own get-count logic doing its job —
-                    # for any show, series-monitored or not, whole season or a
-                    # single pre-fetched episode. Only Sonarr's own unrelated
-                    # auto-monitor-new-season behavior should be corrected below.
+                    # tracking (last_season) would advance into, monitoring found
+                    # here is normally that rule's own get-count logic doing its
+                    # job — deferred to the webhook fired when the user finishes
+                    # last_season's finale. But if they finished that finale
+                    # already (before this season existed/aired), that webhook
+                    # already fired months ago and is never coming again — same
+                    # trap as a plain no-always_have rule with no last_season at
+                    # all. Only defer when last_season is genuinely still in
+                    # progress; otherwise fall through to the premiere catch below.
                     last_season = series_data.get('last_season')
                     if last_season is not None and season_num == last_season + 1:
-                        continue
+                        last_episode = series_data.get('last_episode')
+                        max_ep_in_last_season = max(
+                            (e.get('episodeNumber', 0) for e in all_episodes
+                             if e.get('seasonNumber') == last_season),
+                            default=0
+                        )
+                        watched_through_finale = (
+                            last_episode is not None
+                            and max_ep_in_last_season > 0
+                            and last_episode >= max_ep_in_last_season
+                        )
+                        if not watched_through_finale:
+                            continue
 
                     if monitored_ids:
                         unmon_resp = http.put(
