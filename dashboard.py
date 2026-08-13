@@ -417,6 +417,7 @@ def dashboard_integrations():
         config = get_service(integration.service_name, 'default')
         show_pill = (config or {}).get('config', {}).get('show_dashboard_pill', True)
         widget['enabled'] = widget.get('enabled', True) and show_pill
+
         integrations_data.append({
             'service_name': integration.service_name,
             'display_name': integration.display_name,

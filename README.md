@@ -555,9 +555,9 @@ Episeerr supports **two modes** for Jellyfin — pick one:
 
 ---
 
-#### **Mode A: Real-Time (Recommended)**
+#### **Mode A: PlaybackProgress (Advanced)**
 
-Jellyfin sends a webhook on every progress update. Episeerr fires once when progress lands in the 50–55% window. No polling needed.
+Jellyfin sends a webhook on every progress update. Episeerr fires once when progress lands in the 50–55% window. No polling needed, but Jellyfin fires this webhook continuously during playback (webhook spam) — Mode B is recommended for most users.
 
 **Webhook Setup:**
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
@@ -568,6 +568,7 @@ Jellyfin sends a webhook on every progress update. Episeerr fires once when prog
    - **User Filter:** Your username (recommended)
    - **Item Type:** ✅ Episodes **AND** ✅ Movies — without Movies checked, movie watch dates are not recorded in real-time
    - **Send All Properties:** ✅ Enabled
+   - **Add Request Header:** Key: **Content-Type** (hyphen, not underscore), Value: **application/json** — required or Jellyfin's webhook will not be accepted
 3. **Save**
 
 **Environment Variables (if not using Setup Page):**
@@ -590,9 +591,9 @@ Jellyfin sends a webhook on every progress update. Episeerr fires once when prog
 
 ---
 
-#### **Mode B: Polling**
+#### **Mode B: Webhook-Triggered Polling (Recommended)**
 
-Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Sessions` API every 15 minutes until the trigger percentage is hit. Useful if PlaybackProgress webhooks are unreliable on your setup.
+Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Sessions` API every 15 minutes until the trigger percentage is hit. The webhook fires once instead of continuously, so this is the recommended default.
 
 **Webhook Setup:**
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
@@ -601,6 +602,7 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
    - **Notification Type:** Select **"Session Start"** and **"Playback Stop"**
    - **User Filter:** Your username
    - **Item Type:** ✅ Episodes **AND** ✅ Movies — without Movies checked, movie watch dates are not recorded in real-time
+   - **Add Request Header:** Key: **Content-Type** (hyphen, not underscore), Value: **application/json** — required or Jellyfin's webhook will not be accepted
 
 **Environment Variables (if not using Setup Page):**
 ```yaml
@@ -617,8 +619,8 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
 
 | Option | Best For | Processing | Jellyfin Webhooks Needed |
 |--------|----------|------------|--------------------------|
-| **A: Real-Time** | Most users | Immediate at 50–55% | PlaybackProgress (continuous) |
-| **B: Polling** | Unreliable progress webhooks | Up to 15-min delay | Session Start (one-shot) |
+| **A: PlaybackProgress (Advanced)** | Immediate triggering, tolerant of webhook spam | Immediate at 50–55% | PlaybackProgress (continuous) |
+| **B: Webhook-Triggered Polling (Recommended)** | Most users | Up to 15-min delay | Session Start (one-shot) |
 
 **Test it:**
 ```bash
