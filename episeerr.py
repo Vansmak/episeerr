@@ -6015,7 +6015,7 @@ def get_tmdb_season(tmdb_id, season_number):
 def get_pending_requests():
     """Get pending requests."""
     if not TMDB_API_KEY:
-        return jsonify({"success": False, "requests": [], "count": 0})
+        return jsonify({"success": False, "error": "TMDB API key not configured — set it up in Settings to use pending requests.", "requests": [], "count": 0})
     try:
         rows = get_all_pending_requests()
         pending_requests = sorted(rows, key=lambda x: x.get('created_at', 0), reverse=True)
