@@ -2503,7 +2503,39 @@ class PlexIntegration(ServiceIntegration):
         # ==========================================
         # Sync API Routes
         # ==========================================
-        
+
+        @bp.route('/watchlist/add', methods=['POST'])
+        def watchlist_add():
+            """Add an item to the real Plex watchlist by TMDB ID, then immediately
+            run a sync pass so it's picked up by Radarr/Sonarr without waiting for
+            the periodic sync interval. Used by Xadarr's "Add to Watchlist" action
+            so any client (TV, mobile, web) gets the same auto-grab behavior as
+            adding directly in Plex."""
+            try:
+                from settings_db import get_service
+                data = request.json or {}
+                tmdb_id = str(data.get('tmdb_id', '')).strip()
+                media_type = str(data.get('media_type', '')).strip()
+                title = str(data.get('title', '')).strip()
+                if not tmdb_id or media_type not in ('movie', 'tv'):
+                    return jsonify({'success': False, 'message': "tmdb_id and media_type ('movie'/'tv') required"}), 400
+
+                plex_config = get_service('plex') or {}
+                api_key = plex_config.get('api_key', '')
+                if not api_key:
+                    return jsonify({'success': False, 'message': 'Plex not configured'}), 400
+
+                logger.info(f"[Plex] Watchlist add requested for tmdb_id={tmdb_id} media_type={media_type} title={title!r}")
+                ok, detail = integration.add_to_watchlist(api_key, tmdb_id, media_type, title)
+                if not ok:
+                    return jsonify({'success': False, 'message': detail}), 502
+
+                sync_result = integration.sync_watchlist()
+                return jsonify({'success': True, 'detail': detail, 'sync': sync_result})
+            except Exception as e:
+                logger.error(f"Watchlist add error: {e}")
+                return jsonify({'success': False, 'message': str(e)}), 500
+
         @bp.route('/watchlist/remove', methods=['POST'])
         def watchlist_remove():
             """Remove an item from the Plex watchlist by ratingKey"""

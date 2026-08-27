@@ -13,10 +13,11 @@ Webhooks:   Two events only — channel_start (or channel_started) and
             on widget load if webhooks are not configured.
 
 Endpoints registered:
-    POST /api/integration/dispatcharr/webhook   ← Dispatcharr posts events here
-    GET  /api/integration/dispatcharr/widget    ← Dashboard fetches widget HTML
-    GET  /api/integration/dispatcharr/status    ← Debug: raw state as JSON
-    POST /api/integration/dispatcharr/sync      ← Force a full API re-sync
+    POST /api/integration/dispatcharr/webhook         ← Dispatcharr posts events here
+    GET  /api/integration/dispatcharr/widget          ← Dashboard fetches widget HTML
+    GET  /api/integration/dispatcharr/status          ← Debug: raw state as JSON
+    POST /api/integration/dispatcharr/sync            ← Force a full API re-sync
+    GET  /api/integration/dispatcharr/streams/search  ← Search full raw provider catalog (Xadarr)
 
 Dispatcharr setup:
     Connect → Integrations → Add Webhook
@@ -49,6 +50,11 @@ _last_sync:      Optional[datetime] = None
 
 _notif_lock   = threading.Lock()
 _notif_queues: List = []
+
+_groups_lock:      threading.Lock = threading.Lock()
+_groups_cache:      Dict[int, str] = {}   # channel_group id -> name
+_groups_cache_at:  Optional[datetime] = None
+_GROUPS_CACHE_TTL  = timedelta(minutes=15)
 
 
 def _broadcast_notification(event: str, data: dict) -> None:
@@ -162,6 +168,34 @@ def _bg_sync(url: str, api_key: str, delay: float = 1.0):
         time.sleep(delay)
         _api_sync(url, api_key)
     threading.Thread(target=_run, daemon=True, name="dispatcharr-sync").start()
+
+
+def _group_names(url: str, api_key: str) -> Dict[int, str]:
+    """Id -> name map for every Dispatcharr channel group, cached briefly."""
+    global _groups_cache, _groups_cache_at
+    now = datetime.now(timezone.utc)
+    with _groups_lock:
+        if _groups_cache and _groups_cache_at and (now - _groups_cache_at) < _GROUPS_CACHE_TTL:
+            return dict(_groups_cache)
+    try:
+        resp = requests.get(
+            f"{url.rstrip('/')}/api/channels/groups/",
+            headers={"X-Api-Key": api_key},
+            params={"page_size": 2000},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        rows = data if isinstance(data, list) else data.get("results", [])
+        mapping = {row["id"]: row["name"] for row in rows if "id" in row and "name" in row}
+        with _groups_lock:
+            _groups_cache = mapping
+            _groups_cache_at = now
+        return mapping
+    except Exception as exc:
+        logger.warning(f"[Dispatcharr] group name fetch failed: {exc}")
+        with _groups_lock:
+            return dict(_groups_cache)
 
 
 def _get_saved_config() -> Optional[Dict]:
@@ -744,6 +778,58 @@ class DispatcharrIntegration(ServiceIntegration):
                 "status":       "ok" if ok else "error",
                 "active_count": count,
             })
+
+        # ── Full raw-provider catalog search ───────────────────────
+        @bp.route("/streams/search", methods=["GET"])
+        def streams_search():
+            """
+            Search Dispatcharr's raw ingested stream catalog (every stream from
+            every provider, including groups never mapped into the curated
+            channel lineup) by name. Used by Xadarr's "search beyond my daily
+            lineup" feature — the curated Channel list only has a few hundred
+            entries, but the raw Stream table underneath has thousands across
+            groups the maintenance script never touches.
+            """
+            q = (request.args.get("q") or "").strip()
+            if len(q) < 2:
+                return jsonify({"results": []})
+            try:
+                limit = max(1, min(int(request.args.get("limit", 40)), 100))
+            except ValueError:
+                limit = 40
+
+            cfg = _get_saved_config()
+            if not cfg or not cfg.get("url") or not cfg.get("api_key"):
+                return jsonify({"error": "Dispatcharr not configured"}), 400
+            url, api_key = cfg["url"], cfg["api_key"]
+
+            try:
+                resp = requests.get(
+                    f"{url.rstrip('/')}/api/channels/streams/",
+                    headers={"X-Api-Key": api_key},
+                    params={"search": q, "page_size": limit},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+            except Exception as exc:
+                logger.warning(f"[Dispatcharr] streams search failed: {exc}")
+                return jsonify({"error": "Dispatcharr search failed"}), 502
+
+            groups = _group_names(url, api_key)
+            rows = resp.json().get("results", [])
+            results = [
+                {
+                    "id":      row.get("id"),
+                    "name":    row.get("name", ""),
+                    "url":     row.get("url", ""),
+                    "tvg_id":  row.get("tvg_id") or None,
+                    "logo":    row.get("logo_url") or None,
+                    "group":   groups.get(row.get("channel_group"), "Unknown"),
+                }
+                for row in rows
+                if row.get("url")
+            ]
+            return jsonify({"results": results})
 
         # ── Debug status ──────────────────────────────────────────
         @bp.route("/status")

@@ -2695,6 +2695,20 @@ class XadarrIntegration(ServiceIntegration):
         def alias_episeerr_recently_watched():
             return get_recently_watched()
 
+        # Quick Links is a generic Episeerr dashboard feature (settings_db.quick_links),
+        # not Xadarr-specific — Joe already maintains Sonarr/Radarr/Prowlarr/Dispatcharr
+        # entries there for his own dashboard, so Xadarr's mobile Bookmarks reuses them
+        # instead of asking him to re-enter the same URLs a second time. manage_quick_links
+        # lives in episeerr.py (main app), so look it up dynamically like api_rules_list
+        # below rather than importing it directly, to avoid a circular import.
+        @alias_bp.route("/episeerr/quick-links", methods=["GET"])
+        def alias_episeerr_quick_links():
+            import flask
+            fn = flask.current_app.view_functions.get("manage_quick_links")
+            if fn:
+                return fn()
+            return jsonify({"status": "error", "links": []}), 500
+
         @alias_bp.route("/episeerr/rules", methods=["GET"])
         def alias_episeerr_rules():
             import flask
