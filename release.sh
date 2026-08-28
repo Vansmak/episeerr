@@ -67,6 +67,18 @@ if [ "$IS_TEST" = false ]; then
     fi
 fi
 
+# Step 0: Require a changelog entry for this version (skip for test builds —
+# those never get git-tagged or reach Docker Hub as a real release).
+if [ "$IS_TEST" = false ]; then
+    if ! grep -q "^## v$VERSION\$" CHANGELOG.md; then
+        echo "❌ No '## v$VERSION' section in CHANGELOG.md — add a changelog entry before releasing."
+        echo "   release.sh used to silently fall back to a one-line release note when this was"
+        echo "   missing (that's how the changelog fell behind after v3.8.4 — see episeerr#91)."
+        echo "   Add the section, then re-run."
+        exit 1
+    fi
+fi
+
 # Step 1: Git operations (SKIP if test mode)
 if [ "$IS_TEST" = false ]; then
     echo ""
