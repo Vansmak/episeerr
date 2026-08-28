@@ -1,5 +1,47 @@
 # Changelog
 
+## v3.9.0
+
+### 🐛 Bug Fixes
+
+- **Blank "Unknown error occurred" on Pending Requests when TMDB wasn't configured** — `get_pending_requests()` returned `success: false` with no `error` field when `TMDB_API_KEY` was unset, so the frontend's generic fallback message showed instead of anything actionable. Now returns a real message pointing at Settings. (`episeerr.py`, #73)
+
+## v3.8.9
+
+### 🐛 Bug Fixes
+
+- **`reconcile_future_seasons` could permanently skip a season's premiere if you'd already finished the prior season's finale before the new season existed** — the `last_season`-deferral check assumed "next season after `last_season`" always meant the user was still mid-season and the normal get-next webhook would eventually handle it. If that webhook had already fired months earlier (finale watched before the new season aired), it was never coming again, so the premiere just sat unmonitored indefinitely. Now only defers when the tracked position genuinely hasn't reached that season's finale yet. (`media_processor.py`)
+
+## v3.8.8
+
+### 🐛 Bug Fixes
+
+- **Season premiere reconciliation regressions and gaps, fixed together** — `reconcile_future_seasons` no longer permanently skips a premiere it previously passed over; plain episode-count rules with no `always_have` expression now also get their season premiere caught (previously only `always_have` rules did); catching a premiere restores series-level monitoring instead of leaving a leftover `monitored: false` inconsistency that hid the show from calendar-based upcoming views; rewatching an earlier episode no longer regresses the tracked position; and catching a premiere now sends a Discord notification instead of happening silently. A "caught up" dormant-cleanup exemption added during this work was reverted after landing — the premise behind it didn't hold up. (`media_processor.py`)
+- **Jellyfin webhook docs were missing a required header** — setup instructions never mentioned that Jellyfin's webhook plugin needs an explicit `Content-Type: application/json` request header, without which Jellyfin silently rejects the webhook. Also flipped the documented recommendation: Mode B (webhook-triggered polling) is now called out as recommended for most users, with Mode A (continuous PlaybackProgress webhook spam) marked advanced. (`integrations/jellyfin.py`, `templates/documentation.html`, `README.md`)
+
+## v3.8.7
+
+### ✨ Improvements
+
+- **Dashboard stats bar is now collapsible** — the slim stats-pill row collapses by default and remembers your preference (`localStorage`), matching the existing pattern already used by the watchlist/calendar sections. (`templates/dashboard.html`)
+- Added Plex watchlist sync documentation. (`docs/features/plex-watchlist-sync.md`)
+
+## v3.8.6
+
+### 🐛 Bug Fixes
+
+- **Trakt token refresh race condition** — Trakt's refresh tokens are single-use, so multiple threads (dashboard widget load, scheduled sync, a manual Sync click) deciding a refresh was needed around the same moment — e.g. right after a container restart — could race: whichever request won got the fresh `refresh_token`, and any concurrent request retrying with the now-dead token got a 400, risking wedging the integration until manual re-auth. Added a lock plus a re-check of fresh DB state after acquiring it, so only one thread ever actually calls Trakt's token endpoint per expiry window. (`integrations/trakt.py`)
+
+### ✨ Improvements
+
+- **Per-integration dashboard pill opt-out** — each integration's Setup card now has a "Show pill on Dashboard" checkbox; defaults to shown so nothing changes unless you touch it. (`dashboard.py`, `templates/setup.html`)
+
+## v3.8.5
+
+### 🔧 Internal
+
+- **Cleanup subsystem refactor** — Grace Watched and Grace Unwatched cleanup now share their Phase-1 eligibility scan (`_scan_grace_candidates()`) instead of duplicating it, and all three cleanup tiers (Grace Watched, Grace Unwatched, Dormant) now accept a shared `series_lookup` so a single cleanup cycle fetches Sonarr's series list once instead of once per phase (`_fetch_sonarr_series_lookup()`). When `global_storage_min_gb` is configured, all three tiers now process series oldest-inactivity-first and stop as soon as free space clears the threshold — previously this incremental behavior only applied to Dormant. Clarified that `keep_pilot` is a permanent breadcrumb that survives even Dormant cleanup by design, unlike `always_have`, which Dormant intentionally bypasses. (`media_processor.py`, `README.md`)
+
 ## v3.8.4
 
 ### 🐛 Bug Fixes
