@@ -1040,6 +1040,30 @@ SELECT COUNT(*) AS part9f_dead_stream_links_removed FROM _dead_links;
 
 DELETE FROM dispatcharr_channels_channelstream WHERE id IN (SELECT id FROM _dead_links);
 
+-- 1b. Re-attach orphaned streams. Dispatcharr's auto-sync rebuilds a group's channels when an
+--     account refreshes, and the rebuilt channel only carries streams from the account that
+--     rebuilt it — every other provider's copy is left dangling, unattached to anything. After
+--     re-enabling two providers this stripped Spice and Sanctum off channels they had been
+--     serving, leaving 450 of 653 Tier 1 channels on a single stream with no failover at all,
+--     while their streams sat orphaned in the table.
+--
+--     Matching is on tvg_id, the same key Step A merges on. Low-BW variants are excluded: they
+--     share the real channel's tvg_id, and while Step F would order them last, there's no reason
+--     to graft a degraded copy onto a channel that already has good sources.
+INSERT INTO dispatcharr_channels_channelstream (channel_id, stream_id, "order")
+SELECT c.id, s.id, 999
+FROM dispatcharr_channels_channel c
+JOIN dispatcharr_channels_stream s
+  ON s.tvg_id IS NOT NULL AND LOWER(s.tvg_id) = LOWER(c.tvg_id)
+JOIN m3u_m3uaccount a ON a.id = s.m3u_account_id AND a.is_active
+LEFT JOIN dispatcharr_channels_channelgroup sg ON sg.id = s.channel_group_id
+WHERE c.tvg_id IS NOT NULL AND c.tvg_id <> ''
+  AND COALESCE(sg.name, '') NOT ILIKE '%Low BW%'
+  AND NOT EXISTS (
+    SELECT 1 FROM dispatcharr_channels_channelstream cs
+    WHERE cs.channel_id = c.id AND cs.stream_id = s.id
+  );
+
 -- 2. Renumber what's left, best first, per channel.
 WITH ranked AS (
   SELECT cs.id,
