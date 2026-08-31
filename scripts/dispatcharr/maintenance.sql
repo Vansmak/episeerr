@@ -1090,7 +1090,31 @@ UPDATE dispatcharr_channels_channelstream cs
   FROM ranked r
  WHERE cs.id = r.id AND cs."order" IS DISTINCT FROM r.new_order;
 
-\echo 'Step F — dead streams dropped, remaining ordered best-first.'
+-- 3. Remove channels that no live provider can serve any more. Dropping a provider's streams in
+--    step 1 leaves its channels behind as empty husks — they still list in the guide and still
+--    look tunable, they just fail. Switching providers used to strand hundreds of these (458 in
+--    the Tier 2 event groups alone), and clearing them by hand every time isn't a plan.
+--
+--    auto_created only, so hand-built channels are never touched; and since these are recreated
+--    from the M3U on sync, re-enabling a provider brings its channels straight back.
+CREATE TEMP TABLE _empty_channels AS
+SELECT c.id
+FROM dispatcharr_channels_channel c
+LEFT JOIN dispatcharr_channels_channelstream cs ON cs.channel_id = c.id
+LEFT JOIN dispatcharr_channels_stream s ON s.id = cs.stream_id
+LEFT JOIN m3u_m3uaccount a ON a.id = s.m3u_account_id
+WHERE c.auto_created = true
+GROUP BY c.id
+HAVING COUNT(*) FILTER (WHERE a.is_active) = 0;
+
+SELECT COUNT(*) AS part9f_unplayable_channels_removed FROM _empty_channels;
+
+DELETE FROM dispatcharr_channels_channelprofilemembership WHERE channel_id IN (SELECT id FROM _empty_channels);
+DELETE FROM dispatcharr_channels_channeloverride         WHERE channel_id IN (SELECT id FROM _empty_channels);
+DELETE FROM dispatcharr_channels_channelstream           WHERE channel_id IN (SELECT id FROM _empty_channels);
+DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id FROM _empty_channels);
+
+\echo 'Step F — dead streams dropped, empty channels removed, remaining ordered best-first.'
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 8: Channel numbering
