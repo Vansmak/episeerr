@@ -1008,6 +1008,66 @@ DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id 
 
 \echo 'Step E — Tier 2 duplicates consolidated.'
 
+-- ── Step F: Drop dead streams, then order the rest best-quality-first ─────
+-- Failover only helps if the *working* stream is tried first. After a provider swap the retired
+-- provider's streams were still sitting at order 0 on 514 channel links, so every channel change
+-- opened a dead stream, waited for it to fail, and only then fell over — slow zapping that looks
+-- like the channel is broken.
+--
+-- Ordering, low number first:
+--   0  OTA (HDHR) — a local tuner beats any IPTV copy, and Step D already pins these
+--   1  4K / UHD / 2160
+--   2  FHD / 1080
+--   3  HD / 720
+--   4  unmarked (most streams; provider doesn't always label quality)
+--   5  SD / Low / LBW — last resort, never in front of something better
+-- Ties break on the account's own `priority` column, so preferring one provider is a one-field
+-- change in the UI rather than an edit here.
+
+\echo ''
+\echo '── Part 9 Step F: dead-stream removal + quality ordering ──'
+
+-- 1. Detach anything belonging to a provider that's switched off. These can never play; leaving
+--    them only adds a timeout to every tune. Re-enabling the account and re-syncing restores them.
+CREATE TEMP TABLE _dead_links AS
+SELECT cs.id
+FROM dispatcharr_channels_channelstream cs
+JOIN dispatcharr_channels_stream s ON s.id = cs.stream_id
+JOIN m3u_m3uaccount a ON a.id = s.m3u_account_id
+WHERE NOT a.is_active;
+
+SELECT COUNT(*) AS part9f_dead_stream_links_removed FROM _dead_links;
+
+DELETE FROM dispatcharr_channels_channelstream WHERE id IN (SELECT id FROM _dead_links);
+
+-- 2. Renumber what's left, best first, per channel.
+WITH ranked AS (
+  SELECT cs.id,
+         ROW_NUMBER() OVER (
+           PARTITION BY cs.channel_id
+           ORDER BY
+             CASE
+               WHEN a.name = 'HDHR'                                        THEN 0
+               WHEN s.name ~* '(4k|uhd|2160)'                              THEN 1
+               WHEN s.name ~* '(fhd|1080)'                                 THEN 2
+               WHEN s.name ~* '(^|[^a-z])hd([^a-z]|$)|720'                 THEN 3
+               WHEN s.name ~* '(^|[^a-z])(sd|low)([^a-z]|$)|lbw|low bw'    THEN 5
+               ELSE 4
+             END,
+             a.priority DESC,
+             cs.id
+         ) - 1 AS new_order
+  FROM dispatcharr_channels_channelstream cs
+  JOIN dispatcharr_channels_stream s ON s.id = cs.stream_id
+  JOIN m3u_m3uaccount a ON a.id = s.m3u_account_id
+)
+UPDATE dispatcharr_channels_channelstream cs
+   SET "order" = r.new_order
+  FROM ranked r
+ WHERE cs.id = r.id AND cs."order" IS DISTINCT FROM r.new_order;
+
+\echo 'Step F — dead streams dropped, remaining ordered best-first.'
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 8: Channel numbering
 -- Runs last — after all merges and deletes.
