@@ -9,13 +9,23 @@
 --      stack OTA on LA locals
 --   8. Channel numbering — runs last after all merges and deletes
 --
--- Provider architecture:
---   Titan  (XC, pxlsystems.cx) → target groups: Entertainment, Movies, News,
---          Sports, Documentary, Locals, 4K, PPV
---          Source prefixes: USA |, Live Pay-Per View
---   Direct (XC)                → target groups: same as Titan (merged in)
---          Source prefixes: US:
---   HDHR   (OTA, 192.168.254.30) → Favorites group; LA streams stacked manually
+-- Provider architecture (as of 2026-08-31):
+--   Spice   (XC, 021.galaxypulse.link) → Entertainment, Movies, News, Sports, Locals
+--           Source prefix: US |    — 1 concurrent stream, trial
+--   Sanctum (XC, u.veiltheworld.com)   → same groups, same prefix
+--           Source prefix: US |    — 2 concurrent streams, paid to 2027-03-03; also the EPG source
+--   HDHR    (OTA, 192.168.254.30)      → Favorites group; LA streams stacked manually
+--
+--   Spice and Sanctum are the same upstream: byte-identical XMLTV, the same 9,122 tvg_ids, and
+--   the same category names. That's why one set of mapping rules serves both, and why only one
+--   of them needs to supply the guide. Their streams stack per channel for failover (Part 9 A).
+--
+--   Retired 2026-08-31, rules kept so a rollback needs no edit here:
+--   Titan  (XC, pxlsystems.cx → .st)  Source prefixes: USA |, Live Pay-Per View
+--   Direct (XC, rj.super-direct.com)  Source prefix:   US:
+--
+--   Note: neither current provider has a US documentary category, so the Documentary target
+--   group (301+) has no source and will be empty until one does.
 --
 -- Channel structure after merge:
 --   Each network = one channel, all Titan+Direct streams stacked
@@ -75,9 +85,26 @@ WITH mapping AS (
       WHEN g_src.name ILIKE 'US: Regional Sports%'  THEN 'Sports'
       WHEN g_src.name ILIKE 'US: Factual%'          THEN 'Documentary'
       WHEN g_src.name ILIKE 'US: LOCALS%'           THEN 'Locals'
+      -- Spice + Sanctum source groups → clean target groups.
+      -- Both providers are the same upstream (byte-identical XMLTV, same 9,122 tvg_ids), so one
+      -- set of rules covers both and Part 9 Step A stacks their streams per channel for failover.
+      -- Note 'US | ' is distinct from Titan's 'USA | ' — the pattern can't collide, since the
+      -- character after "US" is a space in one and 'A' in the other.
+      WHEN g_src.name LIKE 'US | Entertainment%'    THEN 'Entertainment'
+      WHEN g_src.name LIKE 'US | Movies%'           THEN 'Movies'
+      WHEN g_src.name LIKE 'US | News%'             THEN 'News'
+      WHEN g_src.name LIKE 'US | Sports%'           THEN 'Sports'
+      WHEN g_src.name LIKE 'US | Local %'           THEN 'Locals'
+      -- Deliberately NOT mapped: 'US | Low BW'. 117 of its tvg_ids also exist in the normal US
+      -- groups (LBW: A&E vs A&E), so mapping it would let Step A stack a low-bandwidth copy into
+      -- the real channel with no guarantee it sorts last — silently degrading picture quality.
+      -- It stays in its source group, which Xadarr auto-hides as Tier 2 and can be unhidden.
+      -- Also unmapped, matching the old Titan/Direct behaviour: Kids, Music, Religion, Peacock,
+      -- Big Brother — Tier 2 event/extra groups rather than the curated lineup.
     END
   WHERE g_src.name LIKE 'USA |%'
      OR g_src.name ILIKE 'US:%'
+     OR g_src.name LIKE 'US | %'
      OR g_src.name LIKE '4K / UHD%'
      OR g_src.name LIKE 'Live Pay-Per View%'
      OR g_src.name LIKE 'PPV%'
