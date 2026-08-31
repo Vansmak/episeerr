@@ -40,6 +40,9 @@ CONTAINER = "dispatcharr"
 # channels legitimately having no listings.
 EPG_COVERAGE_FLOOR = 0.5
 
+# Enough notice to renew or line up a replacement without a scramble.
+EXPIRY_WARN_DAYS = 10
+
 
 def psql(sql: str) -> list[list[str]]:
     """Runs a query and returns rows of columns. Empty on any failure — a monitor that crashes
@@ -76,9 +79,52 @@ def resolves(host: str) -> bool:
         return True
 
 
+def expiry_days(url: str, user: str, pw: str) -> int | None:
+    """Days until an XC account lapses, via its own player_api. None if unreadable.
+
+    Sends a browser User-Agent because Cloudflare-fronted panels answer Python's default with a
+    403 — which would silently skip the expiry check for precisely the providers most prone to
+    rotating domains, the failure this whole script exists to catch.
+    """
+    import urllib.parse as up
+    q = up.urlencode({"username": user, "password": pw})
+    try:
+        req = urllib.request.Request(
+            f"{url.rstrip('/')}/player_api.php?{q}",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            info = json.load(r).get("user_info") or {}
+        exp = info.get("exp_date")
+        if not exp:
+            return None
+        return round((int(exp) - datetime.now(timezone.utc).timestamp()) / 86400)
+    except Exception:
+        return None
+
+
 def collect() -> dict:
     problems: list[str] = []
     detail: list[str] = []
+
+    # Subscriptions lapsing. A provider going dark mid-week is the same outage as a dead domain,
+    # just one you can prevent — and the renewal date lives on the provider's side, not in
+    # Dispatcharr, so nothing local would ever surface it.
+    for _id, name, url, user, pw in psql("""
+        SELECT id::text, name, coalesce(server_url,''), coalesce(username,''), coalesce(password,'')
+        FROM m3u_m3uaccount WHERE is_active AND account_type='XC' AND server_url <> '';
+    """):
+        if not (user and pw):
+            continue
+        days = expiry_days(url, user, pw)
+        if days is None:
+            continue
+        if days < 0:
+            problems.append(f"expired:{name}")
+            detail.append(f"{name} subscription EXPIRED")
+        elif days <= EXPIRY_WARN_DAYS:
+            problems.append(f"expiring:{name}:{days}")
+            detail.append(f"{name} expires in {days} day{'s' if days != 1 else ''}")
 
     # 1 + 2: provider sources, their status and whether their host still exists.
     rows = psql("""
