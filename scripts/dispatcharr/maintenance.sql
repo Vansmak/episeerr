@@ -1070,15 +1070,23 @@ WITH ranked AS (
          ROW_NUMBER() OVER (
            PARTITION BY cs.channel_id
            ORDER BY
+             -- OTA first: a local tuner beats any IPTV copy. Step D already pins these.
+             CASE WHEN a.name = 'HDHR' THEN 0 ELSE 1 END,
+             -- Then the account's own priority, which outranks the name-based quality guess
+             -- below. Providers label inconsistently — one tags 234 streams "FHD" while the
+             -- other leaves 1,259 untagged — so ranking on labels alone made the more talkative
+             -- provider the default on 43% of channels for reasons that may be purely cosmetic
+             -- and can't be verified from the catalogue. An explicit preference is honest about
+             -- what it's doing; set `priority` on the account to change it, no script edit.
+             a.priority DESC,
+             -- Within one provider the labels are self-consistent, so they're still useful here.
              CASE
-               WHEN a.name = 'HDHR'                                        THEN 0
                WHEN s.name ~* '(4k|uhd|2160)'                              THEN 1
                WHEN s.name ~* '(fhd|1080)'                                 THEN 2
                WHEN s.name ~* '(^|[^a-z])hd([^a-z]|$)|720'                 THEN 3
                WHEN s.name ~* '(^|[^a-z])(sd|low)([^a-z]|$)|lbw|low bw'    THEN 5
                ELSE 4
              END,
-             a.priority DESC,
              cs.id
          ) - 1 AS new_order
   FROM dispatcharr_channels_channelstream cs
