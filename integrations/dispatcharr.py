@@ -807,8 +807,11 @@ class DispatcharrIntegration(ServiceIntegration):
                 resp = requests.get(
                     f"{url.rstrip('/')}/api/channels/streams/",
                     headers={"X-Api-Key": api_key},
-                    params={"search": q, "page_size": limit},
-                    timeout=8,
+                    # Over-fetch because the rows collapse below: with two providers carrying the
+                    # same catalogue, a page of results is roughly half duplicates, so asking for
+                    # exactly `limit` would return about half that many distinct channels.
+                    params={"search": q, "page_size": min(limit * 3, 300)},
+                    timeout=12,
                 )
                 resp.raise_for_status()
             except Exception as exc:
@@ -816,20 +819,39 @@ class DispatcharrIntegration(ServiceIntegration):
                 return jsonify({"error": "Dispatcharr search failed"}), 502
 
             groups = _group_names(url, api_key)
-            rows = resp.json().get("results", [])
-            results = [
-                {
-                    "id":      row.get("id"),
-                    "name":    row.get("name", ""),
-                    "url":     row.get("url", ""),
-                    "tvg_id":  row.get("tvg_id") or None,
-                    "logo":    row.get("logo_url") or None,
-                    "group":   groups.get(row.get("channel_group"), "Unknown"),
-                }
-                for row in rows
-                if row.get("url")
-            ]
-            return jsonify({"results": results})
+
+            # Collapse the same channel carried by several providers into one result. Every
+            # provider offering it is kept in `urls` so whatever pins it can stack them for
+            # failover rather than binding to whichever copy happened to sort first.
+            merged: dict = {}
+            for row in resp.json().get("results", []):
+                if not row.get("url"):
+                    continue
+                name = row.get("name", "")
+                key = (row.get("tvg_id") or "").strip().lower() or name.strip().lower()
+                entry = merged.get(key)
+                if entry is None:
+                    merged[key] = {
+                        "id":      row.get("id"),
+                        "name":    name,
+                        "url":     row.get("url", ""),
+                        "urls":    [row.get("url", "")],
+                        "tvg_id":  row.get("tvg_id") or None,
+                        "logo":    row.get("logo_url") or None,
+                        "group":   groups.get(row.get("channel_group"), "Unknown"),
+                        "sources": 1,
+                    }
+                else:
+                    entry["sources"] += 1
+                    if row.get("url") not in entry["urls"]:
+                        entry["urls"].append(row.get("url"))
+                    # A later row may carry artwork the first one lacked.
+                    if not entry["logo"] and row.get("logo_url"):
+                        entry["logo"] = row["logo_url"]
+                if len(merged) >= limit:
+                    break
+
+            return jsonify({"results": list(merged.values())})
 
         # ── Debug status ──────────────────────────────────────────
         @bp.route("/status")
