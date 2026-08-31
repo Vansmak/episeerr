@@ -1119,6 +1119,22 @@ DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 8: Channel numbering
 -- Runs last — after all merges and deletes.
+--
+-- Block layout. Each group must fit inside its block or it silently overruns the next one and two
+-- channels end up sharing a number, where one masks the other in the guide — that's how Fox News
+-- "disappeared" behind a Sky Sports feed on 112, and how the Cowboy Channel landed on SportsNet
+-- LA. Check `part8b_colliding_numbers_remaining` after changing anything here.
+--
+--     2-11    Locals   LA on 2/4/5/7/9/11, .1-.4 timezone alternates
+--   101-199   News
+--   201-299   Sports
+--   301-399   Documentary
+--   401-599   Entertainment   (widened: 142 channels, outgrew a 100 block)
+--   601-799   Movies
+--   700-799   Locals overflow — cities the explicit map doesn't name
+--   801-899   4K
+--   901-1099  PPV
+--   2000+     Tier 2 event groups (Part 8b), kept clear of everything above
 -- ═══════════════════════════════════════════════════════════════════════════
 
 \echo ''
@@ -1228,6 +1244,29 @@ UPDATE dispatcharr_channels_channel SET channel_number = 11.4
 WHERE LOWER(tvg_id) = 'foxwsvn.us'
   AND channel_group_id = (SELECT id FROM dispatcharr_channels_channelgroup WHERE name = 'Locals');
 
+-- ── Locals the explicit map doesn't name ─────────────────────────────────
+-- Everything above assigns a specific number to a specific tvg_id: LA on 2/4/5/7/9/11 with
+-- .1-.4 timezone alternates. That covers the locals this lineup was built around — but providers
+-- carry locals for dozens of other cities (Austin, Birmingham, …), and those kept whatever number
+-- they arrived with, which ran straight through Entertainment's 401+ block. That's what put
+-- "ABC 24 (KVUE)" on 416 underneath "Bounce HD".
+--
+-- 700-899 is the only free span between the curated blocks (601+ is 4K, 901+ is PPV), so the
+-- unnamed locals go there, ordered by name for stability across runs.
+WITH extra_locals AS (
+  SELECT c.id, 700 + ROW_NUMBER() OVER (ORDER BY c.name, c.id) - 1 AS new_number
+  FROM dispatcharr_channels_channel c
+  JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
+  WHERE g.name = 'Locals'
+    AND c.auto_created = true
+    -- Anything the explicit map already claimed sits below 100; leave those alone.
+    AND (c.channel_number IS NULL OR c.channel_number >= 100)
+)
+UPDATE dispatcharr_channels_channel c
+   SET channel_number = e.new_number
+  FROM extra_locals e
+ WHERE c.id = e.id;
+
 \echo 'All locals numbered.'
 
 -- ── Locals name cleanup: strip redundant "City: " prefix ───────────────────
@@ -1309,7 +1348,7 @@ WITH movies_ranked AS (
   WHERE g.name = 'Movies' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 500 + n.tvg_rank
+SET channel_number = 600 + n.tvg_rank
 FROM movies_ranked n WHERE c.id = n.id;
 
 \echo 'Movies numbered (501+).'
@@ -1323,7 +1362,7 @@ WITH uhd_ranked AS (
   WHERE g.name = '4K' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 600 + u.rn
+SET channel_number = 800 + u.rn
 FROM uhd_ranked u WHERE c.id = u.id;
 
 \echo '4K numbered (601+).'
@@ -1341,6 +1380,42 @@ SET channel_number = 900 + u.rn
 FROM ppv_ranked u WHERE c.id = u.id;
 
 \echo 'PPV numbered (901+).'
+
+-- ── Tier 2 numbering: keep the event groups out of Tier 1's ranges ────────
+-- Tier 1 owns 2–11 (locals), 101+ (News), 201+ (Sports), 301+ (Documentary), 401+
+-- (Entertainment), 501+ (Movies), 601+ (4K) and 901+ (PPV). Tier 2 channels get their number from
+-- the group's auto_sync_channel_start, which knows nothing about those ranges — so a provider's
+-- "UK: Sky Sports Plus" set landed on 101-140 and sat directly on top of the News block, and
+-- another group starting at 1 landed on the locals. 138 numbers ended up with two channels each,
+-- and in the guide one silently masks the other: Fox News on 112 was replaced by Sky Sports Plus
+-- 40, which is how this was noticed at all.
+--
+-- Everything outside Tier 1 is therefore renumbered from 2000 up, ordered by group then name so
+-- the assignment is stable across runs and doesn't reshuffle on every sync.
+\echo ''
+\echo '── Part 8b: Tier 2 numbering (2000+, clear of Tier 1) ──'
+
+WITH renumbered AS (
+  SELECT c.id,
+         2000 + ROW_NUMBER() OVER (ORDER BY g.name, c.name, c.id) - 1 AS new_number
+  FROM dispatcharr_channels_channel c
+  JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
+  WHERE c.auto_created = true
+    AND g.name NOT IN ('Entertainment','Movies','News','Sports','Documentary','Locals','4K','PPV')
+)
+UPDATE dispatcharr_channels_channel c
+   SET channel_number = r.new_number
+  FROM renumbered r
+ WHERE c.id = r.id
+   AND c.channel_number IS DISTINCT FROM r.new_number;
+
+SELECT COUNT(*) AS part8b_colliding_numbers_remaining FROM (
+  SELECT channel_number FROM dispatcharr_channels_channel
+  WHERE channel_number IS NOT NULL
+  GROUP BY channel_number HAVING COUNT(*) > 1
+) x;
+
+\echo 'Part 8b — Tier 2 renumbered clear of the curated lineup.'
 
 -- ── Verify locals ─────────────────────────────────────────────────────────
 
