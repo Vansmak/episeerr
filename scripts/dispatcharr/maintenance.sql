@@ -525,8 +525,16 @@ CREATE TEMP TABLE _whitelist_violators AS
   WHERE c.auto_created = true
     AND c.tvg_id IS NOT NULL AND c.tvg_id <> ''
     AND LOWER(c.tvg_id) NOT IN (SELECT LOWER(tvg_id) FROM _approved_tvgids)
-    -- Never delete PPV channels via whitelist
-    AND g.name != 'PPV';
+    -- Scoped to the curated Tier 1 lineup only. The whitelist exists to keep Tier 1 exactly as
+    -- specified; Tier 2 event groups (MLB, NFL Game Pass, UFC, Peacock, Paramount+, Sky Sports)
+    -- are deliberately outside it — they're hidden in Xadarr until you unhide one for an event,
+    -- and their contents change constantly, so there's nothing stable to whitelist.
+    --
+    -- This was previously unscoped, with PPV excluded by name as a special case. That worked only
+    -- because Titan's event channels mostly carried no tvg_id and so fell through the
+    -- `tvg_id <> ''` guard. Spice/Sanctum *do* tag their event channels, which turned the same
+    -- rule into a mass delete: 518 of 702 event channels would have vanished on the next run.
+    AND g.name IN ('Entertainment','Movies','News','Sports','Documentary','Locals','4K');
 
 SELECT COUNT(*) AS channels_not_in_whitelist FROM _whitelist_violators;
 
@@ -940,6 +948,65 @@ WHERE NOT EXISTS (
 );
 
 SELECT COUNT(*) AS part9d_ota_streams_verified;
+
+-- ── Step E: Consolidate Tier 2 event channels ────────────────────────────
+-- Same idea as Step A, but for the hidden event groups (MLB, NFL Game Pass, UFC, Peacock,
+-- Paramount+, DAZN, MAX Sports, Sky Sports) — every provider carrying an event produces its own
+-- copy of it, so without this you unhide a group for a game and see each channel listed twice.
+--
+-- Two differences from Step A. It merges *within* each group rather than across a fixed set, so
+-- unrelated groups can't bleed into each other. And it falls back to matching on name where a
+-- channel has no tvg_id, which Step A can't do — plenty of event channels ("LIVE EVENT 03 - NO
+-- EVENT", DAZN, UFC) carry no id at all, and those are exactly the ones that duplicate.
+--
+-- Documented as existing since the Titan era but never actually implemented; it only started
+-- mattering when a second provider covering the same events was added.
+
+\echo ''
+\echo '── Part 9 Step E: Tier 2 event-channel consolidation ──'
+
+CREATE TEMP TABLE _t2_groups AS
+SELECT id FROM dispatcharr_channels_channelgroup
+WHERE name NOT IN ('Entertainment','Movies','News','Sports','Documentary','Locals','4K','PPV');
+
+-- Survivor per (group, identity); identity is the tvg_id when present, else the name.
+CREATE TEMP TABLE _t2_survivors AS
+SELECT channel_group_id,
+       COALESCE(NULLIF(LOWER(tvg_id), ''), LOWER(name)) AS ident,
+       MIN(id) AS survivor_id
+FROM dispatcharr_channels_channel
+WHERE auto_created = true
+  AND channel_group_id IN (SELECT id FROM _t2_groups)
+GROUP BY channel_group_id, COALESCE(NULLIF(LOWER(tvg_id), ''), LOWER(name))
+HAVING COUNT(*) > 1;
+
+CREATE TEMP TABLE _t2_losers AS
+SELECT c.id, s.survivor_id
+FROM dispatcharr_channels_channel c
+JOIN _t2_survivors s
+  ON s.channel_group_id = c.channel_group_id
+ AND s.ident = COALESCE(NULLIF(LOWER(c.tvg_id), ''), LOWER(c.name))
+WHERE c.auto_created = true AND c.id <> s.survivor_id;
+
+SELECT COUNT(*) AS part9e_duplicate_channels FROM _t2_losers;
+
+-- Hand each loser's streams to the survivor so the merged channel keeps every provider's copy as
+-- a failover option, skipping any the survivor already has.
+UPDATE dispatcharr_channels_channelstream cs
+   SET channel_id = l.survivor_id
+  FROM _t2_losers l
+ WHERE cs.channel_id = l.id
+   AND NOT EXISTS (
+     SELECT 1 FROM dispatcharr_channels_channelstream x
+     WHERE x.channel_id = l.survivor_id AND x.stream_id = cs.stream_id
+   );
+
+DELETE FROM dispatcharr_channels_channelprofilemembership WHERE channel_id IN (SELECT id FROM _t2_losers);
+DELETE FROM dispatcharr_channels_channeloverride         WHERE channel_id IN (SELECT id FROM _t2_losers);
+DELETE FROM dispatcharr_channels_channelstream           WHERE channel_id IN (SELECT id FROM _t2_losers);
+DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id FROM _t2_losers);
+
+\echo 'Step E — Tier 2 duplicates consolidated.'
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 8: Channel numbering
