@@ -130,8 +130,10 @@ def cmd_sync() -> None:
     print("syncing:", ", ".join(a[1] for a in accounts))
     subprocess.run([
         "docker", "exec", CONTAINER, "python", "manage.py", "shell", "-c",
-        f"from apps.m3u.tasks import sync_auto_channels\n"
-        f"for i in [{ids}]: sync_auto_channels.delay(i)\n"
+        # Full account refresh, not sync_auto_channels: the latter is a no-op when the provider's
+        # streams haven't changed, so a group you just switched on never gets its channels built.
+        f"from apps.m3u.tasks import refresh_single_m3u_account\n"
+        f"for i in [{ids}]: refresh_single_m3u_account.delay(i)\n"
         f"print('queued')",
     ], capture_output=True, text=True, timeout=120)
     print("queued. Channels appear within a few minutes; the maintenance script then merges")
