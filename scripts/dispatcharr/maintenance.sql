@@ -513,7 +513,17 @@ INSERT INTO _approved_tvgids (tvg_id) VALUES
   ('TheMovieChannel.us'),
   ('TheMovieChannelExtra.us'),
   ('TheMovieChannelExtraWest.us'),
-  ('TheMovieChannelWest.us');
+  ('TheMovieChannelWest.us'),
+  ('NBAtv.us'),
+  ('CBSSportsNetwork.us'),
+  ('ACCNetwork.us'),
+  ('BigTen.us'),
+  ('SECNetwork.us'),
+  ('MLBNetwork.us'),
+  ('GolfChannel.us'),
+  ('TennisChannel.us'),
+  ('ESPNU.us'),
+  ('ESPNEWS.us');
 
 -- PPV channels have no tvg_id — they are handled by name pattern, not whitelist
 -- So we only delete channels WITH a tvg_id that isn't approved
