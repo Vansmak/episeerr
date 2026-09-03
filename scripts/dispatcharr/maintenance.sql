@@ -645,6 +645,20 @@ WHERE name ~ '^US:\s*';
 
 \echo 'Part 7b — US: prefix stripped.'
 
+-- ── Part 7b2: Disambiguate channels whose names truncate identically ─────
+-- The guide truncates long names, and the two Spectrum RSNs both render as
+-- "Spectrum Sportsn…" — one carries the Dodgers, the other the Lakers, so picking the right one
+-- was guesswork. Lead with the distinguishing word instead of the provider's shared prefix.
+UPDATE dispatcharr_channels_channel
+   SET name = 'Dodgers SportsNet LA'
+ WHERE LOWER(tvg_id) = 'spectrumsportsnetladodgers.us' AND name <> 'Dodgers SportsNet LA';
+
+UPDATE dispatcharr_channels_channel
+   SET name = 'Lakers SportsNet'
+ WHERE LOWER(tvg_id) = 'spectrumsportsnetlalakers.us' AND name <> 'Lakers SportsNet';
+
+\echo 'Part 7b2 — ambiguous RSN names disambiguated.'
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 9: Stream merging
 --
