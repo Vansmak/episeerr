@@ -129,7 +129,7 @@ def collect() -> dict:
     # 1 + 2: provider sources, their status and whether their host still exists.
     rows = psql("""
         SELECT 'm3u', id::text, name, coalesce(status,''), coalesce(server_url,'')
-        FROM m3u_m3uaccount WHERE is_active
+        FROM m3u_m3uaccount WHERE is_active AND name <> 'custom'
         UNION ALL
         SELECT 'epg', id::text, name, coalesce(status,''), coalesce(url,'')
         FROM epg_epgsource WHERE is_active;
@@ -146,18 +146,24 @@ def collect() -> dict:
             detail.append(f"{name} ({kind.upper()}) is failing")
 
     # 3: what the guide actually looks like right now.
+    # Scoped to the curated lineup. Measuring every channel counted the hidden event groups
+    # (MLB/NFL/PPV slots), which legitimately carry no listings and never will — they dragged the
+    # figure under any sane threshold permanently, so the alert fired constantly and stopped
+    # meaning anything.
     cov = psql("""
         SELECT count(*) FILTER (WHERE p.id IS NOT NULL), count(*)
         FROM dispatcharr_channels_channel c
+        JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
         LEFT JOIN epg_programdata p
-          ON p.epg_id = c.epg_data_id AND now() BETWEEN p.start_time AND p.end_time;
+          ON p.epg_id = c.epg_data_id AND now() BETWEEN p.start_time AND p.end_time
+        WHERE g.name IN ('Entertainment','Movies','News','Sports','Documentary','Locals','4K');
     """)
     if cov and len(cov[0]) == 2:
         try:
             with_epg, total = int(cov[0][0]), int(cov[0][1])
             if total and (with_epg / total) < EPG_COVERAGE_FLOOR:
                 problems.append("epg:coverage")
-                detail.append(f"only {with_epg} of {total} channels have current guide data")
+                detail.append(f"only {with_epg} of {total} curated channels have current guide data")
         except ValueError:
             pass
 
