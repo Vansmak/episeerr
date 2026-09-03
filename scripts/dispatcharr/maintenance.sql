@@ -544,8 +544,9 @@ CREATE TEMP TABLE _whitelist_violators AS
     -- The whitelist was inherited from a setup where the providers offered little more than the
     -- curated list. These providers carry far more, and pinning Entertainment/Movies/News/Sports
     -- to 336 hand-listed ids meant a channel could exist upstream but not in the lineup — which
-    -- is how an evening got lost trying to add one local station. Those groups are ~460 channels
-    -- taken whole, which is a reasonable guide to scroll and Xadarr's favourites filter anyway.
+    -- is how an evening got lost trying to add one local station. Taken whole they come to ~670
+    -- channels rather than 471 — the raw group counts suggest more, but the two providers carry
+    -- largely the same catalogue and merge by tvg_id. Favourites do the filtering from here.
     --
     -- Locals stays whitelisted because it does not degrade gracefully: the providers carry 1,082
     -- local stations from every US city against the ~56 wanted here. That's a directory, not a
@@ -1192,7 +1193,8 @@ DELETE FROM dispatcharr_maint_streamless                WHERE channel_id IN (SEL
 --     2000+   Tier 2 event groups (Part 8b), kept clear of everything above
 --
 -- Widened Sept 2026 when the whitelist stopped policing anything but Locals: the kept groups now
--- take whatever the providers carry, which tripled Sports (10 -> 118) and grew the rest.
+-- take whatever the providers carry. Tier 1 went 471 -> 672 (+43%), nearly all of it Sports
+-- (10 -> 118); the other groups grew modestly once duplicate provider copies were merged.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 \echo ''
