@@ -539,16 +539,21 @@ CREATE TEMP TABLE _whitelist_violators AS
   WHERE c.auto_created = true
     AND c.tvg_id IS NOT NULL AND c.tvg_id <> ''
     AND LOWER(c.tvg_id) NOT IN (SELECT LOWER(tvg_id) FROM _approved_tvgids)
-    -- Scoped to the curated Tier 1 lineup only. The whitelist exists to keep Tier 1 exactly as
-    -- specified; Tier 2 event groups (MLB, NFL Game Pass, UFC, Peacock, Paramount+, Sky Sports)
-    -- are deliberately outside it — they're hidden in Xadarr until you unhide one for an event,
-    -- and their contents change constantly, so there's nothing stable to whitelist.
+    -- Locals only. Everything else now takes whatever the providers carry.
     --
-    -- This was previously unscoped, with PPV excluded by name as a special case. That worked only
-    -- because Titan's event channels mostly carried no tvg_id and so fell through the
-    -- `tvg_id <> ''` guard. Spice/Sanctum *do* tag their event channels, which turned the same
-    -- rule into a mass delete: 518 of 702 event channels would have vanished on the next run.
-    AND g.name IN ('Entertainment','Movies','News','Sports','Documentary','Locals','4K');
+    -- The whitelist was inherited from a setup where the providers offered little more than the
+    -- curated list. These providers carry far more, and pinning Entertainment/Movies/News/Sports
+    -- to 336 hand-listed ids meant a channel could exist upstream but not in the lineup — which
+    -- is how an evening got lost trying to add one local station. Those groups are ~460 channels
+    -- taken whole, which is a reasonable guide to scroll and Xadarr's favourites filter anyway.
+    --
+    -- Locals stays whitelisted because it does not degrade gracefully: the providers carry 1,082
+    -- local stations from every US city against the ~56 wanted here. That's a directory, not a
+    -- lineup. Part 6B enforces the narrower locals list; this clause keeps the two consistent.
+    --
+    -- Tier 2 event groups (MLB, NFL Game Pass, UFC, PPV, Peacock, Sky Sports) are untouched and
+    -- always were — they're hidden in Xadarr until unhidden for an event.
+    AND g.name = 'Locals';
 
 SELECT COUNT(*) AS channels_not_in_whitelist FROM _whitelist_violators;
 
@@ -1301,10 +1306,10 @@ WHERE LOWER(tvg_id) = 'foxwsvn.us'
 -- they arrived with, which ran straight through Entertainment's 401+ block. That's what put
 -- "ABC 24 (KVUE)" on 416 underneath "Bounce HD".
 --
--- 700-899 is the only free span between the curated blocks (601+ is 4K, 901+ is PPV), so the
--- unnamed locals go there, ordered by name for stability across runs.
+-- They go just above the explicit LA block, at 12-99, ordered by name for stability across
+-- runs. (They used to sit at 700-799, which Entertainment now needs.)
 WITH extra_locals AS (
-  SELECT c.id, 700 + ROW_NUMBER() OVER (ORDER BY c.name, c.id) - 1 AS new_number
+  SELECT c.id, 12 + ROW_NUMBER() OVER (ORDER BY c.name, c.id) - 1 AS new_number
   FROM dispatcharr_channels_channel c
   JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
   WHERE g.name = 'Locals'
@@ -1370,7 +1375,7 @@ WITH docu_ranked AS (
   WHERE g.name = 'Documentary' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 300 + n.tvg_rank
+SET channel_number = 400 + n.tvg_rank
 FROM docu_ranked n WHERE c.id = n.id;
 
 \echo 'Documentary numbered (301+).'
@@ -1384,7 +1389,7 @@ WITH entmt_ranked AS (
   WHERE g.name = 'Entertainment' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 400 + n.tvg_rank
+SET channel_number = 500 + n.tvg_rank
 FROM entmt_ranked n WHERE c.id = n.id;
 
 \echo 'Entertainment numbered (401+).'
@@ -1398,7 +1403,7 @@ WITH movies_ranked AS (
   WHERE g.name = 'Movies' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 600 + n.tvg_rank
+SET channel_number = 900 + n.tvg_rank
 FROM movies_ranked n WHERE c.id = n.id;
 
 \echo 'Movies numbered (501+).'
@@ -1412,7 +1417,7 @@ WITH uhd_ranked AS (
   WHERE g.name = '4K' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 800 + u.rn
+SET channel_number = 1100 + u.rn
 FROM uhd_ranked u WHERE c.id = u.id;
 
 \echo '4K numbered (601+).'
@@ -1426,7 +1431,7 @@ WITH ppv_ranked AS (
   WHERE g.name = 'PPV' AND c.auto_created = true
 )
 UPDATE dispatcharr_channels_channel c
-SET channel_number = 900 + u.rn
+SET channel_number = 1200 + u.rn
 FROM ppv_ranked u WHERE c.id = u.id;
 
 \echo 'PPV numbered (901+).'
