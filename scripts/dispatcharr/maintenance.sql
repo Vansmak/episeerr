@@ -1119,7 +1119,19 @@ UPDATE dispatcharr_channels_channelstream cs
 --
 --    auto_created only, so hand-built channels are never touched; and since these are recreated
 --    from the M3U on sync, re-enabling a provider brings its channels straight back.
-CREATE TEMP TABLE _empty_channels AS
+-- Two strikes, not one. A channel is only removed once it has been streamless on two
+-- consecutive runs, because a single run can catch it mid-sync: Dispatcharr detaches and
+-- reattaches streams while an account refreshes, so a run that lands in that window sees
+-- hundreds of perfectly good channels as empty. Deleting on the first sighting did exactly
+-- that — it wiped ~200 live channels when maintenance was run during a sync, and every
+-- delete/recreate cycle hands the channel a new UUID, which invalidates whatever the TV and
+-- phone have cached and leaves them tuning to a dead id until they reload the playlist.
+CREATE TABLE IF NOT EXISTS dispatcharr_maint_streamless (
+  channel_id bigint PRIMARY KEY,
+  first_seen timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TEMP TABLE _streamless_now AS
 SELECT c.id
 FROM dispatcharr_channels_channel c
 LEFT JOIN dispatcharr_channels_channelstream cs ON cs.channel_id = c.id
@@ -1129,12 +1141,28 @@ WHERE c.auto_created = true
 GROUP BY c.id
 HAVING COUNT(*) FILTER (WHERE a.is_active) = 0;
 
-SELECT COUNT(*) AS part9f_unplayable_channels_removed FROM _empty_channels;
+-- Anything that came back gets its strike cleared.
+DELETE FROM dispatcharr_maint_streamless
+ WHERE channel_id NOT IN (SELECT id FROM _streamless_now);
+
+-- Delete only what was already streamless on the previous run.
+CREATE TEMP TABLE _empty_channels AS
+SELECT n.id FROM _streamless_now n
+JOIN dispatcharr_maint_streamless p ON p.channel_id = n.id;
+
+-- Everything else streamless this run is a first strike; it gets another chance next time.
+INSERT INTO dispatcharr_maint_streamless (channel_id)
+SELECT id FROM _streamless_now
+ON CONFLICT (channel_id) DO NOTHING;
+
+SELECT (SELECT COUNT(*) FROM _streamless_now)  AS part9f_streamless_this_run,
+       (SELECT COUNT(*) FROM _empty_channels)  AS part9f_unplayable_channels_removed;
 
 DELETE FROM dispatcharr_channels_channelprofilemembership WHERE channel_id IN (SELECT id FROM _empty_channels);
 DELETE FROM dispatcharr_channels_channeloverride         WHERE channel_id IN (SELECT id FROM _empty_channels);
 DELETE FROM dispatcharr_channels_channelstream           WHERE channel_id IN (SELECT id FROM _empty_channels);
 DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id FROM _empty_channels);
+DELETE FROM dispatcharr_maint_streamless                WHERE channel_id IN (SELECT id FROM _empty_channels);
 
 \echo 'Step F — dead streams dropped, empty channels removed, remaining ordered best-first.'
 
