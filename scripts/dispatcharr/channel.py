@@ -55,23 +55,45 @@ def lit(v: str) -> str:
     return "'" + v.replace("'", "''") + "'"
 
 
-def whitelisted(tvg_id: str) -> bool:
+def whitelisted(tvg_id: str, is_local: bool = False) -> bool:
+    """Whitelisted enough to survive a maintenance run — which for Locals means both lists."""
     try:
         sql = open(SQL_PATH).read()
     except OSError:
         return False
-    m = re.search(r"INSERT INTO _approved_tvgids \(tvg_id\) VALUES(.*?);", sql, re.S)
-    if not m:
+    if not _in_list(sql, MAIN_LIST_RE, tvg_id):
         return False
-    return tvg_id.lower() in {x.lower() for x in re.findall(r"'([^']+)'", m.group(1))}
+    return _in_list(sql, LOCALS_LIST_RE, tvg_id) if is_local else True
 
 
-def add_to_whitelist(tvg_id: str) -> bool:
+# Locals are policed twice. Part 6 checks _approved_tvgids like everything else, then Part 6B
+# re-checks Locals against its own narrower _approved_locals and deletes anything missing —
+# including channels with a NULL tvg_id, which Part 6 skips. A local added to only the first list
+# is created and then deleted on the same run, which is exactly what happened to WTHR.
+LOCALS_LIST_RE = r"(INSERT INTO _approved_locals VALUES)(.*?)(;)"
+MAIN_LIST_RE = r"(INSERT INTO _approved_tvgids \(tvg_id\) VALUES)(.*?)(;)"
+
+
+def _in_list(sql: str, pattern: str, tvg_id: str) -> bool:
+    m = re.search(pattern, sql, re.S)
+    return bool(m) and tvg_id.lower() in {x.lower() for x in re.findall(r"'([^']+)'", m.group(2))}
+
+
+def _append_to_list(sql: str, pattern: str, tvg_id: str) -> str:
+    m = re.search(pattern, sql, re.S)
+    if not m or _in_list(sql, pattern, tvg_id):
+        return sql
+    return sql[:m.end(2)] + ",\n  ('%s')" % tvg_id + sql[m.end(2):]
+
+
+def add_to_whitelist(tvg_id: str, is_local: bool) -> bool:
     sql = open(SQL_PATH).read()
-    m = re.search(r"(INSERT INTO _approved_tvgids \(tvg_id\) VALUES)(.*?)(;)", sql, re.S)
-    if not m or whitelisted(tvg_id):
+    before = sql
+    sql = _append_to_list(sql, MAIN_LIST_RE, tvg_id)
+    if is_local:
+        sql = _append_to_list(sql, LOCALS_LIST_RE, tvg_id)
+    if sql == before:
         return False
-    sql = sql[:m.end(2)] + ",\n  ('%s')" % tvg_id + sql[m.end(2):]
     open(SQL_PATH, "w").write(sql)
     return True
 
@@ -170,9 +192,10 @@ def cmd_add(tvg_id: str, num: int | None, group: str | None, do_whitelist: bool)
     print(f"  streams : {len(streams)} ({', '.join(sorted({s[2] for s in streams}))})")
     print(f"  guide   : {guide[0][0] if guide else 0} upcoming programmes")
 
-    if not whitelisted(tvg_id):
-        if do_whitelist and add_to_whitelist(tvg_id):
-            print("  whitelist: added — it will survive maintenance runs")
+    is_local = group == "Locals"
+    if not whitelisted(tvg_id, is_local):
+        if do_whitelist and add_to_whitelist(tvg_id, is_local):
+            print("  whitelist: added%s — it will survive maintenance runs" % (" (both lists)" if is_local else ""))
         else:
             print(f"  WARNING: {tvg_id} isn't whitelisted, so the next maintenance run deletes it.")
             print(f"           Re-run with --whitelist, or add it to _approved_tvgids by hand.")
