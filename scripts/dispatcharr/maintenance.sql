@@ -1180,16 +1180,19 @@ DELETE FROM dispatcharr_maint_streamless                WHERE channel_id IN (SEL
 -- "disappeared" behind a Sky Sports feed on 112, and how the Cowboy Channel landed on SportsNet
 -- LA. Check `part8b_colliding_numbers_remaining` after changing anything here.
 --
---     2-11    Locals   LA on 2/4/5/7/9/11, .1-.4 timezone alternates
+--     2-11    Locals    LA on 2/4/5/7/9/11, .1-.4 timezone alternates
+--    12-99    Locals    other cities the explicit map doesn't name
 --   101-199   News
---   201-299   Sports
---   301-399   Documentary
---   401-599   Entertainment   (widened: 142 channels, outgrew a 100 block)
---   601-799   Movies
---   700-799   Locals overflow — cities the explicit map doesn't name
---   801-899   4K
---   901-1099  PPV
---   2000+     Tier 2 event groups (Part 8b), kept clear of everything above
+--   201-399   Sports
+--   401-499   Documentary   (from Direct's "US: FACTUAL"; 32 of 36 also on Sanctum)
+--   501-899   Entertainment
+--   901-1099  Movies
+--  1101-1199  4K
+--  1201-1599  PPV
+--     2000+   Tier 2 event groups (Part 8b), kept clear of everything above
+--
+-- Widened Sept 2026 when the whitelist stopped policing anything but Locals: the kept groups now
+-- take whatever the providers carry, which tripled Sports (10 -> 118) and grew the rest.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 \echo ''
