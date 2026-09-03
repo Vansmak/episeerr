@@ -665,7 +665,10 @@ WHERE name ~ '^US:\s*';
 CREATE TEMP TABLE _merge_groups AS
 SELECT id FROM dispatcharr_channels_channelgroup
 WHERE name IN (
-  'News','Sports','Documentary','Entertainment','Movies',
+  -- 4K and PPV included: without them a channel carried in both Sports and 4K (ESPN 4K UHD is
+  -- in both, same tvg_id) stayed as two entries instead of one with stacked streams, which is
+  -- what "I see dupes when they should be stacked failover" was.
+  'News','Sports','Documentary','Entertainment','Movies','4K','PPV',
   'Direct - News','Direct - Sports','Direct - Factual','Direct - Entmt','Direct - Movies'
 );
 
@@ -1171,6 +1174,44 @@ DELETE FROM dispatcharr_channels_channel                 WHERE id IN (SELECT id 
 DELETE FROM dispatcharr_maint_streamless                WHERE channel_id IN (SELECT id FROM _empty_channels);
 
 \echo 'Step F — dead streams dropped, empty channels removed, remaining ordered best-first.'
+
+-- ── Part 7c: Point each channel at the best EPG source ───────────────────
+-- Channels bind to one epg_epgdata row, and whichever source got matched first wins — which is
+-- not necessarily the one carrying real listings. The LA locals sat on a feed holding 8-11 mostly
+-- past programmes while another active source had 58-64 upcoming for the same tvg_id, so the guide
+-- looked empty on exactly the channels watched most.
+--
+-- Re-links by tvg_id to whichever *active* source has the most future programmes. Ties break on
+-- source priority. Channels whose current link is already the best are left alone.
+\echo ''
+\echo '── Part 7c: EPG source selection ──'
+
+WITH ranked AS (
+  SELECT e.id AS epg_id,
+         LOWER(e.tvg_id) AS tvg_id,
+         ROW_NUMBER() OVER (
+           PARTITION BY LOWER(e.tvg_id)
+           ORDER BY COUNT(p.id) FILTER (WHERE p.end_time > now()) DESC, src.priority DESC, e.id
+         ) AS rn
+  FROM epg_epgdata e
+  JOIN epg_epgsource src ON src.id = e.epg_source_id AND src.is_active
+  LEFT JOIN epg_programdata p ON p.epg_id = e.id
+  WHERE e.tvg_id IS NOT NULL AND e.tvg_id <> ''
+  GROUP BY e.id, e.tvg_id, src.priority
+)
+UPDATE dispatcharr_channels_channel c
+   SET epg_data_id = r.epg_id
+  FROM ranked r
+ WHERE r.rn = 1
+   AND c.tvg_id IS NOT NULL AND c.tvg_id <> ''
+   AND LOWER(c.tvg_id) = r.tvg_id
+   AND c.epg_data_id IS DISTINCT FROM r.epg_id;
+
+SELECT COUNT(*) AS part7c_channels_with_upcoming_guide
+FROM dispatcharr_channels_channel c
+WHERE EXISTS (SELECT 1 FROM epg_programdata p WHERE p.epg_id = c.epg_data_id AND p.end_time > now());
+
+\echo 'Part 7c — channels re-pointed at the best available EPG source.'
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- PART 8: Channel numbering
