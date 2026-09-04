@@ -4485,6 +4485,22 @@ def _assign_series_ids_to_rule(config, rule_name, series_ids):
             except Exception as e:
                 app.logger.error(f"always_have processing failed for series {sid}: {e}")
 
+    # A rule that fetches nothing (get_count == 0, e.g. "finished") means stop
+    # everything - unambiguous enough to enforce immediately, unlike the general
+    # get_type/keep_type recompute a partial rule change would need. Without this,
+    # whatever was monitored under the PREVIOUS rule just stays monitored and
+    # Sonarr's own RSS/upgrade search keeps grabbing it, unaware the rule ever
+    # changed (see episeerr project memory 2026-09-04 - The Gentlemen S2 fully
+    # re-downloaded weeks after being moved to "finished").
+    target_get_count = config['rules'][rule_name].get('get_count', 1)
+    if target_get_count == 0:
+        headers = episeerr_utils.get_sonarr_headers()
+        for sid in series_ids:
+            try:
+                episeerr_utils.unmonitor_series(int(sid), headers)
+            except Exception as e:
+                app.logger.error(f"Failed to unmonitor series {sid} on reassignment to '{rule_name}': {e}")
+
     # Sync tags to Sonarr
     tag_sync_success = 0
     tag_sync_failed = 0

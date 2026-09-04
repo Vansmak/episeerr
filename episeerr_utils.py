@@ -1106,38 +1106,64 @@ def apply_initial_rule_selection(series_id, series_title, rule_name, config, sta
 
 
 def unmonitor_series(series_id, headers):
-    """Unmonitor all episodes in a series."""
+    """Unmonitor all episodes in a series, and sync each season's own
+    `monitored` flag to match (false) - the season flag is separate
+    bookkeeping on the series object, not derived from episode state, so
+    leaving it true after unmonitoring every episode inside it lets
+    Sonarr's own RSS/upgrade search keep treating the season as wanted and
+    silently re-grab everything the episode-level unmonitor was supposed to
+    stop. See episeerr project memory 2026-09-04 (The Gentlemen S2 - a
+    'finished' (get=0) rule reassignment left season flags stale and Sonarr
+    grabbed a full season pack weeks later, unrelated to any episeerr rule
+    logic firing again)."""
     try:
         # Get all episodes for the series
         episodes_response = http.get(
             f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
             headers=headers
         )
-        
+
         if not episodes_response.ok:
             logger.error(f"Failed to get episodes. Status: {episodes_response.status_code}")
             return False
 
         episodes = episodes_response.json()
         all_episode_ids = [ep['id'] for ep in episodes]
-        
+
         if all_episode_ids:
             unmonitor_response = http.put(
                 f"{SONARR_URL}/api/v3/episode/monitor",
                 headers=headers,
                 json={"episodeIds": all_episode_ids, "monitored": False}
             )
-            
+
             if not unmonitor_response.ok:
                 logger.error(f"Failed to unmonitor episodes. Status: {unmonitor_response.status_code}")
                 return False
             else:
                 logger.info(f"Unmonitored all episodes in series ID {series_id}")
-                return True
         else:
             logger.info(f"No episodes found for series ID {series_id}")
-            return True
-            
+
+        series_response = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+        if series_response.ok:
+            series = series_response.json()
+            seasons = series.get('seasons', [])
+            if any(s.get('monitored') for s in seasons):
+                for s in seasons:
+                    s['monitored'] = False
+                series_update_response = http.put(
+                    f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers, json=series
+                )
+                if series_update_response.ok:
+                    logger.info(f"Unmonitored all seasons for series ID {series_id}")
+                else:
+                    logger.error(f"Failed to unmonitor seasons. Status: {series_update_response.status_code}")
+        else:
+            logger.error(f"Failed to fetch series {series_id} to sync season monitored flags")
+
+        return True
+
     except Exception as e:
         logger.error(f"Error unmonitoring series: {str(e)}", exc_info=True)
         return False
