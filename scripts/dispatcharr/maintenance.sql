@@ -527,7 +527,8 @@ INSERT INTO _approved_tvgids (tvg_id) VALUES
   ('NBCWTHR.us'),
   ('ABCWRTV.us'),
   ('CBSWTTV.us'),
-  ('FOXWXIN.us');
+  ('FOXWXIN.us'),
+  ('NewsKCAL.us');
 
 -- PPV channels have no tvg_id — they are handled by name pattern, not whitelist
 -- So we only delete channels WITH a tvg_id that isn't approved
@@ -1575,7 +1576,8 @@ INSERT INTO _approved_locals VALUES
   ('CWWCWJ.us'),('CWWKCF.us'),('CWWTOG.us'),('CWWTTO.us'),
   ('FOXKTBC.us'),('FOXWALA.us'),('FOXWBRC.us'),('FOXWFOX.us'),('FOXWOFL.us'),('FOXWTVT.us'),('FOXWZDX.us'),
   ('NBCKXAN.us'),('NBCWAFF.us'),('NBCWESH.us'),('NBCWFLA.us'),('NBCWPMI.us'),('NBCWSFA.us'),('NBCWTLV.us'),('NBCWTVJ.us'),('NBCWVTM.us'),
-  ('NBCWTHR.us');
+  ('NBCWTHR.us'),
+  ('NewsKCAL.us');
 
 SELECT COUNT(*) AS part6b_locals_to_delete
 FROM dispatcharr_channels_channel c
