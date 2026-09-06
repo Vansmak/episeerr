@@ -1292,16 +1292,19 @@ class XadarrIntegration(ServiceIntegration):
             Save the full Xadarr settings blob.
             Xadarr calls this after any settings change or profile operation.
             """
-            # TEMPORARY (2026-09-05): quarantine specific devices from writing settings.
+            # Read-only devices: one IP per line in xadarr_blocked_ips.txt beside the settings
+            # blob. Their settings PUTs are ignored while reads are untouched, so such a device
+            # works normally against the household's shared settings — it just cannot change
+            # them for everyone else.
             #
-            # A device on an old build with a stale channel cache repeatedly pruned valid
-            # favourites and synced the loss to every other device. There is no way to stop it
-            # from the server side other than ignoring it, and it cannot be updated remotely
-            # because its ADB is unauthorised. Put one IP per line in xadarr_blocked_ips.txt
-            # beside the settings blob, and delete the file once the device is updated — a file
-            # rather than an env var so it can be changed without recreating the container, which
-            # would discard any docker cp'd code. Reads succeed as normal, so the quarantined
-            # device still receives correct state; it just cannot write.
+            # Two uses. A device belonging to someone else in the house that should follow the
+            # shared settings without editing them; and holding off a device on an old build
+            # that cannot be updated remotely, which would otherwise keep pushing a stale copy
+            # over everyone else's.
+            #
+            # Matching is by IP, so give such a device a DHCP reservation — a new lease would
+            # silently end the restriction. A file rather than an env var so the list can change
+            # without recreating the container, which would discard any docker cp'd code.
             blocked = set()
             try:
                 with open(os.path.join(_DATA_DIR, "xadarr_blocked_ips.txt")) as fh:
