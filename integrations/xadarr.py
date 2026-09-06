@@ -1257,6 +1257,28 @@ class XadarrIntegration(ServiceIntegration):
             Save the full Xadarr settings blob.
             Xadarr calls this after any settings change or profile operation.
             """
+            # TEMPORARY (2026-09-05): quarantine specific devices from writing settings.
+            #
+            # A device on an old build with a stale channel cache repeatedly pruned valid
+            # favourites and synced the loss to every other device. There is no way to stop it
+            # from the server side other than ignoring it, and it cannot be updated remotely
+            # because its ADB is unauthorised. Put one IP per line in xadarr_blocked_ips.txt
+            # beside the settings blob, and delete the file once the device is updated — a file
+            # rather than an env var so it can be changed without recreating the container, which
+            # would discard any docker cp'd code. Reads succeed as normal, so the quarantined
+            # device still receives correct state; it just cannot write.
+            blocked = set()
+            try:
+                with open(os.path.join(_DATA_DIR, "xadarr_blocked_ips.txt")) as fh:
+                    blocked = {ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")}
+            except OSError:
+                pass
+            if request.remote_addr in blocked:
+                logger.warning(
+                    "Ignoring Xadarr settings PUT from quarantined device %s", request.remote_addr
+                )
+                return jsonify({"status": "ignored", "reason": "device quarantined"}), 200
+
             body = request.get_json(silent=True, force=True)
             if not body or not isinstance(body, dict):
                 return jsonify({"error": "Expected a JSON object"}), 400
