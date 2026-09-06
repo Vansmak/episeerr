@@ -1292,30 +1292,43 @@ class XadarrIntegration(ServiceIntegration):
             Save the full Xadarr settings blob.
             Xadarr calls this after any settings change or profile operation.
             """
-            # Read-only devices: one IP per line in xadarr_blocked_ips.txt beside the settings
-            # blob. Their settings PUTs are ignored while reads are untouched, so such a device
-            # works normally against the household's shared settings — it just cannot change
-            # them for everyone else.
+            # Which devices may CHANGE the household's shared settings.
             #
-            # Two uses. A device belonging to someone else in the house that should follow the
-            # shared settings without editing them; and holding off a device on an old build
-            # that cannot be updated remotely, which would otherwise keep pushing a stale copy
-            # over everyone else's.
+            # Every Xadarr surface shares one settings blob, so any device that can write can
+            # rewrite everyone's favourites, catalogues and server connections. A device that has
+            # been switched off for a while comes back holding a stale copy and pushes it, which
+            # is how a set of favourites was destroyed repeatedly in one evening — each time by a
+            # different box that had simply been unplugged.
             #
-            # Matching is by IP, so give such a device a DHCP reservation — a new lease would
-            # silently end the restriction. A file rather than an env var so the list can change
-            # without recreating the container, which would discard any docker cp'd code.
-            blocked = set()
-            try:
-                with open(os.path.join(_DATA_DIR, "xadarr_blocked_ips.txt")) as fh:
-                    blocked = {ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")}
-            except OSError:
-                pass
-            if request.remote_addr in blocked:
+            # Two lists live beside the settings blob, one IP per line:
+            #   xadarr_allowed_ips.txt  — if present, ONLY these may write. Anything unknown,
+            #                             including a box just plugged back in, is read-only
+            #                             until it is vetted and added.
+            #   xadarr_blocked_ips.txt  — always denied, even if allow-listed. For a device
+            #                             belonging to someone else in the house.
+            # Reads are never affected: a device that cannot write still works normally against
+            # whatever the shared settings say.
+            #
+            # Matching is by IP, so any device on either list wants a DHCP reservation — a new
+            # lease silently changes what it is allowed to do. Files rather than env vars so the
+            # lists can change without recreating the container, which discards docker cp'd code.
+            def _ip_list(filename):
+                try:
+                    with open(os.path.join(_DATA_DIR, filename)) as fh:
+                        return {ln.strip() for ln in fh if ln.strip() and not ln.startswith("#")}
+                except OSError:
+                    return None
+
+            caller = request.remote_addr
+            blocked = _ip_list("xadarr_blocked_ips.txt") or set()
+            allowed = _ip_list("xadarr_allowed_ips.txt")
+            denied = caller in blocked or (allowed is not None and caller not in allowed)
+            if denied:
                 logger.warning(
-                    "Ignoring Xadarr settings PUT from quarantined device %s", request.remote_addr
+                    "Ignoring Xadarr settings PUT from read-only device %s "
+                    "(add it to xadarr_allowed_ips.txt to let it write)", caller
                 )
-                return jsonify({"status": "ignored", "reason": "device quarantined"}), 200
+                return jsonify({"status": "ignored", "reason": "device is read-only"}), 200
 
             body = request.get_json(silent=True, force=True)
             if not body or not isinstance(body, dict):
