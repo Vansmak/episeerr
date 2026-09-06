@@ -696,7 +696,42 @@ def _xw_test_plex(server_url: str, token: str) -> dict:
     )
     r.raise_for_status()
     data = r.json().get("MediaContainer", {})
-    return {"serverName": data.get("friendlyName", "Plex"), "serverId": data.get("machineIdentifier", "")}
+    return {
+        "serverName": data.get("friendlyName", "Plex"),
+        "serverId": data.get("machineIdentifier", ""),
+        "collections": _xw_plex_sections(server_url, token),
+    }
+
+
+def _xw_plex_sections(server_url: str, token: str) -> list:
+    """
+    The Plex server's libraries, in the shape Xadarr stores under a connection's "collections".
+
+    Xadarr fills this in itself only when a server is added through the app; a connection that
+    arrives from the sync server keeps whatever list came with it. Saving an empty one meant the
+    Movies and Shows rows had no library to read and simply showed nothing, with the connection
+    itself looking perfectly healthy. Photo libraries are skipped — Xadarr has no use for them.
+    """
+    try:
+        r = _http.get(
+            server_url.rstrip("/") + "/library/sections",
+            headers={"X-Plex-Token": token, "Accept": "application/json"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        return [
+            {
+                "id": str(d.get("key")),
+                "name": d.get("title") or f"Library {d.get('key')}",
+                "type": d.get("type") or "",
+                "enabled": d.get("type") in ("movie", "show"),
+            }
+            for d in r.json().get("MediaContainer", {}).get("Directory", [])
+            if d.get("key") is not None and d.get("type") != "photo"
+        ]
+    except Exception as exc:  # a library list is a bonus, never a reason to fail the connect
+        logger.warning("Could not read Plex libraries from %s: %s", server_url, exc)
+        return []
 
 # ── Outbound xadarr-server webhooks ───────────────────────────────────────────
 
@@ -1723,7 +1758,7 @@ class XadarrIntegration(ServiceIntegration):
                         "serverId": info["serverId"],
                         "userId": "", "userName": "",
                         "accessToken": token, "accountToken": token,
-                        "collections": [],
+                        "collections": info.get("collections") or [],
                         "lastConnectedAt": int(datetime.now(timezone.utc).timestamp() * 1000),
                     }
                 else:
