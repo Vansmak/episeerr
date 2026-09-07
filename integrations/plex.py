@@ -2680,6 +2680,50 @@ class PlexIntegration(ServiceIntegration):
             except Exception as e:
                 return jsonify({'success': False, 'message': str(e)}), 500
 
+        @bp.route('/refresh-library', methods=['POST'])
+        def refresh_library():
+            """Trigger a Plex library scan. New downloads (Sonarr/Radarr) don't
+            always show up until Plex rescans, so this exists to be called right
+            after a download completes, without waiting for Plex's own scan
+            interval. Refreshes every section unless section_id is given."""
+            from settings_db import get_service
+            plex_config = get_service('plex')
+            if not plex_config or not plex_config.get('enabled'):
+                return jsonify({'success': False, 'message': 'Plex not enabled'}), 503
+
+            url = plex_config.get('url', '').rstrip('/')
+            api_key = plex_config.get('api_key', '')
+            if not url or not api_key:
+                return jsonify({'success': False, 'message': 'Plex not configured'}), 503
+
+            data = request.json or {}
+            section_id = data.get('section_id')
+            headers = {'X-Plex-Token': api_key, 'Accept': 'application/json'}
+
+            try:
+                if section_id:
+                    resp = http.get(f"{url}/library/sections/{section_id}/refresh", headers=headers, timeout=15)
+                    resp.raise_for_status()
+                    return jsonify({'success': True, 'refreshed_sections': [section_id]})
+
+                sections_resp = http.get(f"{url}/library/sections", headers=headers, timeout=15)
+                sections_resp.raise_for_status()
+                sections = sections_resp.json().get('MediaContainer', {}).get('Directory', [])
+                refreshed = []
+                for section in sections:
+                    sid = section.get('key')
+                    if not sid:
+                        continue
+                    r = http.get(f"{url}/library/sections/{sid}/refresh", headers=headers, timeout=15)
+                    if r.ok:
+                        refreshed.append(sid)
+                    else:
+                        logger.warning(f"Plex refresh failed for section {sid}: {r.status_code}")
+                return jsonify({'success': True, 'refreshed_sections': refreshed})
+            except Exception as e:
+                logger.error(f"Plex library refresh error: {e}")
+                return jsonify({'success': False, 'message': str(e)}), 500
+
         @bp.route('/art')
         def art_proxy():
             """
