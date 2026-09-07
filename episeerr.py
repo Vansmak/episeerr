@@ -2879,7 +2879,11 @@ def api_assign_movie_rule():
 
 @app.route('/api/radarr/quality-profiles')
 def radarr_quality_profiles():
-    """Fetch quality profiles from Radarr."""
+    """Fetch quality profiles from Radarr, including which one is preferred
+    (from the stored default_quality_profile_id, same mechanism the Sonarr
+    add-series route already uses) - callers that just want a sane default
+    (not "Any", which permits CAM/TELESYNC) should use preferred_id rather
+    than assuming profiles[0]."""
     cfg, headers = _radarr_headers()
     if not cfg:
         return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
@@ -2887,7 +2891,9 @@ def radarr_quality_profiles():
         resp = http.get(f"{cfg['url'].rstrip('/')}/api/v3/qualityprofile", headers=headers, timeout=10)
         resp.raise_for_status()
         profiles = [{'id': p['id'], 'name': p['name']} for p in resp.json()]
-        return jsonify({'success': True, 'profiles': profiles})
+        from settings_db import get_preferred_quality_profile
+        preferred_id = get_preferred_quality_profile('radarr', profiles) if profiles else None
+        return jsonify({'success': True, 'profiles': profiles, 'preferred_id': preferred_id})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
