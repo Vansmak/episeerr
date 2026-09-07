@@ -2758,6 +2758,66 @@ def radarr_movies():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/downloads/progress')
+def downloads_progress():
+    """Combined Sonarr + Radarr download queue with percent-complete, for
+    surfaces (like the HA integration) that want a single 'what's downloading
+    right now' view rather than separate per-service queue counts."""
+    items = []
+
+    def _percent(size, sizeleft):
+        if not size:
+            return None
+        return round((1 - (sizeleft or 0) / size) * 100, 1)
+
+    try:
+        prefs = sonarr_utils.load_preferences()
+        sonarr_url = prefs.get('SONARR_URL')
+        sonarr_key = prefs.get('SONARR_API_KEY')
+        if sonarr_url and sonarr_key:
+            resp = http.get(
+                f"{sonarr_url.rstrip('/')}/api/v3/queue?includeSeries=true&includeEpisode=true",
+                headers={'X-Api-Key': sonarr_key}, timeout=10
+            )
+            if resp.ok:
+                for r in resp.json().get('records', []):
+                    series_title = (r.get('series') or {}).get('title')
+                    items.append({
+                        'source': 'sonarr',
+                        'title': series_title or r.get('title', 'Unknown'),
+                        'episode': r.get('title') if series_title else None,
+                        'status': r.get('status'),
+                        'percent': _percent(r.get('size'), r.get('sizeleft')),
+                        'timeleft': r.get('timeleft'),
+                        'protocol': r.get('protocol'),
+                    })
+    except Exception as e:
+        app.logger.warning(f"downloads_progress: Sonarr queue fetch failed: {e}")
+
+    try:
+        cfg, headers = _radarr_headers()
+        if cfg:
+            resp = http.get(
+                f"{cfg['url'].rstrip('/')}/api/v3/queue?includeMovie=true",
+                headers=headers, timeout=10
+            )
+            if resp.ok:
+                for r in resp.json().get('records', []):
+                    items.append({
+                        'source': 'radarr',
+                        'title': (r.get('movie') or {}).get('title') or r.get('title', 'Unknown'),
+                        'episode': None,
+                        'status': r.get('status'),
+                        'percent': _percent(r.get('size'), r.get('sizeleft')),
+                        'timeleft': r.get('timeleft'),
+                        'protocol': r.get('protocol'),
+                    })
+    except Exception as e:
+        app.logger.warning(f"downloads_progress: Radarr queue fetch failed: {e}")
+
+    return jsonify({'success': True, 'count': len(items), 'items': items})
+
+
 @app.route('/api/movie-rules/assign', methods=['POST'])
 def api_assign_movie_rule():
     """Assign or unassign a movie rule to a Radarr movie via episeerr_ tags."""
