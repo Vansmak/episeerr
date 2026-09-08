@@ -241,6 +241,7 @@ def calendar_data():
         # 2.5 LOAD WATCHED EPISODES TO FILTER OUT
         # ──────────────────────────────────────────────────────
         watched_episodes = set()
+        watched_data = []
         watched_file = os.path.join(os.getcwd(), 'data', 'activity', 'watched.json')
 
         if os.path.exists(watched_file):
@@ -366,13 +367,36 @@ def calendar_data():
             })
         # Sort by grab time (newest first)
         downloaded_events.sort(key=lambda x: x['grabbed_date'], reverse=True)
-        
+
+        # ──────────────────────────────────────────────────────
+        # 5.5 FORMAT RECENTLY WATCHED (watched_data already loaded above,
+        # for the filter set - reused here rather than re-reading the file)
+        # ──────────────────────────────────────────────────────
+        watched_events = []
+        watched_sorted = sorted(watched_data, key=lambda x: x.get('timestamp', 0), reverse=True)
+        for w in watched_sorted[:10]:
+            series_id = w.get('series_id')
+            watched_events.append({
+                'series_id': series_id,
+                'series_title': w.get('series_title', ''),
+                'episode_title': w.get('episode_title', ''),
+                'season': w.get('season'),
+                'episode': w.get('episode'),
+                'watched_date': w.get('timestamp'),
+                'user': w.get('user', 'Unknown'),
+                'has_rule': series_id in series_rules,
+                'rule_name': series_rules.get(series_id),
+                'banner': banner_map.get(series_id)
+            })
+
         return jsonify({
             'success': True,
             'upcoming': upcoming_events,
             'downloaded': downloaded_events,
+            'watched': watched_events,
             'upcoming_count': len(upcoming_events),
-            'downloaded_count': len(downloaded_events)
+            'downloaded_count': len(downloaded_events),
+            'watched_count': len(watched_events)
         })
         
     except Exception as e:

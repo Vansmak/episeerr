@@ -5242,7 +5242,12 @@ def api_series_with_status():
                 last_episode = series['lastInfoSync'][:10]  # Extract date part
             elif series.get('previousAiring'):
                 last_episode = series['previousAiring'][:10]
-            
+
+            poster = next(
+                (img['remoteUrl'] for img in series.get('images', []) if img.get('coverType') == 'poster'),
+                None
+            )
+
             enhanced_series.append({
                 'id': series['id'],
                 'title': series['title'],
@@ -5251,7 +5256,8 @@ def api_series_with_status():
                 'year': series.get('year'),
                 'lastEpisode': last_episode,
                 'titleSlug': series.get('titleSlug'),
-                'ended': series.get('ended', False)
+                'ended': series.get('ended', False),
+                'poster': poster
             })
         
         return jsonify({
