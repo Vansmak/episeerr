@@ -3144,9 +3144,11 @@ _DEFAULT_MOVIE_PROFILE_NAME = "4K-1080p Atmos Priority"
 
 def _default_movie_profile_id():
     try:
-        prefs = radarr_utils.load_preferences()
-        resp = http.get(f"{prefs.get('RADARR_URL')}/api/v3/qualityprofile",
-                        headers={'X-Api-Key': prefs.get('RADARR_API_KEY')}, timeout=10)
+        cfg = get_radarr_config()
+        if not cfg or not cfg.get('url') or not cfg.get('api_key'):
+            return None
+        resp = http.get(f"{normalize_url(cfg['url'])}/api/v3/qualityprofile",
+                        headers={'X-Api-Key': cfg['api_key']}, timeout=10)
         resp.raise_for_status()
         profiles = resp.json()
         for p in profiles:
@@ -3161,9 +3163,11 @@ def _default_movie_profile_id():
 
 def _default_movie_root_folder():
     try:
-        prefs = radarr_utils.load_preferences()
-        resp = http.get(f"{prefs.get('RADARR_URL')}/api/v3/rootfolder",
-                        headers={'X-Api-Key': prefs.get('RADARR_API_KEY')}, timeout=10)
+        cfg = get_radarr_config()
+        if not cfg or not cfg.get('url') or not cfg.get('api_key'):
+            return None
+        resp = http.get(f"{normalize_url(cfg['url'])}/api/v3/rootfolder",
+                        headers={'X-Api-Key': cfg['api_key']}, timeout=10)
         resp.raise_for_status()
         folders = resp.json()
         return folders[0].get('path') if folders else None
@@ -3186,8 +3190,11 @@ def radarr_add_movie():
     # of Radarr's profile list is "Any", which permits CAM and TELESYNC.
     quality_profile_id = data.get('quality_profile_id') or _default_movie_profile_id()
     root_folder_path = data.get('root_folder_path') or _default_movie_root_folder()
-    if not all([tmdb_id, quality_profile_id, root_folder_path]):
-        return jsonify({'success': False, 'error': 'tmdb_id required, and no Radarr default profile/root folder could be resolved'}), 400
+    if not tmdb_id:
+        return jsonify({'success': False, 'error': 'tmdb_id required'}), 400
+    if not quality_profile_id or not root_folder_path:
+        return jsonify({'success': False,
+                        'error': 'No Radarr default quality profile or root folder could be resolved'}), 400
     try:
         base = cfg['url'].rstrip('/')
         lookup = http.get(f"{base}/api/v3/movie/lookup/tmdb", headers=headers,
