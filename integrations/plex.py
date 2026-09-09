@@ -2312,6 +2312,38 @@ class PlexIntegration(ServiceIntegration):
                 logger.error(f"Error generating Plex widget: {e}")
                 return jsonify({'success': False, 'message': str(e)})
         
+        @bp.route('/watchlist/items')
+        def watchlist_items():
+            """The Plex watchlist as JSON, for Xadarr.
+
+            The existing /watchlist route renders HTML for Episeerr's own dashboard. Xadarr was
+            showing its *local* watchlist instead — a list built around Trakt, which Joe no
+            longer uses — so the two drifted apart the moment anything was added or removed on
+            the Plex side. Plex is the real list; this hands it over in the shape the app needs.
+            """
+            try:
+                from settings_db import get_service
+                plex_config = get_service('plex')
+                if not plex_config or not plex_config.get('api_key'):
+                    return jsonify({'success': False, 'items': [], 'error': 'Plex not configured'})
+                items = integration.fetch_watchlist(plex_config['api_key'])
+                return jsonify({
+                    'success': True,
+                    'items': [
+                        {
+                            'tmdb_id': it.get('tmdb_id'),
+                            'title': it.get('title'),
+                            'media_type': 'tv' if it.get('type') == 'show' else 'movie',
+                            'year': it.get('year'),
+                            'poster': it.get('thumb'),
+                        }
+                        for it in items if it.get('tmdb_id')
+                    ],
+                })
+            except Exception as exc:
+                logger.error(f"watchlist_items failed: {exc}")
+                return jsonify({'success': False, 'items': [], 'error': str(exc)}), 500
+
         @bp.route('/watchlist')
         def watchlist():
             """Return watchlist section HTML with status badges on posters"""

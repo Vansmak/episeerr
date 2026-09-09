@@ -151,6 +151,28 @@ def _xw_blob():
 
 
 def _xw_save_blob(blob: dict) -> None:
+    """Persist a change Episeerr itself made to the shared Xadarr settings.
+
+    Stamping `updatedAt` is the whole point. Xadarr devices arbitrate by it: on launch a
+    device compares its own last-changed time against the server's and pushes only if it
+    has something newer. Writing the blob without moving the stamp left every edit made
+    here looking older than whatever a device last pushed, so the next device to open
+    quietly overwrote it — a Plex server connection added through this UI survived barely
+    a minute before a TV replaced it with its own copy, repeatedly, and the cause looked
+    for a long time like a bug on the Android side.
+
+    Only for Episeerr's own edits. A device's pushed payload goes through _save_settings()
+    and must keep the stamp the device sent, which is what says when that device last
+    actually changed something.
+    """
+    # Must be strictly newer than whatever is already there, not merely "now". Device clocks
+    # are not in sync with this host — a TV here runs about two minutes fast — so a stamp it
+    # wrote is already in the future, and stamping the real time would leave an edit made here
+    # looking older than a change made before it. Take the later of now and one past the
+    # existing value.
+    previous = blob.get("updatedAt") or 0
+    blob["updatedAt"] = max(int(time.time() * 1000), int(previous) + 1)
+    blob["lan_sync_last_modified"] = blob["updatedAt"]
     _save_json(_SETTINGS_FILE, blob)
 
 
@@ -1283,6 +1305,29 @@ class XadarrIntegration(ServiceIntegration):
                         changed = True
                 if changed:
                     _save_settings(data)
+
+            # Plex is the watchlist, when Plex is configured.
+            #
+            # The app has been rendering watchlistByProfile — a list built around Trakt, which
+            # Joe no longer uses. Xadarr pushes additions to the real Plex watchlist but never
+            # read it back, so the two drifted apart the moment anything was added or removed on
+            # the Plex side, and anything watchlisted before the Plex push existed was local-only.
+            # Episeerr's own dashboard already prefers Plex here (see web_get_watchlist); this
+            # gives the app the same list rather than leaving it the odd one out.
+            #
+            # Only overwrites when Plex actually returns something: an empty answer is far more
+            # likely to be a token or network problem than a genuinely empty watchlist, and
+            # wiping the list on a bad round trip would be its own bug.
+            if _xw_plex_configured():
+                try:
+                    plex_items = _xw_fetch_plex_watchlist_items()
+                    if plex_items:
+                        by_profile = data.setdefault("watchlistByProfile", {})
+                        for pid in list(by_profile.keys()) or [_XW_PROFILE]:
+                            by_profile[pid] = plex_items
+                except Exception as exc:
+                    logger.warning("[Xadarr] Plex watchlist unavailable, leaving stored list: %s", exc)
+
             return jsonify(data), 200
 
         # ── PUT /settings ─────────────────────────────────────────────────────
