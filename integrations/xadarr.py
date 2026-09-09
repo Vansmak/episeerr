@@ -1378,6 +1378,18 @@ class XadarrIntegration(ServiceIntegration):
             body = request.get_json(silent=True, force=True)
             if not body or not isinstance(body, dict):
                 return jsonify({"error": "Expected a JSON object"}), 400
+
+            # Plex owns the watchlist when Plex is configured, so a device does not get to write
+            # it. The app still sends watchlistByProfile in its snapshot — it has no idea the
+            # field is now derived — and accepting that would let a device with a stale copy
+            # overwrite the list between refreshes. GET refills it from Plex either way, so this
+            # only removes a window where the stored copy could disagree with Plex.
+            if _xw_plex_configured():
+                existing_wl = (_load_json(_SETTINGS_FILE, {}) or {}).get("watchlistByProfile")
+                if existing_wl is not None:
+                    body["watchlistByProfile"] = existing_wl
+                else:
+                    body.pop("watchlistByProfile", None)
             # Preserve homeServerConnectionJson if the incoming blob has blank tokens.
             # Prevents a device that lost its Keystore key from wiping credentials for all clients.
             existing = _load_json(_SETTINGS_FILE, {})
