@@ -3257,6 +3257,23 @@ def sonarr_root_folders():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _apply_rule_and_clear_pending(series_id, rule_name, title, tmdb_id):
+    """Assign a rule to a freshly added (or already present) series, and drop any pending entry.
+
+    A title watchlisted earlier sits in the pending-selection queue awaiting a decision.
+    Directly adding it with a rule *is* that decision, so leaving the pending entry behind would
+    keep showing it as still needing one — a stale amber badge to clear by hand.
+    """
+    ok, err = assign_rule_to_series(series_id, rule_name, series_title=title, tmdb_id=tmdb_id)
+    if ok:
+        try:
+            episeerr_utils.pending_selections.pop(str(series_id), None)
+        except Exception as exc:
+            app.logger.warning("Rule applied but pending entry not cleared for %s: %s",
+                               series_id, exc)
+    return ok, err
+
+
 @app.route('/api/sonarr/add-series', methods=['POST'])
 def sonarr_add_series():
     """Add a series to Sonarr using default quality profile / root folder, then
@@ -3268,6 +3285,10 @@ def sonarr_add_series():
         return jsonify({'success': False, 'error': 'Sonarr not configured'}), 503
     req_data = request.json or {}
     tmdb_id = req_data.get('tmdb_id')
+    # Optional. Supplied by a caller that has already asked which rule to use (Xadarr's
+    # Direct Add), so the series arrives tagged and monitored instead of parking in the
+    # pending queue waiting to be told. Omit it and the old behaviour is unchanged.
+    rule_name = (req_data.get('rule_name') or '').strip() or None
     if not tmdb_id:
         return jsonify({'success': False, 'error': 'tmdb_id required'}), 400
     try:
@@ -3295,6 +3316,10 @@ def sonarr_add_series():
         existing_id = series_meta.get('id') or 0
         if existing_id > 0:
             _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+            if rule_name:
+                ok, err = _apply_rule_and_clear_pending(existing_id, rule_name, title, tmdb_id)
+                return jsonify({'success': ok, 'series_id': existing_id,
+                                'rule': rule_name, 'error': err})
             return jsonify({'success': True,
                             'redirect_url': f'/api/send-to-selection/{existing_id}'})
 
@@ -3330,6 +3355,10 @@ def sonarr_add_series():
             series_id = add_resp.json()['id']
             app.logger.info(f"Added '{title}' to Sonarr (ID {series_id}) → directing to selection")
             _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+            if rule_name:
+                ok, err = _apply_rule_and_clear_pending(series_id, rule_name, title, tmdb_id)
+                return jsonify({'success': ok, 'series_id': series_id,
+                                'rule': rule_name, 'error': err})
             return jsonify({'success': True,
                             'redirect_url': f'/api/send-to-selection/{series_id}'})
 
