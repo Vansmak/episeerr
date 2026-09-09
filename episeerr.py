@@ -3136,6 +3136,42 @@ def radarr_root_folders():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+# Joe's everyday movie profile — the recyclarr-managed one everything else uses. Resolved by
+# name so a Radarr reindex cannot silently repoint it at a different profile the way a bare id
+# would, and so this keeps working if the ids ever shift.
+_DEFAULT_MOVIE_PROFILE_NAME = "4K-1080p Atmos Priority"
+
+
+def _default_movie_profile_id():
+    try:
+        prefs = radarr_utils.load_preferences()
+        resp = http.get(f"{prefs.get('RADARR_URL')}/api/v3/qualityprofile",
+                        headers={'X-Api-Key': prefs.get('RADARR_API_KEY')}, timeout=10)
+        resp.raise_for_status()
+        profiles = resp.json()
+        for p in profiles:
+            if p.get('name') == _DEFAULT_MOVIE_PROFILE_NAME:
+                return p.get('id')
+        app.logger.warning("Radarr profile %r not found; not guessing one",
+                           _DEFAULT_MOVIE_PROFILE_NAME)
+    except Exception as exc:
+        app.logger.warning("Could not resolve default Radarr profile: %s", exc)
+    return None
+
+
+def _default_movie_root_folder():
+    try:
+        prefs = radarr_utils.load_preferences()
+        resp = http.get(f"{prefs.get('RADARR_URL')}/api/v3/rootfolder",
+                        headers={'X-Api-Key': prefs.get('RADARR_API_KEY')}, timeout=10)
+        resp.raise_for_status()
+        folders = resp.json()
+        return folders[0].get('path') if folders else None
+    except Exception as exc:
+        app.logger.warning("Could not resolve default Radarr root folder: %s", exc)
+    return None
+
+
 @app.route('/api/radarr/add-movie', methods=['POST'])
 def radarr_add_movie():
     """Look up by TMDB ID and add movie to Radarr."""
@@ -3144,10 +3180,14 @@ def radarr_add_movie():
         return jsonify({'success': False, 'error': 'Radarr not configured'}), 503
     data = request.json or {}
     tmdb_id = data.get('tmdb_id')
-    quality_profile_id = data.get('quality_profile_id')
-    root_folder_path = data.get('root_folder_path')
+    # Defaulted rather than required, so a caller that just wants "add this film" does not have
+    # to fetch profiles and root folders first. Unlike add-series, which already defaults both,
+    # this route demanded all three and a caller guessing wrong picks the wrong quality: index 0
+    # of Radarr's profile list is "Any", which permits CAM and TELESYNC.
+    quality_profile_id = data.get('quality_profile_id') or _default_movie_profile_id()
+    root_folder_path = data.get('root_folder_path') or _default_movie_root_folder()
     if not all([tmdb_id, quality_profile_id, root_folder_path]):
-        return jsonify({'success': False, 'error': 'tmdb_id, quality_profile_id, and root_folder_path required'}), 400
+        return jsonify({'success': False, 'error': 'tmdb_id required, and no Radarr default profile/root folder could be resolved'}), 400
     try:
         base = cfg['url'].rstrip('/')
         lookup = http.get(f"{base}/api/v3/movie/lookup/tmdb", headers=headers,

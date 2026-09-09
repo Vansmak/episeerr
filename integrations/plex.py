@@ -1100,8 +1100,20 @@ class PlexIntegration(ServiceIntegration):
                         })
                         continue
                     
-                    # Not in Radarr — add it
-                    result = self.add_movie_to_radarr(item, sync_config)
+                    # Not in Radarr — deliberately NOT added here.
+                    #
+                    # Watchlisting is an expression of interest, not an instruction to acquire.
+                    # Several people use Xadarr in this house, and anything one of them adds to
+                    # the watchlist used to go straight into Radarr and start downloading. TV
+                    # already worked the way it should: it lands in Sonarr tagged episeerr_select
+                    # and waits as a pending selection until someone chooses a rule. Movies had no
+                    # such review step and there is no pending-request mechanism for them —
+                    # pending_selections is keyed by Sonarr series id and is series-only.
+                    #
+                    # So the watchlist itself is the queue for movies: the entry is recorded here
+                    # with a status saying it is awaiting a decision, and Radarr is only touched
+                    # when someone explicitly adds it (Xadarr's Direct Add, or the web UI).
+                    result = {'success': False, 'status': 'awaiting_decision', 'movie_id': None}
                     sync_data['synced_items'][item_key] = {
                         'tmdb_id': item.get('tmdb_id'),
                         'title': item['title'],
