@@ -933,17 +933,27 @@ WHERE g.name LIKE 'Direct -%' AND c.auto_created = true;
 
 -- ── Step D: Stack OTA streams under LA Titan channels ────────────────────
 -- OTA stream IDs are fixed HDHR streams:
---   183985=KCBS-HD, 184151=KNBC NX, 184152=KTLA HD, 183999=KABC DT, 184009=KTTV-DT
+--   183985=KCBS-HD (2.1), 183989=NBC4-LA (4.1), 183993=KTLADT (5.1),
+--   183999=KABC DT (7.1), 184009=KTTV-DT (11.1), 184003=KCAL-DT (9.1)
+--
+-- Use the ATSC 1.0 feeds (x.1), NOT the NextGen/ATSC 3.0 ones in the 10x.1 range. Sept 2026:
+-- channel 4 was pinned to 184151 "104.1 KNBC NX", which is DRM-flagged in the HDHR lineup — the
+-- tuner answers third-party clients with HTTP 503 on those, so every tune burned three retries
+-- and silently fell through to Sanctum. It looked like OTA priority was broken; it was never
+-- reaching OTA at all. 184152 "105.1 KTLA HD" was the same ATSC 3.0 range (undrmed, but no
+-- reason to prefer it). Check `curl http://192.168.254.30/lineup.json` for the DRM flag before
+-- pinning any new stream id here.
 
 \echo 'Step D: stacking OTA streams on LA locals...'
 
 WITH ota_map (tvg_id, stream_id) AS (
   VALUES
     ('CBSKCBS.us', 183985),
-    ('NBCKNBC.us', 184151),
-    ('CWKTLA.us',  184152),
+    ('NBCKNBC.us', 183989),
+    ('CWKTLA.us',  183993),
     ('ABCKABC.us', 183999),
-    ('FOXKTTV.us', 184009)
+    ('FOXKTTV.us', 184009),
+    ('NewsKCAL.us', 184003)
 ),
 la_channels AS (
   SELECT c.id AS channel_id, o.stream_id
@@ -970,10 +980,11 @@ FROM (
   SELECT c.id AS channel_id, o.stream_id
   FROM (VALUES
     ('CBSKCBS.us', 183985),
-    ('NBCKNBC.us', 184151),
-    ('CWKTLA.us',  184152),
+    ('NBCKNBC.us', 183989),
+    ('CWKTLA.us',  183993),
     ('ABCKABC.us', 183999),
-    ('FOXKTTV.us', 184009)
+    ('FOXKTTV.us', 184009),
+    ('NewsKCAL.us', 184003)
   ) AS o(tvg_id, stream_id)
   JOIN dispatcharr_channels_channel c ON LOWER(c.tvg_id) = LOWER(o.tvg_id)
   JOIN dispatcharr_channels_channelgroup g ON g.id = c.channel_group_id
@@ -1359,6 +1370,57 @@ WHERE LOWER(tvg_id) = 'abcwplg.us'
 UPDATE dispatcharr_channels_channel SET channel_number = 11.4
 WHERE LOWER(tvg_id) = 'foxwsvn.us'
   AND channel_group_id = (SELECT id FROM dispatcharr_channels_channelgroup WHERE name = 'Locals');
+
+-- ── Name the locals by city ──────────────────────────────────────────────
+-- The numbers above are unambiguous (whole = LA, .1-.4 = alternates), but the provider names
+-- aren't: LA's NBC is "NBC 4 (KNBC)" while Denver's is "NBC 9 (KUSA)", so 4 and 4.1 sit next to
+-- each other reading "4" and "9". Tuning the wrong one looks like an OTA failover fault, because
+-- the alternates have no HDHR stream behind them.
+--
+-- Canonical name per tvg_id — assignment, not a suffix append, so it's idempotent no matter what
+-- the provider renames things to between syncs.
+
+UPDATE dispatcharr_channels_channel c
+   SET name = m.canonical
+  FROM (VALUES
+    ('cbskcbs.us', 'CBS 2 KCBS · Los Angeles'),
+    ('nbcknbc.us', 'NBC 4 KNBC · Los Angeles'),
+    ('cwktla.us',  'CW 5 KTLA · Los Angeles'),
+    ('abckabc.us', 'ABC 7 KABC · Los Angeles'),
+    ('foxkttv.us', 'FOX 11 KTTV · Los Angeles'),
+
+    ('cbskcnc.us', 'CBS KCNC · Denver'),
+    ('nbckusa.us', 'NBC KUSA · Denver'),
+    ('abckmgh.us', 'ABC KMGH · Denver'),
+    ('foxkdvr.us', 'FOX KDVR · Denver'),
+
+    ('cbswbbm.us', 'CBS WBBM · Chicago'),
+    ('nbcwmaq.us', 'NBC WMAQ · Chicago'),
+    ('abcwls.us',  'ABC WLS · Chicago'),
+    ('foxwfld.us', 'FOX WFLD · Chicago'),
+
+    ('cbswcbs.us', 'CBS WCBS · New York'),
+    ('nbcwnbc.us', 'NBC WNBC · New York'),
+    ('cwwpix.us',  'CW WPIX · New York'),
+    ('abcwabc.us', 'ABC WABC · New York'),
+    ('foxwnyw.us', 'FOX WNYW · New York'),
+
+    ('cbswfor.us', 'CBS WFOR · Miami'),
+    ('nbcwtvj.us', 'NBC WTVJ · Miami'),
+    ('abcwplg.us', 'ABC WPLG · Miami'),
+    ('foxwsvn.us', 'FOX WSVN · Miami')
+  ) AS m(tvg, canonical)
+ WHERE LOWER(c.tvg_id) = m.tvg
+   AND c.channel_group_id = (SELECT id FROM dispatcharr_channels_channelgroup WHERE name = 'Locals')
+   AND c.name IS DISTINCT FROM m.canonical;
+
+-- KCAL is matched by name (it has no consistent provider tvg_id), same as its numbering above.
+UPDATE dispatcharr_channels_channel
+   SET name = 'CBS 9 KCAL · Los Angeles'
+ WHERE channel_number = 9
+   AND name ILIKE '%KCAL%'
+   AND channel_group_id = (SELECT id FROM dispatcharr_channels_channelgroup WHERE name = 'Locals')
+   AND name IS DISTINCT FROM 'CBS 9 KCAL · Los Angeles';
 
 -- ── Locals the explicit map doesn't name ─────────────────────────────────
 -- Everything above assigns a specific number to a specific tvg_id: LA on 2/4/5/7/9/11 with
