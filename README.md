@@ -1,5 +1,24 @@
 # Episeerr
 
+> ### ⚠ You are on the `custom` branch — this is not the released Episeerr
+>
+> This branch is my personal production build. It carries integrations that exist only for my
+> own house — Xadarr (my Android TV app), Dispatcharr IPTV with my channel lineup and
+> hardcoded tuner stream IDs, Plex watchlist handling, Frigate, Home Assistant — plus scripts
+> that assume my paths, my addresses and my hardware. Some of it is hostile to a general
+> install: `scripts/dispatcharr/maintenance.sql` will rewrite a Dispatcharr database to *my*
+> channel numbering, and `integrations/dispatcharr.py` reads it from an absolute path under my
+> home directory.
+>
+> Nothing on this branch is supported, documented for other people, or guaranteed to be in a
+> working state at any given commit.
+>
+> **If you want Episeerr, use the [`main` branch](https://github.com/Vansmak/episeerr/tree/main)
+> or `vansmak/episeerr:latest` on Docker Hub.** That is the real project, and everything below
+> describes it.
+
+---
+
 **Smart episode management for Sonarr** - Get episodes as you watch, clean up automatically when storage gets low.
 This project started as scratching my own itch - I wanted more granular series management and couldn't find exactly what I wanted. I'm not a programmer by trade, but I had a clear vision for the solution I needed. I used AI as a development tool to help implement my ideas faster, just like any other tool. The creativity, problem-solving, architecture decisions, and feature design are all mine - AI helped with code, syntax and implementation details. Although I run everything in my own production environment first, it is catered to my environment and is use at your own risk. All code is open source for anyone to review and audit. The tool has been useful for me, and I shared it in case others can benefit from it too - but I absolutely understand if some prefer to stick with established solutions.
 
