@@ -4567,6 +4567,23 @@ def _assign_series_ids_to_rule(config, rule_name, series_ids):
             except Exception as e:
                 app.logger.error(f"Failed to unmonitor series {sid} on reassignment to '{rule_name}': {e}")
 
+    # A series can pick up a config-only rule assignment (this function)
+    # while it's still sitting in the pending-requests queue - e.g. Joe
+    # manually grabbing an episode via Xadarr's own Sonarr search, which
+    # never touches Episeerr's pending state, then assigning a rule
+    # afterward through the plain "existing series" path instead of the
+    # pending-resolution UI. Without this, that leaves a stale pending
+    # entry behind - the show reads as handled everywhere except the
+    # "needs attention" badge, which never clears.
+    for series_id in series_ids:
+        try:
+            stale = find_pending_request_by_series(series_id)
+            if stale and stale.get('id'):
+                delete_pending_request(stale['id'])
+                app.logger.info(f"Cleared stale pending request for series {series_id} on rule assignment")
+        except Exception as e:
+            app.logger.error(f"Error clearing pending request for series {series_id}: {e}")
+
     # Sync tags to Sonarr
     tag_sync_success = 0
     tag_sync_failed = 0
