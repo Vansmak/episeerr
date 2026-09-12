@@ -6137,6 +6137,18 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
     title = request_data.get('title', 'series') if request_data else 'series'
     app.logger.info(f"Applied rule '{rule_name}' to {title}")
     _plex_watchlist_add_silent(tmdb_id, 'tv', title)
+
+    try:
+        from integrations.xadarr import fire_xadarr_webhook
+        fire_xadarr_webhook("rule.assigned", {
+            "title":      title,
+            "tmdb_id":    tmdb_id,
+            "rule":       rule_name,
+            "media_type": "show",
+        })
+    except Exception as e:
+        app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
+
     return True, f"Applied rule '{rule_name}' to {title}"
 
 
@@ -6594,6 +6606,16 @@ def api_assign_pending_rule():
     Used by the Xadarr Android TV app's native rule picker.
     Body: {"tmdb_id": "...", "rule_name": "..."}
     On success: clears the pending request, fires rule processing.
+
+    Delegates to _apply_rule_to_selection_core - the same function the web
+    UI and episeerr-ha/HA card's pending-request flow already use, rather
+    than a separate near-duplicate implementation. That function is
+    strictly more complete for this case (handles a deferred add for a
+    discover/search-sourced pending request, and correctly skips the
+    active monitor+search grab when the pending flag came from an
+    already-existing series via series_page/tag-drift, not a genuinely
+    new one) - see episeerr-ha CLAUDE.md notes on 2026-09-08 route
+    consolidation for the full reasoning.
     """
     try:
         data = request.get_json(silent=True) or {}
@@ -6603,25 +6625,17 @@ def api_assign_pending_rule():
         if not tmdb_id or not rule_name:
             return jsonify({"success": False, "error": "tmdb_id and rule_name required"}), 400
 
+        # Read-only lookup, purely to keep the "title" field Xadarr's client
+        # already parses out of this response - the actual assignment work
+        # happens in _apply_rule_to_selection_core below, not here.
         request_data = find_pending_request_by_tmdb(tmdb_id)
-        if not request_data:
-            return jsonify({"success": False, "error": "No pending request found for this series"}), 404
+        series_title = request_data.get('title', '') if request_data else ''
 
-        series_id = request_data.get('series_id')
-        series_title = request_data.get('title', '')
-        request_id = request_data.get('id')
-
-        if not series_id:
-            return jsonify({"success": False, "error": "Pending request has no series_id"}), 400
-
-        ok, err = assign_rule_to_series(series_id, rule_name, series_title=series_title, tmdb_id=tmdb_id)
+        ok, message = _apply_rule_to_selection_core(tmdb_id, rule_name)
         if not ok:
-            return jsonify({"success": False, "error": err}), 400
+            return jsonify({"success": False, "error": message}), 400
 
-        if request_id:
-            delete_pending_request(request_id)
-
-        return jsonify({"success": True, "rule": rule_name, "title": series_title})
+        return jsonify({"success": True, "rule": rule_name, "title": series_title, "message": message})
 
     except Exception as e:
         app.logger.error(f"Error in assign-pending-rule: {e}", exc_info=True)
@@ -6636,6 +6650,16 @@ def api_assign_series_rule():
     pending-request queue. Used by the Xadarr Android TV app's full-library
     browser (assign/change a rule on any Sonarr series, couch-only workflow).
     Body: {"series_id": ..., "rule_name": "..."}
+
+    Delegates to _assign_series_ids_to_rule - the same config-only function
+    /api/rules/assign (episeerr-ha/HA card's rule-change path) already uses.
+    Fixed 2026-09-11: previously called assign_rule_to_series, which
+    actively monitors + searches episodes per the rule - wrong for this
+    route's own documented contract. An already-tracked series being
+    reassigned should only be affected by always_have/keep_pilot; an
+    active grab only makes sense for a genuinely new/pending series (see
+    assign_rule_to_series's other remaining caller, _apply_rule_and_clear_pending,
+    which is correctly still used for that case).
     """
     try:
         data = request.get_json(silent=True) or {}
@@ -6655,13 +6679,22 @@ def api_assign_series_rule():
             return jsonify({"success": False, "error": "Series not found in Sonarr"}), 404
         series_title = sr.json().get('title', '')
 
-        # An already-tracked series won't have the episeerr_select tag —
-        # skip that removal step, it's only relevant coming out of the pending queue.
-        ok, err = assign_rule_to_series(
-            series_id, rule_name, series_title=series_title, remove_select_tag=False
-        )
-        if not ok:
-            return jsonify({"success": False, "error": err}), 400
+        config = load_config()
+        if rule_name not in config['rules']:
+            return jsonify({"success": False, "error": f"Rule '{rule_name}' not found"}), 404
+
+        _assign_series_ids_to_rule(config, rule_name, [str(series_id)])
+
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("rule.assigned", {
+                "title":      series_title,
+                "tmdb_id":    None,
+                "rule":       rule_name,
+                "media_type": "show",
+            })
+        except Exception as e:
+            app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
 
         return jsonify({"success": True, "rule": rule_name, "title": series_title})
 
