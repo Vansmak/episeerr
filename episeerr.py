@@ -6137,18 +6137,6 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
     title = request_data.get('title', 'series') if request_data else 'series'
     app.logger.info(f"Applied rule '{rule_name}' to {title}")
     _plex_watchlist_add_silent(tmdb_id, 'tv', title)
-
-    try:
-        from integrations.xadarr import fire_xadarr_webhook
-        fire_xadarr_webhook("rule.assigned", {
-            "title":      title,
-            "tmdb_id":    tmdb_id,
-            "rule":       rule_name,
-            "media_type": "show",
-        })
-    except Exception as e:
-        app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
-
     return True, f"Applied rule '{rule_name}' to {title}"
 
 
@@ -6634,6 +6622,17 @@ def api_assign_pending_rule():
         ok, message = _apply_rule_to_selection_core(tmdb_id, rule_name)
         if not ok:
             return jsonify({"success": False, "error": message}), 400
+
+        try:
+            from integrations.xadarr import fire_xadarr_webhook
+            fire_xadarr_webhook("rule.assigned", {
+                "title":      series_title,
+                "tmdb_id":    tmdb_id,
+                "rule":       rule_name,
+                "media_type": "show",
+            })
+        except Exception as e:
+            app.logger.debug(f"[Xadarr] rule.assigned webhook skipped: {e}")
 
         return jsonify({"success": True, "rule": rule_name, "title": series_title, "message": message})
 
