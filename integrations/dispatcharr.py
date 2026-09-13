@@ -779,6 +779,50 @@ class DispatcharrIntegration(ServiceIntegration):
                 "active_count": count,
             })
 
+        # ── Manual playlist/EPG refresh, for Xadarr's guide screen ──
+        # Kicks the same Celery tasks the scheduled provider syncs use — this
+        # is a couch-triggered "my guide looks stale" button, not a config
+        # change, so it fires every active M3U account plus every active EPG
+        # source rather than needing Xadarr to know specific provider ids.
+        # M3U refresh already fires the m3u_refreshed webhook back to this
+        # same integration on completion, which is what runs maintenance.sql —
+        # nothing else to trigger here for that part.
+        @bp.route("/refresh", methods=["POST"])
+        def manual_refresh():
+            cfg = _get_saved_config()
+            if not cfg:
+                return jsonify({"status": "error", "message": "Not configured"}), 400
+            base = (cfg.get("url") or "").rstrip("/")
+            headers = {"X-Api-Key": cfg.get("api_key", ""), "Content-Type": "application/json"}
+            results = {"m3u": False, "epg": []}
+            try:
+                r = requests.post(f"{base}/api/m3u/refresh/", headers=headers, timeout=10)
+                results["m3u"] = r.ok
+            except Exception as exc:
+                logger.warning(f"[Dispatcharr] manual M3U refresh failed: {exc}")
+            try:
+                r = requests.get(
+                    f"{base}/api/epg/sources/", headers=headers, timeout=10
+                )
+                sources = r.json() if r.ok else []
+            except Exception as exc:
+                logger.warning(f"[Dispatcharr] listing EPG sources failed: {exc}")
+                sources = []
+            for src in sources:
+                if not src.get("is_active", True):
+                    continue
+                try:
+                    r = requests.post(
+                        f"{base}/api/epg/import/", headers=headers,
+                        json={"id": src["id"]}, timeout=10,
+                    )
+                    results["epg"].append({"id": src["id"], "name": src.get("name"), "ok": r.ok})
+                except Exception as exc:
+                    logger.warning(f"[Dispatcharr] EPG refresh failed for source {src.get('id')}: {exc}")
+                    results["epg"].append({"id": src.get("id"), "name": src.get("name"), "ok": False})
+            ok = results["m3u"] or any(e["ok"] for e in results["epg"])
+            return jsonify({"status": "ok" if ok else "error", **results})
+
         # ── Full raw-provider catalog search ───────────────────────
         @bp.route("/streams/search", methods=["GET"])
         def streams_search():
