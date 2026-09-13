@@ -9,16 +9,36 @@
 --      stack OTA on LA locals
 --   8. Channel numbering — runs last after all merges and deletes
 --
--- Provider architecture (as of 2026-08-31):
---   Spice   (XC, 021.galaxypulse.link) → Entertainment, Movies, News, Sports, Locals
---           Source prefix: US |    — 1 concurrent stream, trial
---   Sanctum (XC, u.veiltheworld.com)   → same groups, same prefix
+-- Provider architecture (as of 2026-09-13):
+--   Sanctum (XC, u.veiltheworld.com)   → Entertainment, Movies, News, Sports, Locals
 --           Source prefix: US |    — 2 concurrent streams, paid to 2027-03-03; also the EPG source
+--
+--           u.veiltheworld.com is multi-homed: every resolver on this network (NextDNS,
+--           Cloudflare, the router) currently returns 198.255.96.85, and that's the address
+--           Dispatcharr actually connects to. In Sept 2026 that specific IP got network-blocked
+--           (refused outright, not a timeout — an anti-abuse flag from running the Spice trial
+--           against this same backend simultaneously, since resolved) for an extended period,
+--           while a second real IP for the same domain — 216.227.189.197 — stayed reachable the
+--           whole time. It surfaced only because the ISP's own DNS resolver happened to hand it
+--           out instead of .85 (a routing/ECS quirk, unrelated to the block itself) — nothing
+--           about the domain's actual DNS changed.
+--
+--           sanctum_failover_watchdog.sh (same directory, cron every 5 min) watches for exactly
+--           this again: if .85 stops answering but .197 still does, it pins the hostname to .197
+--           via a docker-compose override and recreates the dispatcharr container, then reverts
+--           automatically once .85 recovers. See that script for the full mechanism.
 --   HDHR    (OTA, 192.168.254.30)      → Favorites group; LA streams stacked manually
 --
---   Spice and Sanctum are the same upstream: byte-identical XMLTV, the same 9,122 tvg_ids, and
---   the same category names. That's why one set of mapping rules serves both, and why only one
---   of them needs to supply the guide. Their streams stack per channel for failover (Part 9 A).
+--   Mapping rules below still match both 'US | ' (Sanctum) and Spice's old prefix, since Spice
+--   was byte-identical upstream to Sanctum (same 9,122 tvg_ids, same category names) and the two
+--   were never distinguishable by group name - that's what made the shared rule set possible in
+--   the first place. No rule surgery needed for Spice's retirement: deactivating its M3U account
+--   in Dispatcharr (is_active = false) is enough - Part 9F already deletes dead stream links for
+--   any inactive account on the next run.
+--
+--   Retired 2026-09-13 (trial ended; ran against the same backend/IP as paid Sanctum, which risked
+--   the paid account being flagged as sharing/abuse when that IP got blocked by the provider):
+--   Spice  (XC, 021.galaxypulse.link) Source prefix: US |    — same upstream as Sanctum
 --
 --   Retired 2026-08-31, rules kept so a rollback needs no edit here:
 --   Titan  (XC, pxlsystems.cx → .st)  Source prefixes: USA |, Live Pay-Per View
@@ -85,11 +105,12 @@ WITH mapping AS (
       WHEN g_src.name ILIKE 'US: Regional Sports%'  THEN 'Sports'
       WHEN g_src.name ILIKE 'US: Factual%'          THEN 'Documentary'
       WHEN g_src.name ILIKE 'US: LOCALS%'           THEN 'Locals'
-      -- Spice + Sanctum source groups → clean target groups.
-      -- Both providers are the same upstream (byte-identical XMLTV, same 9,122 tvg_ids), so one
-      -- set of rules covers both and Part 9 Step A stacks their streams per channel for failover.
-      -- Note 'US | ' is distinct from Titan's 'USA | ' — the pattern can't collide, since the
-      -- character after "US" is a space in one and 'A' in the other.
+      -- 'US | ' source groups → clean target groups. Originally covered both Sanctum and the
+      -- now-retired Spice trial (same upstream, byte-identical XMLTV, same 9,122 tvg_ids), so
+      -- this rule was never provider-specific to begin with - Sanctum alone still matches it
+      -- fine now that Spice is gone. Part 9 Step A stacks matching streams per channel for
+      -- failover. Note 'US | ' is distinct from Titan's 'USA | ' — the pattern can't collide,
+      -- since the character after "US" is a space in one and 'A' in the other.
       WHEN g_src.name LIKE 'US | Entertainment%'    THEN 'Entertainment'
       WHEN g_src.name LIKE 'US | Movies%'           THEN 'Movies'
       WHEN g_src.name LIKE 'US | News%'             THEN 'News'
