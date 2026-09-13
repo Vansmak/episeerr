@@ -17,8 +17,12 @@
 # Logs only on an actual state change (switch, revert, or "both down" — a real outage, not a
 # single-IP block) — a healthy check every run would make the log useless within a day.
 #
+# The check itself is a bare TCP connect (see check_tcp below) on a 15-minute cadence, not 5 —
+# this runs forever against a provider whose abuse detection already flagged this account once,
+# and an "extended period" outage doesn't need finer-grained detection than that to catch fast.
+#
 # Install: crontab -e
-#   */5 * * * * /home/joe/projects/episeerr_custom/scripts/dispatcharr/sanctum_failover_watchdog.sh
+#   */15 * * * * /home/joe/projects/episeerr_custom/scripts/dispatcharr/sanctum_failover_watchdog.sh
 
 set -euo pipefail
 
@@ -37,15 +41,16 @@ log() {
 }
 
 check_tcp() {
-    # curl, not bash's /dev/tcp: a DROP-style block on this host doesn't reliably respect
-    # `timeout` wrapped around /dev/tcp's blocking connect() — curl's own --connect-timeout
-    # is enforced internally (non-blocking connect + select/poll) and actually returns on time.
-    # --resolve forces the connection to $1 while still sending the right SNI/Host for $DOMAIN,
-    # which also catches a TLS/SNI-level block, not just a raw TCP one. Exit 0 means the
-    # connection itself succeeded (any HTTP status counts, -f/--fail is deliberately not used);
-    # anything else — 7 (refused, the actual signature seen on the blocked IP), 28 (timeout),
-    # or otherwise — means not reachable.
-    curl -s -o /dev/null --connect-timeout "$TIMEOUT" --resolve "$DOMAIN:443:$1" "https://$DOMAIN/" 2>/dev/null
+    # Bare TCP connect/close via nc -z — no TLS handshake, no HTTP request, nothing that shows
+    # up as an application-level hit in Sanctum's own access logs. This runs on a schedule,
+    # forever, against a provider whose abuse detection already flagged this exact account once
+    # (see the header) — a full HTTPS GET every few minutes would itself look like automated
+    # probing. A bare connect is also all this needs: the actual Sept 2026 block was a pure
+    # TCP-level refusal, logged by ffmpeg before any TLS/HTTP layer was ever reached.
+    # bash's /dev/tcp wrapped in `timeout` was tried first and rejected — it doesn't reliably
+    # interrupt a blocking connect() against this host's specific (DROP-style) block behavior,
+    # confirmed while building this. nc's own -w timeout is enforced internally and does.
+    nc -z -w "$TIMEOUT" "$1" 443 2>/dev/null
 }
 
 override_active() {
