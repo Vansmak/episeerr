@@ -1456,6 +1456,45 @@ class XadarrIntegration(ServiceIntegration):
                 incoming_home_layout = body.setdefault("homeLayoutByProfile", {})
                 for pid, layout in existing_home_layout.items():
                     incoming_home_layout.setdefault(pid, layout)
+            # Reject a favouriteChannels collapse rather than saving it. A client-side bug can
+            # make a device honestly believe its own corrupted favourites are fresh local state —
+            # it pushes with a legitimate, newer timestamp, and nothing upstream of this endpoint
+            # can tell that apart from a real edit. That's exactly what destroyed a 13-channel
+            # favourites list down to 7 (missing every local) not once but twice in one evening on
+            # 2026-09-13, on two different devices, despite client-side fixes for the underlying
+            # bug — each still had its own stale local copy at the moment it synced. Only guards a
+            # *collapse*: a genuinely small list, or one that shrinks a little, is never blocked —
+            # only losing more than half of a double-digit-or-larger list in one write.
+            def _favorites_collapsed(existing_list, incoming_list):
+                existing_list = existing_list or []
+                incoming_list = incoming_list or []
+                return len(existing_list) >= 4 and len(incoming_list) < len(existing_list) / 2
+
+            existing_iptv_by_profile = existing.get("iptvByProfile") or {}
+            incoming_iptv_by_profile = body.get("iptvByProfile") or {}
+            for pid, existing_profile in existing_iptv_by_profile.items():
+                if not isinstance(existing_profile, dict):
+                    continue
+                incoming_profile = incoming_iptv_by_profile.get(pid)
+                if not isinstance(incoming_profile, dict):
+                    continue
+                if _favorites_collapsed(existing_profile.get("favoriteChannels"), incoming_profile.get("favoriteChannels")):
+                    logger.warning(
+                        "[Xadarr] Rejecting favoriteChannels collapse for profile %s from %s (%d -> %d) — keeping existing",
+                        pid, caller,
+                        len(existing_profile.get("favoriteChannels") or []),
+                        len(incoming_profile.get("favoriteChannels") or []),
+                    )
+                    incoming_profile["favoriteChannels"] = existing_profile.get("favoriteChannels")
+                    incoming_profile["favoriteChannelNames"] = existing_profile.get("favoriteChannelNames")
+            if _favorites_collapsed(existing.get("iptvFavoriteChannels"), body.get("iptvFavoriteChannels")):
+                logger.warning(
+                    "[Xadarr] Rejecting root iptvFavoriteChannels collapse from %s (%d -> %d) — keeping existing",
+                    caller,
+                    len(existing.get("iptvFavoriteChannels") or []),
+                    len(body.get("iptvFavoriteChannels") or []),
+                )
+                body["iptvFavoriteChannels"] = existing.get("iptvFavoriteChannels")
             ok = _save_settings(body)
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500
