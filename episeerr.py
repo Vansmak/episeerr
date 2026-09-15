@@ -3216,7 +3216,6 @@ def radarr_add_movie():
         }
         add_resp = http.post(f"{base}/api/v3/movie", headers=headers, json=payload, timeout=15)
         if add_resp.status_code in (200, 201):
-            _plex_watchlist_add_silent(tmdb_id, 'movie', (movie_data or {}).get('title', ''))
             return jsonify({'success': True, 'movie': add_resp.json()})
         return jsonify({'success': False, 'error': add_resp.text}), add_resp.status_code
     except Exception as e:
@@ -3322,7 +3321,6 @@ def sonarr_add_series():
         # Series is already in the Sonarr library (lookup returns id > 0)
         existing_id = series_meta.get('id') or 0
         if existing_id > 0:
-            _plex_watchlist_add_silent(tmdb_id, 'tv', title)
             if rule_name:
                 ok, err = _apply_rule_and_clear_pending(existing_id, rule_name, title, tmdb_id)
                 return jsonify({'success': ok, 'series_id': existing_id,
@@ -3361,7 +3359,6 @@ def sonarr_add_series():
         if add_resp.status_code in (200, 201):
             series_id = add_resp.json()['id']
             app.logger.info(f"Added '{title}' to Sonarr (ID {series_id}) → directing to selection")
-            _plex_watchlist_add_silent(tmdb_id, 'tv', title)
             if rule_name:
                 ok, err = _apply_rule_and_clear_pending(series_id, rule_name, title, tmdb_id)
                 return jsonify({'success': ok, 'series_id': series_id,
@@ -4329,24 +4326,6 @@ def plex_watchlist_enabled():
         return jsonify({'enabled': bool(svc.get('api_key', ''))})
     except Exception:
         return jsonify({'enabled': False})
-
-
-def _plex_watchlist_add_silent(tmdb_id: str, media_type: str, title: str = ''):
-    """Add to Plex watchlist as a background side-effect of a Discover add."""
-    try:
-        from settings_db import get_service as _get_svc
-        from integrations.plex import PlexIntegration
-        svc = _get_svc('plex', 'default') or {}
-        api_key = svc.get('api_key', '')
-        if not api_key:
-            return
-        ok, detail = PlexIntegration().add_to_watchlist(api_key, str(tmdb_id), media_type, title)
-        if ok:
-            app.logger.info(f"Added TMDB {tmdb_id} ({media_type}) to Plex watchlist")
-        else:
-            app.logger.debug(f"Plex watchlist add skipped/failed for TMDB {tmdb_id}: {detail}")
-    except Exception as e:
-        app.logger.debug(f"Plex watchlist add error for TMDB {tmdb_id}: {e}")
 
 
 @app.route('/api/plex/add-to-watchlist', methods=['POST'])
@@ -6153,7 +6132,6 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
 
     title = request_data.get('title', 'series') if request_data else 'series'
     app.logger.info(f"Applied rule '{rule_name}' to {title}")
-    _plex_watchlist_add_silent(tmdb_id, 'tv', title)
     return True, f"Applied rule '{rule_name}' to {title}"
 
 
@@ -6388,8 +6366,6 @@ def process_episode_selection():
             delete_pending_request(request_id)
             app.logger.info(f"Removed pending request: {request_id}")
 
-            _plex_watchlist_add_silent(
-                request_data.get('tmdb_id', ''), 'tv', request_data.get('title', ''))
             return redirect(url_for('rules_page'))
 
         else:
