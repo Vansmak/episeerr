@@ -694,6 +694,19 @@ def sync_rule_tag_to_sonarr(series_id, new_rule_name):
             logger.error(f"Failed to get/create tag for rule '{new_rule_name}'")
             return False
         
+        # Sonarr's own monitorNewItems ("all" by default) independently monitors
+        # any episode a metadata refresh adds to an already-monitored season -
+        # regardless of whether Episeerr's rule actually wants it. Episeerr's
+        # own reconcile_future_seasons (daily) and watch-event logic already
+        # decide what should be monitored; monitorNewItems only ever conflicts
+        # with that, never helps it (GitHub issue #93 - live-confirmed on
+        # three real shows, root cause traced to reconcile_future_seasons'
+        # premiere-catch and last_season+1 deferral both leaving a season
+        # monitored/deferred with nothing else protecting it from Sonarr's own
+        # auto-monitor in the meantime). Every Episeerr-managed series gets
+        # this turned off here, the same place its rule tag gets synced.
+        series['monitorNewItems'] = 'none'
+
         # Update series with new tags
         series['tags'] = updated_tags
         return update_series_in_sonarr(series)
