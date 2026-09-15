@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.9.1
+
+### 🐛 Bug Fixes
+
+- **Sonarr could silently grab episodes far outside a rule's intended window** — Sonarr's own `monitorNewItems` setting (`"all"` by default) independently monitors any episode a metadata refresh adds to an already-monitored season, regardless of what the rule actually wants. Episeerr only reacts to watch events, so an episode (or a whole newly-discovered season) that appears between two watch events was never seen and stayed monitored indefinitely — if a release existed, Sonarr's own RSS would grab it. Confirmed live on three real shows: `reconcile_future_seasons`' own "premiere caught" logic (which legitimately monitors just the season premiere) left the rest of that season vulnerable once Sonarr marked it monitored; separately, its `last_season + 1` deferral (skip a season assumed to be handled by the finale-advance webhook later) left that season completely unprotected in the meantime. Every Episeerr-managed series now has `monitorNewItems` set to `"none"` whenever its rule tag is synced — Episeerr's own reactive and scheduled reconciliation already independently decide what should be monitored, so this only removes a source of conflict, not a needed capability. (`episeerr_utils.py`, #93)
+- **Assigning a rule to an already-pending series left a stale "needs attention" entry behind** — a series resolved outside Episeerr's own flow (e.g. a manual grab via a raw Sonarr search) and then assigned a rule through the plain "existing series" path never had its pending-request entry cleared, since nothing in that path called the cleanup function. It now does. (`episeerr.py`)
+
 ## v3.9.0
 
 ### 🐛 Bug Fixes
