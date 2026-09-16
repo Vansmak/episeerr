@@ -93,28 +93,29 @@ def save_watch_event(series_id, series_title, season, episode, user):
     # Modified append with 7-day cleanup instead of max_entries
     _append_to_activity_log_with_cleanup(WATCHES_FILE, event, days=7)
     logger.info(f"📝 Logged watch event: {series_title} S{season}E{episode} by {user}")
-def save_request_event(request_data):
-    """Save Jellyseerr request before file is deleted"""
+def save_added_event(title, service, media_type='tv', requested_seasons=None, series_id=None):
+    """Save the most recent add event, regardless of source (Jellyseerr, Sonarr, Radarr,
+    Xadarr, direct add, etc.) — anything that results in a series/movie webhook firing."""
     try:
-        # Extract series ID to get backdrop
-        series_id = request_data.get('series_id') or request_data.get('tvdb_id')
-        backdrop_url = None
-        
-        if series_id:
-            backdrop_url = get_series_backdrop(series_id)
-        
-        # Add backdrop to request data
-        request_data['backdrop_url'] = backdrop_url
-        
-        # Save as last_request.json
+        backdrop_url = get_series_backdrop(series_id) if series_id else None
+
+        event = {
+            'title': title,
+            'service': service,
+            'media_type': media_type,
+            'requested_seasons': requested_seasons,
+            'backdrop_url': backdrop_url,
+            'timestamp': int(time.time())
+        }
+
         with open(REQUESTS_FILE, 'w') as f:
-            json.dump(request_data, f, indent=2)
-            
-        logger.info(f"📝 Logged request: {request_data.get('title', 'Unknown')}")
-        
+            json.dump(event, f, indent=2)
+
+        logger.info(f"📝 Logged added event: {title} via {service}")
+
     except Exception as e:
-        logger.error(f"Failed to save request event: {e}")
-        
+        logger.error(f"Failed to save added event: {e}")
+
 def save_search_event(series_id, series_title, season, episode, episode_ids):
     """Save when Sonarr searches for episodes (with 7-day auto-cleanup)"""
     from datetime import datetime
