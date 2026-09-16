@@ -80,16 +80,34 @@ def process_sonarr_webhook():
                     jellyseerr_requested_seasons = request_data.get('requested_seasons')
                     current_app.logger.info(f"✓ Found Jellyseerr request file: {jellyseerr_request_id}")
 
-                    try:
-                        from activity_storage import save_request_event
-                        save_request_event(request_data)
-                    except Exception as e:
-                        current_app.logger.error(f"Failed to log request to activity: {e}")
-
                     os.remove(request_file)
                     current_app.logger.info(f"✓ Removed Jellyseerr request file")
                 except Exception as e:
                     current_app.logger.error(f"Error processing Jellyseerr request file: {str(e)}")
+
+        # Log this addition to the dashboard's activity feed regardless of source
+        # (Jellyseerr, direct Sonarr add, Xadarr, Episeerr's own add flow, etc.) —
+        # this webhook fires for any new series, not just Jellyseerr-originated ones.
+        if series_title:
+            try:
+                from activity_storage import save_added_event
+                if jellyseerr_request_id:
+                    save_added_event(
+                        title=series_title,
+                        service='Jellyseerr/Overseerr',
+                        media_type='tv',
+                        requested_seasons=jellyseerr_requested_seasons,
+                        series_id=series_id
+                    )
+                else:
+                    save_added_event(
+                        title=series_title,
+                        service='Sonarr',
+                        media_type='tv',
+                        series_id=series_id
+                    )
+            except Exception as e:
+                current_app.logger.error(f"Failed to log series addition to activity feed: {e}")
 
         # ────────────────────────────────────────────────────────────────
         # Enhanced tag detection - supports all rule tags
@@ -651,6 +669,19 @@ def _handle_movie_added(data):
             return jsonify({'status': 'error', 'message': 'Failed to fetch movie from Radarr'}), 500
         movie_data = movie_resp.json()
         current_tag_ids = movie_data.get('tags', [])
+
+        # Log this addition to the dashboard's activity feed regardless of source
+        # (Radarr direct add, Xadarr, Episeerr's own add flow, etc.) — this webhook
+        # fires for any newly-added movie.
+        try:
+            from activity_storage import save_added_event
+            save_added_event(
+                title=movie_title,
+                service='Radarr',
+                media_type='movie'
+            )
+        except Exception as e:
+            current_app.logger.error(f"Failed to log movie addition to activity feed: {e}")
 
         # Build tag label map
         tags_resp = http.get(f"{radarr_url}/api/v3/tag", headers=headers, timeout=10)
