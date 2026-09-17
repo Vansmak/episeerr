@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.9.2
+
+### 🐛 Bug Fixes
+
+- **Jellyfin connections broke on Jellyfin 12+** — Jellyfin 12 disabled legacy auth by default, so it stopped accepting the `X-Emby-Token` header and `?api_key=` query param Episeerr used for every Jellyfin request; only `Authorization: MediaBrowser Token="..."` still works. Added a shared `media_server_auth_headers()` helper that sends both, so Jellyfin 12+ and Emby/pre-12 Jellyfin both keep working. Also fixed the `/api/integration/jellyfin/art` poster/thumbnail proxy, which relied entirely on the now-dead `?api_key=` param with no header fallback. (`episeerr_utils.py`, `integrations/jellyfin.py`, `dashboard.py`, `reconcile.py`, `movie_processor.py`, #94)
+
+### ✨ Improvements
+
+- **Dashboard "Recently Requested" only ever showed Jellyseerr requests** — the activity feed's add/request entry was populated exclusively from a Jellyseerr-specific request file, so anything added directly via Sonarr/Radarr, Xadarr, or Episeerr's own add flow never showed up there. The Sonarr/Radarr webhook handlers already fire for any new series/movie regardless of source, so the activity event is now logged from there instead — generically, with Jellyseerr's richer (season) data preserved when present. (`activity_storage.py`, `webhooks.py`, `dashboard.py`)
+
 ## v3.9.1
 
 ### 🐛 Bug Fixes
