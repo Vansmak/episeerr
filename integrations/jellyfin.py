@@ -6,7 +6,7 @@ Provides: Webhook-triggered polling for watch detection, real-time session monit
 import os
 import json
 import requests
-from episeerr_utils import http
+from episeerr_utils import http, media_server_auth_headers
 import logging
 import threading
 import time
@@ -150,7 +150,7 @@ class JellyfinIntegration(ServiceIntegration):
     def _resolve_user_id(self, config: Dict) -> Optional[str]:
         """Resolve Jellyfin user ID from config or /Users list."""
         jf_url = config['url']
-        headers = {'X-Emby-Token': config['api_key']}
+        headers = media_server_auth_headers(config['api_key'])
         try:
             resp = http.get(f"{jf_url}/Users", headers=headers, timeout=10)
             if not resp.ok:
@@ -176,7 +176,7 @@ class JellyfinIntegration(ServiceIntegration):
             return []
         jf_url = config['url']
         api_key = config['api_key']
-        headers = {'X-Emby-Token': api_key}
+        headers = media_server_auth_headers(api_key)
         try:
             resp = http.get(
                 f"{jf_url}/Users/{user_id}/Items",
@@ -253,7 +253,7 @@ class JellyfinIntegration(ServiceIntegration):
         
         try:
             url = f"{config['url']}/Sessions"
-            headers = {'X-Emby-Token': config['api_key']}
+            headers = media_server_auth_headers(config['api_key'])
             
             response = http.get(url, headers=headers, timeout=10)
             if response.ok:
@@ -508,7 +508,7 @@ class JellyfinIntegration(ServiceIntegration):
     def test_connection(self, url: str, api_key: str) -> tuple:
         """Test connection to Jellyfin server"""
         try:
-            headers = {'X-Emby-Token': api_key}
+            headers = media_server_auth_headers(api_key)
             response = http.get(f"{url}/System/Info", headers=headers, timeout=10)
             
             if response.ok:
@@ -846,7 +846,7 @@ class JellyfinIntegration(ServiceIntegration):
                 user_id = integration._resolve_user_id(config)
                 if not user_id:
                     return jsonify({'success': False, 'message': 'Could not resolve user'})
-                headers = {'X-Emby-Token': config['api_key']}
+                headers = media_server_auth_headers(config['api_key'])
                 resp = http.delete(
                     f"{config['url']}/Users/{user_id}/FavoriteItems/{item_id}",
                     headers=headers, timeout=10
@@ -895,7 +895,7 @@ class JellyfinIntegration(ServiceIntegration):
                 if not url or not api_key:
                     return jsonify({'success': False, 'message': 'Jellyfin not configured'})
 
-                headers = {'X-Emby-Token': api_key}
+                headers = media_server_auth_headers(api_key)
                 now_playing_data = None
                 server_reachable = False
 
@@ -1003,7 +1003,9 @@ class JellyfinIntegration(ServiceIntegration):
                 return Response('Missing url parameter', status=400)
             decoded = unquote(raw_url)
             try:
-                r = http.get(decoded, timeout=8, stream=True)
+                config = self.get_config()
+                headers = media_server_auth_headers(config['api_key']) if config else {}
+                r = http.get(decoded, headers=headers, timeout=8, stream=True)
                 r.raise_for_status()
                 content_type = r.headers.get('Content-Type', 'image/jpeg')
                 return Response(r.content, status=200, content_type=content_type)

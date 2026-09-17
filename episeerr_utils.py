@@ -105,6 +105,20 @@ def get_emby_settings():
             os.getenv('EMBY_API_KEY'),
             os.getenv('EMBY_USER_ID'))
 
+def media_server_auth_headers(api_key):
+    """Auth headers for Jellyfin/Emby API requests.
+
+    Sends both the legacy X-Emby-Token header (Emby, and older Jellyfin
+    with EnableLegacyAuthorization still on) and the Authorization header
+    Jellyfin 12+ requires by default - it stopped accepting X-Emby-Token
+    (and ?api_key=) entirely unless legacy auth is explicitly re-enabled.
+    Sending both is harmless: each server just uses whichever it understands.
+    """
+    return {
+        'X-Emby-Token': api_key,
+        'Authorization': f'MediaBrowser Token="{api_key}"'
+    }
+
 # In modified_episeerr.py
 REQUESTS_DIR = os.path.join(os.getcwd(), 'requests')
 

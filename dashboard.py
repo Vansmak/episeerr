@@ -91,7 +91,7 @@ def _enrich_watched_from_jellyfin(watched_episodes: set, recent_downloads: list)
 
     try:
         from settings_db import get_service
-        from episeerr_utils import normalize_url
+        from episeerr_utils import normalize_url, media_server_auth_headers
 
         svc = get_service('jellyfin', 'default')
         if not svc:
@@ -104,7 +104,7 @@ def _enrich_watched_from_jellyfin(watched_episodes: set, recent_downloads: list)
         if not jf_url or not jf_api_key:
             return
 
-        headers = {'X-Emby-Token': jf_api_key}
+        headers = media_server_auth_headers(jf_api_key)
 
         # Resolve a Jellyfin user UUID to scope the played-status query.
         # GET /Users returns all users (requires an admin-scoped API key).
