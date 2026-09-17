@@ -27,7 +27,7 @@ automation_held is set.
 import logging
 from datetime import datetime, timezone
 
-from episeerr_utils import http
+from episeerr_utils import http, media_server_auth_headers
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _sweep_emby_api(service_name, since_ts=0):
 
     resp = http.get(
         f"{config['url'].rstrip('/')}/Users/{user_id}/Items",
-        headers={'X-Emby-Token': config['api_key']},
+        headers=media_server_auth_headers(config['api_key']),
         params={
             'IncludeItemTypes': 'Episode', 'Recursive': 'true',
             'Filters': 'IsPlayed', 'SortBy': 'DatePlayed', 'SortOrder': 'Descending',

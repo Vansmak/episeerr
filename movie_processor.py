@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import requests
 from dotenv import load_dotenv
 
-from episeerr_utils import normalize_url, http
+from episeerr_utils import normalize_url, http, media_server_auth_headers
 from logging_config import main_logger as logger
 from media_processor import (
     setup_cleanup_logging, load_config, load_global_settings, parse_date_fixed
@@ -183,7 +183,7 @@ def _build_jellyfin_emby_watch_cache(is_emby=False):
     url, api_key, user_id = get_emby_settings() if is_emby else get_jellyfin_settings()
     if not url or not api_key or not user_id:
         return {}
-    headers = {'X-Emby-Token': api_key}
+    headers = media_server_auth_headers(api_key)
     cache = {}
     try:
         resp = http.get(
