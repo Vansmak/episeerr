@@ -730,6 +730,37 @@ def sync_rule_tag_to_sonarr(series_id, new_rule_name):
         return False
 
 
+def ensure_monitor_new_items_off(series_id, series_data=None):
+    """
+    One-time-per-series fix for GitHub issue #93: sync_rule_tag_to_sonarr sets
+    monitorNewItems='none' on assignment/reassignment, but a series whose tag
+    already matches config never goes through that function again, so existing
+    installs never get swept (confirmed live: 100/101 managed series still on
+    Sonarr's 'all' default two days after upgrading, per issue #93 follow-up).
+    Called from reconcile_series_drift's no-op ('matches') branch, which the
+    daily reconciliation sweep hits for every managed series.
+
+    Args:
+        series_id: Sonarr series ID
+        series_data: Pre-fetched series dict (avoids a redundant API call in
+            bulk loops that already have it)
+
+    Returns:
+        bool: True if a change was written, False if already correct or failed
+    """
+    try:
+        series = series_data if series_data is not None else get_series_from_sonarr(series_id)
+        if not series:
+            return False
+        if series.get('monitorNewItems') == 'none':
+            return False
+        series['monitorNewItems'] = 'none'
+        return update_series_in_sonarr(series)
+    except Exception as e:
+        logger.error(f"Error disabling monitorNewItems for series {series_id}: {str(e)}")
+        return False
+
+
 def remove_all_episeerr_tags(series_id):
     """
     Remove all episeerr_* tags from a series (used when unassigning).
@@ -868,6 +899,7 @@ def reconcile_series_drift(series_id, config, series_data=None):
     if config_rule:
         matches, actual_tag_rule = validate_series_tag(series_id, config_rule, series_data=series_data, config=config)
         if matches:
+            ensure_monitor_new_items_off(series_id, series_data=series_data)
             return config_rule, False
 
         if actual_tag_rule:

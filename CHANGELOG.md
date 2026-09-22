@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.3
+
+### 🐛 Bug Fixes
+
+- **v3.9.1's `monitorNewItems` fix (issue #93) never reached already-assigned series** — it only ran inside `sync_rule_tag_to_sonarr`, which is only called on rule assignment/reassignment, so a series whose tag already matched config was never touched again. Confirmed live by a reporter: 100 of 101 managed series were still on Sonarr's `"all"` default two days after upgrading to v3.9.1. Added `ensure_monitor_new_items_off()`, now called from `reconcile_series_drift`'s no-drift ("matches") branch — the same path the daily reconciliation sweep and every watch event already run for every managed series — so existing installs get swept without any manual per-series action. (`episeerr_utils.py`, #93)
+
 ## v3.9.2
 
 ### 🐛 Bug Fixes
