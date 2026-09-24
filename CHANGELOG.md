@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.5
+
+### ✨ Improvements
+
+- **Plex watchlist TV adds ignored the "Auto-assign new series to default rule" setting** — a series added to Sonarr directly (no episeerr tag) already skips the review step when that global setting is on, but a watchlist-sync add always tagged `episeerr_select` unconditionally, forcing a manual rule/episode pick every time regardless of the setting. `add_tv_to_sonarr` now checks it too and tags straight to the configured default rule when enabled, so a watchlist add behaves the same as any other new-series entry point. Off by default (unchanged behavior) - only takes effect if you've already turned the global setting on. (`integrations/plex.py`)
+
 ## v3.9.4
 
 ### 🐛 Bug Fixes

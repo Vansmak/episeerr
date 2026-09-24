@@ -768,13 +768,16 @@ class PlexIntegration(ServiceIntegration):
             return None
     
     def add_tv_to_sonarr(self, item: dict, sync_config: dict) -> dict:
-        """Add a TV show to Sonarr with episeerr_select tag.
-        
-        Watchlist TV shows always use episeerr_select so the user gets
-        a review touchpoint — pick a rule or select specific episodes.
-        The sonarr_webhook detects episeerr_select → creates a pending
-        selection request → sends notification → user decides.
-        
+        """Add a TV show to Sonarr.
+
+        By default, tags episeerr_select so the user gets a review touchpoint —
+        the sonarr_webhook detects it, creates a pending selection request, sends
+        a notification, and the user picks a rule or specific episodes. If the
+        global "Auto-assign new series to default rule" setting is on, tags
+        directly with the configured default rule instead, skipping the review
+        step the same way a series added to Sonarr with no episeerr tag already
+        does.
+
         Returns: {'success': bool, 'status': str, 'series_id': int or None, 'message': str}
         """
         try:
@@ -825,25 +828,43 @@ class PlexIntegration(ServiceIntegration):
                 if folders_resp.ok and folders_resp.json():
                     root_folder = folders_resp.json()[0]['path']
             
-            # Get episeerr_select tag ID
+            # By default, tag episeerr_select so the user gets a review touchpoint.
+            # If "Auto-assign new series to default rule" (Scheduler settings) is on,
+            # honor it here too - it already skips this review step for a series
+            # added directly to Sonarr with no episeerr tag at all, but a watchlist
+            # add always used episeerr_select unconditionally, which bypassed that
+            # setting entirely. Tagging straight to the default rule instead makes
+            # a watchlist add behave the same as any other new-series entry point.
+            target_tag_label = 'episeerr_select'
+            try:
+                from media_processor import load_global_settings
+                if load_global_settings().get('auto_assign_new_series', False):
+                    from episeerr import load_config
+                    ep_config = load_config()
+                    default_rule = ep_config.get('default_rule')
+                    if default_rule and default_rule in ep_config.get('rules', {}):
+                        target_tag_label = f'episeerr_{default_rule}'
+            except Exception as auto_assign_err:
+                logger.warning(f"Error checking auto-assign-new-series setting: {auto_assign_err}")
+
             tags = []
             try:
                 tag_resp = http.get(f"{sonarr_url}/api/v3/tag", headers=headers, timeout=10)
                 if tag_resp.ok:
                     existing_tags = {t['label'].lower(): t['id'] for t in tag_resp.json()}
-                    if 'episeerr_select' in existing_tags:
-                        tags.append(existing_tags['episeerr_select'])
+                    if target_tag_label in existing_tags:
+                        tags.append(existing_tags[target_tag_label])
                     else:
                         # Create it
                         create_resp = http.post(f"{sonarr_url}/api/v3/tag",
                                                     headers=headers,
-                                                    json={'label': 'episeerr_select'},
+                                                    json={'label': target_tag_label},
                                                     timeout=10)
                         if create_resp.ok:
                             tags.append(create_resp.json()['id'])
             except Exception as tag_err:
-                logger.warning(f"Error setting episeerr_select tag: {tag_err}")
-            
+                logger.warning(f"Error setting {target_tag_label} tag: {tag_err}")
+
             add_payload = {
                 'tvdbId': series_data.get('tvdbId'),
                 'title': series_data.get('title'),
@@ -863,10 +884,16 @@ class PlexIntegration(ServiceIntegration):
             
             if add_resp.ok:
                 series_id = add_resp.json().get('id')
-                logger.info(f"✅ Added TV show to Sonarr: {item.get('title')} (ID: {series_id}) "
-                           f"with episeerr_select tag — awaiting rule/episode selection")
+                if target_tag_label == 'episeerr_select':
+                    logger.info(f"✅ Added TV show to Sonarr: {item.get('title')} (ID: {series_id}) "
+                               f"with episeerr_select tag — awaiting rule/episode selection")
+                    message = f"Added {item.get('title')} — pending selection"
+                else:
+                    logger.info(f"✅ Added TV show to Sonarr: {item.get('title')} (ID: {series_id}) "
+                               f"with {target_tag_label} tag — auto-assigned via default rule")
+                    message = f"Added {item.get('title')} — auto-assigned to default rule"
                 return {'success': True, 'status': 'added', 'series_id': series_id,
-                        'message': f"Added {item.get('title')} — pending selection"}
+                        'message': message}
             elif add_resp.status_code == 400 and 'already been added' in add_resp.text.lower():
                 return {'success': True, 'status': 'already_exists', 'series_id': None,
                         'message': f"{item.get('title')} already in Sonarr"}
