@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.4
+
+### 🐛 Bug Fixes
+
+- **A watchlist item that disappeared from Sonarr/Radarr after being synced was never re-added** — the Plex watchlist sync cached a terminal status (`already_exists`, `added_to_sonarr`, `added_to_radarr`, `pending_selection`) the first time an item was successfully processed and trusted it forever, so if that series/movie/pending-request later went away outside Episeerr's control (a manual delete in Sonarr, a rejected pending request), the sync kept skipping it on every future run even though it was genuinely no longer there — and still sitting on the user's Plex watchlist. Confirmed live: a show stayed skipped indefinitely after being removed from Sonarr. Now every sync run re-verifies those statuses against Sonarr/Radarr's actual current state instead of trusting the cache, and re-adds if it's genuinely gone. Only truly deliberate terminal states (`watched`, `cleaned_up`) still hard-skip, since those represent an intentional decision that re-adding would fight. To keep this from costing a full-library fetch per watchlist item, `check_exists_in_sonarr`/`check_exists_in_radarr` now accept a pre-fetched list, and `sync_watchlist` fetches each once per run instead of once per item. (`integrations/plex.py`)
+
 ## v3.9.3
 
 ### 🐛 Bug Fixes

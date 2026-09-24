@@ -697,18 +697,29 @@ class PlexIntegration(ServiceIntegration):
 
         return plex_config.get('watchlist_sync', defaults)
     
-    def check_exists_in_sonarr(self, tmdb_id: str = None, tvdb_id: str = None) -> Optional[dict]:
-        """Check if a show already exists in Sonarr by TMDB or TVDB ID"""
+    def check_exists_in_sonarr(self, tmdb_id: str = None, tvdb_id: str = None,
+                                series_list: list = None) -> Optional[dict]:
+        """Check if a show already exists in Sonarr by TMDB or TVDB ID.
+
+        Pass series_list (a prior GET /api/v3/series response) to avoid a
+        fresh full-library fetch per item when checking many items in a loop
+        (see sync_watchlist, which re-verifies every previously-synced item
+        on every run rather than trusting a cached "already added" status -
+        the cache alone can't tell if the series was later removed from
+        Sonarr outside Episeerr's control).
+        """
         try:
-            import sonarr_utils
-            prefs = sonarr_utils.load_preferences()
-            headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
-            
-            resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
-            if not resp.ok:
-                return None
-            
-            for series in resp.json():
+            if series_list is None:
+                import sonarr_utils
+                prefs = sonarr_utils.load_preferences()
+                headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
+
+                resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series", headers=headers, timeout=10)
+                if not resp.ok:
+                    return None
+                series_list = resp.json()
+
+            for series in series_list:
                 if tmdb_id and str(series.get('tmdbId')) == str(tmdb_id):
                     return series
                 if tvdb_id and str(series.get('tvdbId')) == str(tvdb_id):
@@ -717,32 +728,38 @@ class PlexIntegration(ServiceIntegration):
         except Exception as e:
             logger.error(f"Error checking Sonarr: {e}")
             return None
-    
-    def check_exists_in_radarr(self, tmdb_id: str) -> Optional[dict]:
-        """Check if a movie already exists in Radarr by TMDB ID"""
+
+    def check_exists_in_radarr(self, tmdb_id: str, movie_list: list = None) -> Optional[dict]:
+        """Check if a movie already exists in Radarr by TMDB ID.
+
+        Pass movie_list (a prior GET /api/v3/movie response) to avoid a
+        fresh full-library fetch per item — see check_exists_in_sonarr.
+        """
         try:
-            from integrations import radarr as radarr_mod
-            radarr_prefs = radarr_mod.load_preferences() if hasattr(radarr_mod, 'load_preferences') else None
-            
-            if not radarr_prefs:
-                # Fallback: try settings_db
-                from settings_db import get_service
-                radarr_config = get_service('radarr') or {}
-                radarr_url = radarr_config.get('url', '').rstrip('/')
-                radarr_key = radarr_config.get('api_key', '')
-            else:
-                radarr_url = radarr_prefs.get('RADARR_URL', '').rstrip('/')
-                radarr_key = radarr_prefs.get('RADARR_API_KEY', '')
-            
-            if not radarr_url or not radarr_key:
-                return None
-            
-            headers = {'X-Api-Key': radarr_key}
-            resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
-            if not resp.ok:
-                return None
-            
-            for movie in resp.json():
+            if movie_list is None:
+                from integrations import radarr as radarr_mod
+                radarr_prefs = radarr_mod.load_preferences() if hasattr(radarr_mod, 'load_preferences') else None
+
+                if not radarr_prefs:
+                    # Fallback: try settings_db
+                    from settings_db import get_service
+                    radarr_config = get_service('radarr') or {}
+                    radarr_url = radarr_config.get('url', '').rstrip('/')
+                    radarr_key = radarr_config.get('api_key', '')
+                else:
+                    radarr_url = radarr_prefs.get('RADARR_URL', '').rstrip('/')
+                    radarr_key = radarr_prefs.get('RADARR_API_KEY', '')
+
+                if not radarr_url or not radarr_key:
+                    return None
+
+                headers = {'X-Api-Key': radarr_key}
+                resp = http.get(f"{radarr_url}/api/v3/movie", headers=headers, timeout=10)
+                if not resp.ok:
+                    return None
+                movie_list = resp.json()
+
+            for movie in movie_list:
                 if str(movie.get('tmdbId')) == str(tmdb_id):
                     return movie
             return None
@@ -959,7 +976,36 @@ class PlexIntegration(ServiceIntegration):
             
             if not watchlist_items:
                 return {'success': True, 'message': 'Watchlist empty', 'processed': 0}
-            
+
+            # Fetch each library once and reuse for every item below - avoids a
+            # separate GET /api/v3/series or /movie per watchlist item now that
+            # already-synced items are re-verified every run (see the skip check
+            # below) instead of just trusting a possibly-stale cached status.
+            series_list = None
+            try:
+                import sonarr_utils
+                prefs = sonarr_utils.load_preferences()
+                resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series",
+                                 headers={'X-Api-Key': prefs['SONARR_API_KEY']}, timeout=15)
+                if resp.ok:
+                    series_list = resp.json()
+            except Exception as e:
+                logger.warning(f"[Plex] Could not pre-fetch Sonarr series list: {e}")
+
+            movie_list = None
+            try:
+                from settings_db import get_service as _get_service
+                radarr_config = _get_service('radarr') or {}
+                radarr_url = radarr_config.get('url', '').rstrip('/')
+                radarr_key = radarr_config.get('api_key', '')
+                if radarr_url and radarr_key:
+                    resp = http.get(f"{radarr_url}/api/v3/movie",
+                                     headers={'X-Api-Key': radarr_key}, timeout=15)
+                    if resp.ok:
+                        movie_list = resp.json()
+            except Exception as e:
+                logger.warning(f"[Plex] Could not pre-fetch Radarr movie list: {e}")
+
             results = {
                 'success': True,
                 'processed': 0,
@@ -974,21 +1020,28 @@ class PlexIntegration(ServiceIntegration):
             for item in watchlist_items:
                 item_key = f"{item['type']}_{item.get('tmdb_id') or item.get('rating_key')}"
                 
-                # Skip if already synced and in a terminal state
+                # Skip only deliberate terminal outcomes (watched + cleaned up per
+                # the user's own cleanup rule) without re-checking anything - re-adding
+                # those would fight the cleanup decision. Everything else - including
+                # 'already_exists'/'added_to_sonarr'/'added_to_radarr'/'pending_selection'
+                # - falls through to the normal per-item checks below every run, since
+                # those only mean "was true as of the last sync": the series/movie/request
+                # can disappear later outside Episeerr's control (manual delete in Sonarr,
+                # a rejected pending request, etc.), and a cached status alone can't detect
+                # that. Confirmed live: a watchlist show stayed skipped forever after being
+                # removed from Sonarr, because the cache still said 'already_exists'.
                 if item_key in sync_data['synced_items']:
                     existing = sync_data['synced_items'][item_key]
-                    if existing.get('status') in ('added_to_sonarr', 'added_to_radarr', 
-                                                   'already_exists', 'watched', 'cleaned_up',
-                                                   'pending_selection'):
+                    if existing.get('status') in ('watched', 'cleaned_up'):
                         results['skipped'] += 1
                         continue
-                    # If previous attempt errored, retry
+                    # Everything else (including a previous error) retries/re-verifies
                 
                 # ── TV Shows ──────────────────────────────────────────
                 if item.get('type') == 'show':
                     # Always check Sonarr first — if it's there, don't touch it
                     existing_series = self.check_exists_in_sonarr(
-                        tmdb_id=item.get('tmdb_id'), tvdb_id=item.get('tvdb_id'))
+                        tmdb_id=item.get('tmdb_id'), tvdb_id=item.get('tvdb_id'), series_list=series_list)
                     
                     if existing_series:
                         # Also check if it's already in an Episeerr rule
@@ -1076,7 +1129,7 @@ class PlexIntegration(ServiceIntegration):
                 elif item.get('type') == 'movie':
                     # Always check Radarr first
                     if item.get('tmdb_id'):
-                        existing_movie = self.check_exists_in_radarr(item['tmdb_id'])
+                        existing_movie = self.check_exists_in_radarr(item['tmdb_id'], movie_list=movie_list)
                     else:
                         existing_movie = None
                     
