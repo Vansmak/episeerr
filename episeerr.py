@@ -5768,12 +5768,22 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
             _get_count = _rule_cfg.get('get_count', 1)
             _action_option = _rule_cfg.get('action_option', 'monitor')
 
-            _eps_resp = http.get(
-                f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
-                headers=_rule_headers
-            )
-            if _eps_resp.ok:
-                _all_eps = _eps_resp.json()
+            # Sonarr creates episode rows asynchronously (RefreshEpisodeService) after
+            # POST /series returns - for a just-added series the very next GET here can
+            # still come back empty, silently skipping monitor/search entirely (episeerr#95).
+            # Poll briefly until episodes actually exist.
+            _all_eps = []
+            for _attempt in range(15):
+                _eps_resp = http.get(
+                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                    headers=_rule_headers
+                )
+                if _eps_resp.ok:
+                    _all_eps = _eps_resp.json()
+                    if _all_eps:
+                        break
+                time.sleep(1)
+            if _all_eps:
                 _starting_season = 1
                 _season_eps = sorted(
                     [ep for ep in _all_eps if ep.get('seasonNumber') == _starting_season],
@@ -5816,6 +5826,16 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
                                 app.logger.error(f"Episode search failed: {_srch_resp.text}")
                     else:
                         app.logger.error(f"Failed to monitor episodes: {_mon_resp.text}")
+                else:
+                    app.logger.warning(
+                        f"No episodes matched get_type={_get_type}/get_count={_get_count} "
+                        f"for series {series_id} - nothing monitored or searched"
+                    )
+            else:
+                app.logger.warning(
+                    f"Sonarr had no episodes for series {series_id} after {_attempt + 1}s "
+                    f"of polling - nothing monitored or searched"
+                )
         except Exception as e:
             app.logger.error(f"get_type monitoring failed for series {series_id}: {e}")
 

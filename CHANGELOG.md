@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.6
+
+### 🐛 Bug Fixes
+
+- **Adding a new show via the search bar and clicking Apply Rule could silently monitor/search nothing** — `_apply_rule_to_selection_core` fetched the newly-added series' episodes from Sonarr immediately after the `POST /series` call, but Sonarr creates episode rows asynchronously (`RefreshEpisodeService`) after that call returns, so the very next `GET /episode` could come back empty — computing zero episodes to monitor, with no error or warning logged. Now polls for up to 15 seconds until Sonarr actually has episodes for the series, and logs a warning (instead of silently doing nothing) if it still comes up empty, or if the rule's `get_type`/`get_count` genuinely matches no episodes. (`episeerr.py`, #95)
+
 ## v3.9.5
 
 ### ✨ Improvements
