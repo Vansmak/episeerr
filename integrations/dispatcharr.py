@@ -678,12 +678,13 @@ class DispatcharrIntegration(ServiceIntegration):
                     _bg_sync(api_url, api_key, delay=1.0)
 
             elif event in ("m3u_refresh", "m3u_refreshed"):
-                logger.info("[Dispatcharr] M3U refreshed — running maintenance script")
-                threading.Thread(
-                    target=_run_maintenance,
-                    daemon=True,
-                    name="dispatcharr-maintenance"
-                ).start()
+                # Disabled 2026-09-28: group curation moved entirely to Xadarr's hiddenGroups
+                # (Joe: "MAKE SURE THE SCRIPT FOR MAIN[TENANCE] IS NO LONGER BEING TRIGGERED ON DP
+                # REFRESHES"). Dispatcharr is now a straight passthrough for the one remaining
+                # provider (Sanctum) -- no multi-provider merge, no whitelist, nothing this script
+                # did is still needed. Left in place (not deleted) in case a future setup change
+                # brings back multiple providers needing failover-stacking again.
+                logger.info("[Dispatcharr] M3U refreshed — maintenance script disabled, skipping")
             else:
                 logger.debug(f"[Dispatcharr] Ignored unhandled event: {event!r}")
 
