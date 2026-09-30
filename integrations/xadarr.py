@@ -2922,7 +2922,8 @@ class XadarrIntegration(ServiceIntegration):
             now_ts = time.time()
             cached = _guide_schedule_cache.get("data")
             cached_at = _guide_schedule_cache.get("at", 0.0)
-            if only_tvdb is None and cached is not None and (now_ts - cached_at) < _GUIDE_SCHEDULE_TTL_SECONDS:
+            force_refresh = request.args.get("refresh") == "1"
+            if only_tvdb is None and not force_refresh and cached is not None and (now_ts - cached_at) < _GUIDE_SCHEDULE_TTL_SECONDS:
                 return jsonify({"shows": cached})
 
             cfg = get_sonarr_config()
@@ -3079,6 +3080,10 @@ class XadarrIntegration(ServiceIntegration):
                     "seriesId": series_id,
                     "tvdbId": tvdb_id,
                     "title": title,
+                    # 16:9 backdrop for the guide's preview box (Sonarr's own cached fanart,
+                    # same URL style _sonarr_calendar uses for posters).
+                    "fanart": f"{sonarr_url}/api/v3/mediacover/{series_id}/fanart.jpg?apikey={api_key}",
+                    "overview": series.get("overview", ""),
                     "now": None,
                     "next": None,
                     "lastPlayed": None,
@@ -3153,7 +3158,7 @@ class XadarrIntegration(ServiceIntegration):
 
             now_ts = time.time()
             cached = _movie_guide_cache.get("data")
-            if cached is not None and (now_ts - _movie_guide_cache.get("at", 0.0)) < _GUIDE_SCHEDULE_TTL_SECONDS:
+            if request.args.get("refresh") != "1" and cached is not None and (now_ts - _movie_guide_cache.get("at", 0.0)) < _GUIDE_SCHEDULE_TTL_SECONDS:
                 return jsonify(cached)
 
             cfg = get_radarr_config() or {}
@@ -3195,9 +3200,9 @@ class XadarrIntegration(ServiceIntegration):
                 except Exception as exc:
                     logger.debug(f"[Xadarr] movie guide: Plex watched lookup failed: {exc}")
 
-            def _poster(m):
+            def _poster(m, kind="poster"):
                 for img in m.get("images", []):
-                    if img.get("coverType") == "poster":
+                    if img.get("coverType") == kind:
                         return img.get("remoteUrl") or ""
                 return ""
 
@@ -3222,6 +3227,7 @@ class XadarrIntegration(ServiceIntegration):
                         "year": m.get("year"),
                         "overview": m.get("overview", ""),
                         "poster": _poster(m),
+                        "fanart": _poster(m, "fanart"),
                         "startMs": cursor_ms,
                         "endMs": cursor_ms + runtime_ms,
                     })
@@ -3242,6 +3248,7 @@ class XadarrIntegration(ServiceIntegration):
                     "year": m.get("year"),
                     "overview": m.get("overview", ""),
                     "poster": _poster(m),
+                    "fanart": _poster(m, "fanart"),
                     "releaseDate": _release(m),
                 }
                 for m in movies
