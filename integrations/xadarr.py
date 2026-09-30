@@ -47,6 +47,7 @@ import os
 import json
 import queue
 import logging
+import re
 import subprocess
 import tempfile
 import threading
@@ -204,8 +205,16 @@ def _xw_iptv(blob: dict) -> dict:
 
 
 def _xw_set_iptv(blob: dict, m3u: str, epg: str) -> None:
+    # Must merge onto the existing per-profile dict, not replace it. This is the one field this
+    # legacy single-URL dashboard form edits; iptvByProfile[pid] also carries hiddenGroups,
+    # favoriteChannels, playlists (the real multi-playlist array the app itself uses) and more --
+    # a plain assignment here drops all of it. Confirmed live 2026-09-28: pressing "Save IPTV" on
+    # this exact form wiped a 218-entry hiddenGroups list and every favorite, because this line
+    # did exactly that.
     pid = _xw_pid(blob)
-    blob.setdefault("iptvByProfile", {})[pid] = {"m3uUrl": m3u, "epgUrl": epg}
+    profile = blob.setdefault("iptvByProfile", {}).setdefault(pid, {})
+    profile["m3uUrl"] = m3u
+    profile["epgUrl"] = epg
     blob["iptvM3uUrl"] = m3u
     blob["iptvEpgUrl"] = epg
 
@@ -580,6 +589,12 @@ def _xw_log_webhook(entry: dict) -> None:
 NEOLINK_RECORDINGS_DIR = Path(os.environ.get("NEOLINK_RECORDINGS_DIR", "/neolink-recordings"))
 
 _neolink_token_cache = {"token": None, "fetched_at": 0.0}
+
+# _sonarr_guide_schedule() cache -- that call fans out one Sonarr request per monitored
+# series (Sonarr has no bulk per-episode endpoint), unlike _sonarr_calendar()'s single
+# bulk call, so it shouldn't re-run on every guide load.
+_GUIDE_SCHEDULE_TTL_SECONDS = 180
+_guide_schedule_cache = {"data": None, "at": 0.0}
 
 # Neolink has no live-snapshot API (only event thumbnails), so camera grid tiles
 # would otherwise show a stale frame from whenever the last motion event fired.
@@ -974,9 +989,29 @@ def _load_settings() -> Optional[dict]:
 
 
 def _save_settings(data: dict) -> bool:
+    """Persist the blob, stamping a monotonic syncVersion on every save.
+
+    Replaces client-supplied `updatedAt` (wall-clock time) as the thing devices arbitrate
+    sync conflicts against. Wall-clock arbitration assumes every device's clock agrees with
+    reality, which is false on this network -- a TV here runs ~2 minutes fast, and the host
+    itself has run with a dead-NTP clock before. A device with a skewed-forward clock can
+    claim to be "newest" and win against a real, more recent edit no matter what either side
+    actually contains. `syncVersion` sidesteps this: it only increments by 1 per real save,
+    server-side, so accepting or rejecting a write never depends on any device's notion of
+    "now" -- see the version check in put_settings(). Read here without going through
+    _load_settings() (which also takes _LOCK) to avoid deadlocking against ourselves.
+    """
     with _LOCK:
         try:
             os.makedirs(_DATA_DIR, exist_ok=True)
+            previous_version = 0
+            try:
+                if os.path.exists(_SETTINGS_FILE):
+                    with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                        previous_version = int((json.load(f) or {}).get("syncVersion") or 0)
+            except Exception:
+                previous_version = 0
+            data["syncVersion"] = previous_version + 1
             with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False)
             return True
@@ -1495,6 +1530,33 @@ class XadarrIntegration(ServiceIntegration):
                     len(body.get("iptvFavoriteChannels") or []),
                 )
                 body["iptvFavoriteChannels"] = existing.get("iptvFavoriteChannels")
+            # Version check, not a timestamp check. A device proves it isn't stale by having
+            # actually seen the current server state -- not by claiming a newer clock. Only
+            # devices sending a syncVersion (any build with this change) are gated; a build
+            # that predates it sends none and falls through to the old, clock-based behavior
+            # on the client side, so a mixed fleet degrades gracefully while every device
+            # updates. Joe, 2026-09-27, after a clock-skewed device kept clobbering a freshly
+            # curated hiddenGroups list despite two prior client-side fixes: "I've been
+            # consistent that not[hing] should push there[sic] settings unless it's the
+            # newest yet[...] every device I move to clobbers the settings."
+            incoming_version = body.get("syncVersion")
+            if incoming_version is not None:
+                current_version = int(existing.get("syncVersion") or 0)
+                try:
+                    incoming_version = int(incoming_version)
+                except (TypeError, ValueError):
+                    incoming_version = None
+                if incoming_version is not None and incoming_version != current_version:
+                    logger.warning(
+                        "[Xadarr] Rejecting settings PUT from %s: stale syncVersion %s != current %s",
+                        caller, incoming_version, current_version,
+                    )
+                    return jsonify({
+                        "status": "conflict",
+                        "reason": "stale syncVersion — pull the current settings and retry",
+                        "serverVersion": current_version,
+                    }), 409
+
             ok = _save_settings(body)
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500
@@ -1590,6 +1652,9 @@ class XadarrIntegration(ServiceIntegration):
                                 data[ep_key] = time.time()
                                 _processed_episodes_save(data)
 
+                        # A just-finished episode moves that show's NOW slot -- don't serve
+                        # the guide (or Details, which reads the same answer) a stale one.
+                        _guide_schedule_cache["data"] = None
                         if already_processed:
                             logger.debug(f"[Xadarr] {ep_key} already processed this session — skipping")
                         else:
@@ -2826,6 +2891,248 @@ class XadarrIntegration(ServiceIntegration):
             except Exception as e:
                 return jsonify({"error": str(e)}), 500
 
+        def _sonarr_guide_schedule():
+            """
+            Bulk per-show schedule for Xadarr's synthetic "Shows" guide channel: for every
+            monitored Sonarr series, the next unwatched-but-downloaded episode ("now") and
+            whichever comes right after it ("next") -- downloaded if already grabbed, otherwise
+            its real air date. A fully caught-up show (nothing unwatched-and-downloaded) is still
+            included with "now": null and "lastPlayed" set to its most recently watched episode,
+            so it stays visible rather than disappearing -- Joe, 2026-09-29: "I'd like to see all
+            shows if just to know". The client sorts those to the bottom of the row.
+
+            Deliberately self-contained (own direct Sonarr + Plex HTTP calls, no import from
+            episeerr.py/media_processor.py/integrations/plex.py) per Joe's explicit ask not to
+            touch Episeerr's core integration files for this feature -- only this file changes.
+
+            Cached in-memory for a few minutes: unlike _sonarr_calendar()'s single bulk Sonarr
+            call, this fans out one call per monitored series (Sonarr's API has no bulk
+            per-episode endpoint), so it shouldn't re-run on every guide load.
+            """
+            import requests as _req
+            from settings_db import get_sonarr_config, get_plex_config
+
+            # ?tvdbId=N computes just that one show, uncached -- the Details screen's Play
+            # target uses it so Details and the guide can never disagree about "next"
+            # (they did: two separately-written heuristics, e.g. Ted Lasso 2026-09-30).
+            only_tvdb = request.args.get("tvdbId", type=int)
+
+            now_ts = time.time()
+            cached = _guide_schedule_cache.get("data")
+            cached_at = _guide_schedule_cache.get("at", 0.0)
+            if only_tvdb is None and cached is not None and (now_ts - cached_at) < _GUIDE_SCHEDULE_TTL_SECONDS:
+                return jsonify({"shows": cached})
+
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"error": "Sonarr not configured"}), 503
+            headers = {"X-Api-Key": api_key}
+
+            try:
+                series_resp = _req.get(f"{sonarr_url}/api/v3/series", headers=headers, timeout=20)
+                series_resp.raise_for_status()
+                all_series = series_resp.json()
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+            if only_tvdb is not None:
+                all_series = [s_ for s_ in all_series if s_.get("tvdbId") == only_tvdb]
+
+            # Watched state is the UNION of two independently-imperfect sources -- neither one
+            # alone is reliable. Confirmed live 2026-09-29 on a show with real watch history:
+            # Plex's own viewCount had gaps (several genuinely-watched episodes showed
+            # completely unwatched), while Xadarr's own webhook history (xadarr_history.json)
+            # only covers a rolling ~500-event window across ALL content, so it correctly found
+            # one very recent episode but had already lost everything older. Joe tested both
+            # live: Plex's (still gappy) view landed on E6, Xadarr's history-only view landed on
+            # E1 -- Plex's broader-but-gappy signal beat the narrower-but-precise one, so this
+            # takes both and unions them rather than picking a single "winner" source.
+            plex_cfg = get_plex_config() if _xw_plex_configured() else None
+            plex_episodes_by_title: Dict[str, list] = {}
+
+            def _plex_episodes(series_title: str) -> list:
+                if series_title in plex_episodes_by_title:
+                    return plex_episodes_by_title[series_title]
+                leaves: list = []
+                if plex_cfg and plex_cfg.get("url") and plex_cfg.get("api_key"):
+                    try:
+                        purl = plex_cfg["url"].rstrip("/")
+                        token = plex_cfg["api_key"]
+                        search = _req.get(
+                            f"{purl}/search",
+                            params={"query": series_title, "X-Plex-Token": token},
+                            headers={"Accept": "application/json"}, timeout=10,
+                        )
+                        search.raise_for_status()
+                        hits = search.json().get("MediaContainer", {}).get("Metadata", [])
+                        show_hit = next((h for h in hits if h.get("type") == "show"), None)
+                        if show_hit:
+                            leaves_resp = _req.get(
+                                f"{purl}/library/metadata/{show_hit['ratingKey']}/allLeaves",
+                                headers={"X-Plex-Token": token, "Accept": "application/json"},
+                                timeout=15,
+                            )
+                            leaves_resp.raise_for_status()
+                            leaves = leaves_resp.json().get("MediaContainer", {}).get("Metadata", [])
+                    except Exception as exc:
+                        logger.debug(f"[Xadarr] guide-schedule: Plex lookup failed for {series_title!r}: {exc}")
+                plex_episodes_by_title[series_title] = leaves
+                return leaves
+
+            _history_cache: list = _load_json(_HISTORY_FILE, [])
+            _activity_watched: list = _load_json(_WATCHED_ACTIVITY_FILE, [])
+            _completion_threshold = _get_completion_threshold() / 100.0
+            watched_episodes_by_title: Dict[str, set] = {}
+
+            def _watched_episodes(series_title: str) -> set:
+                if series_title in watched_episodes_by_title:
+                    return watched_episodes_by_title[series_title]
+                watched: set = set()
+                for ep in _plex_episodes(series_title):
+                    if ep.get("viewCount", 0):
+                        watched.add((ep.get("parentIndex"), ep.get("index")))
+                for record in _history_cache:
+                    if record.get("event") not in ("progress", "stop", "finish") or record.get("title") != series_title:
+                        continue
+                    duration = record.get("durationMs") or 0
+                    position = record.get("positionMs") or 0
+                    if duration <= 0 or position / duration < _completion_threshold:
+                        continue
+                    m = re.match(r"^S(\d+)E(\d+)", record.get("episodeTitle") or "", re.IGNORECASE)
+                    if m:
+                        watched.add((int(m.group(1)), int(m.group(2))))
+                for ev in _activity_watched:
+                    if ev.get("series_title") == series_title and ev.get("season") and ev.get("episode"):
+                        watched.add((int(ev["season"]), int(ev["episode"])))
+                watched_episodes_by_title[series_title] = watched
+                return watched
+
+            # Same "newest episode added" ordering the Xadarr "All Shows" library browser
+            # already uses (episeerr.py's api_sonarr_all_series -- not imported here per the
+            # self-contained constraint, but same bulk-history technique: one call, not
+            # per-series). Joe, 2026-09-29: "the order should also be like in the shows view".
+            last_episode_added: Dict[int, str] = {}
+            try:
+                history_resp = _req.get(
+                    f"{sonarr_url}/api/v3/history", headers=headers,
+                    params={"page": 1, "pageSize": 1000, "sortKey": "date", "sortDirection": "descending"},
+                    timeout=15,
+                )
+                if history_resp.ok:
+                    for record in history_resp.json().get("records", []):
+                        if record.get("eventType") != "downloadFolderImported":
+                            continue
+                        sid = record.get("seriesId")
+                        date = record.get("date")
+                        if sid is None or not date:
+                            continue
+                        last_episode_added.setdefault(sid, date)
+            except Exception as exc:
+                logger.debug(f"[Xadarr] guide-schedule: history fetch failed: {exc}")
+
+            shows = []
+            for series in all_series:
+                if not series.get("monitored", False):
+                    continue
+                series_id = series.get("id")
+                title = series.get("title", "")
+                tvdb_id = series.get("tvdbId")
+
+                try:
+                    ep_resp = _req.get(
+                        f"{sonarr_url}/api/v3/episode", headers=headers,
+                        params={"seriesId": series_id}, timeout=20,
+                    )
+                    ep_resp.raise_for_status()
+                    episodes = ep_resp.json()
+                except Exception as exc:
+                    logger.debug(f"[Xadarr] guide-schedule: episode fetch failed for series {series_id}: {exc}")
+                    continue
+
+                ordered = sorted(
+                    (e for e in episodes if e.get("seasonNumber", 0) > 0),
+                    key=lambda e: (e["seasonNumber"], e["episodeNumber"]),
+                )
+                if not ordered:
+                    continue
+
+                watched = _watched_episodes(title)
+
+                # High-water mark, not "first unwatched": every watched signal has gaps
+                # (Plex never received Xadarr's in-app plays until 496772e), so an old gap --
+                # Ted Lasso S4: E2+E5 marked, E1/E3/E4 not -- pinned NOW to S4E1. Shows are
+                # watched in order, and with Episeerr's one-at-a-time rules the disk usually
+                # holds just [last watched, next], so "first file after the latest watched
+                # episode" is the right answer and immune to holes behind it.
+                watermark = max(watched) if watched else None
+                now_ep = next(
+                    (e for e in ordered
+                     if e.get("hasFile")
+                     and (watermark is None or (e["seasonNumber"], e["episodeNumber"]) > watermark)),
+                    None,
+                )
+
+                entry = {
+                    "seriesId": series_id,
+                    "tvdbId": tvdb_id,
+                    "title": title,
+                    "now": None,
+                    "next": None,
+                    "lastPlayed": None,
+                }
+
+                if now_ep is not None:
+                    entry["now"] = {
+                        "season": now_ep["seasonNumber"],
+                        "episode": now_ep["episodeNumber"],
+                        "title": now_ep.get("title", ""),
+                    }
+                    now_idx = ordered.index(now_ep)
+                    next_ep = ordered[now_idx + 1] if now_idx + 1 < len(ordered) else None
+                    if next_ep is not None:
+                        entry["next"] = {
+                            "season": next_ep["seasonNumber"],
+                            "episode": next_ep["episodeNumber"],
+                            "title": next_ep.get("title", ""),
+                            "downloaded": bool(next_ep.get("hasFile")),
+                            "airDate": next_ep.get("airDateUtc") or next_ep.get("airDate") or "",
+                        }
+                elif watched:
+                    # Fully caught up -- surface the most recently watched episode instead of
+                    # dropping the show from the guide entirely. `watched` is now a bare set of
+                    # (season, episode) tuples (no per-episode timestamp from the webhook-history
+                    # source), so the highest tuple is used as a "most recent" proxy -- reasonable
+                    # since shows are watched in order.
+                    last_key = max(watched)
+                    last_ep = next(
+                        (e for e in ordered
+                         if (e["seasonNumber"], e["episodeNumber"]) == last_key),
+                        None,
+                    )
+                    if last_ep is not None:
+                        entry["lastPlayed"] = {
+                            "season": last_ep["seasonNumber"],
+                            "episode": last_ep["episodeNumber"],
+                            "title": last_ep.get("title", ""),
+                        }
+
+                shows.append(entry)
+
+            # Two stable sorts, applied in order (Python's sort is stable, so the second pass
+            # never disturbs relative order within a group from the first): newest-imported
+            # first (matching "All Shows"), THEN -- overriding that -- shows with something
+            # watchable right now always ahead of caught-up ones. Joe, 2026-09-29: "the whole
+            # point is finding what I can watch now so those should be first" -- recency is
+            # only a tiebreaker within each group, never allowed to outrank watchability.
+            shows.sort(key=lambda e: last_episode_added.get(e["seriesId"]) or "", reverse=True)
+            shows.sort(key=lambda e: e["now"] is None)
+
+            if only_tvdb is None:
+                _guide_schedule_cache["data"] = shows
+                _guide_schedule_cache["at"] = now_ts
+            return jsonify({"shows": shows})
+
         # ── /api/episeerr/* aliases ───────────────────────────────────────────
         # The TV app routes Episeerr calls through $SYNC_SERVER_URL/api/episeerr/*.
         # xadarr-server proxies those to Episeerr's real endpoints; when Episeerr is
@@ -2934,6 +3241,10 @@ class XadarrIntegration(ServiceIntegration):
         @alias_bp.route("/sonarr/calendar", methods=["GET"])
         def alias_sonarr_calendar():
             return _sonarr_calendar()
+
+        @alias_bp.route("/sonarr/guide-schedule", methods=["GET"])
+        def alias_sonarr_guide_schedule():
+            return _sonarr_guide_schedule()
 
         # ── Generic notifications (polled by NotificationPollManager at
         # {sync_server}/api/notify/recent — a top-level path, not nested under
