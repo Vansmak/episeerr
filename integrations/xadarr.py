@@ -595,6 +595,7 @@ _neolink_token_cache = {"token": None, "fetched_at": 0.0}
 # bulk call, so it shouldn't re-run on every guide load.
 _GUIDE_SCHEDULE_TTL_SECONDS = 180
 _guide_schedule_cache = {"data": None, "at": 0.0}
+_movie_guide_cache = {"data": None, "at": 0.0}
 
 # Neolink has no live-snapshot API (only event thumbnails), so camera grid tiles
 # would otherwise show a stale frame from whenever the last motion event fired.
@@ -1655,6 +1656,7 @@ class XadarrIntegration(ServiceIntegration):
                         # A just-finished episode moves that show's NOW slot -- don't serve
                         # the guide (or Details, which reads the same answer) a stale one.
                         _guide_schedule_cache["data"] = None
+                        _movie_guide_cache["data"] = None
                         if already_processed:
                             logger.debug(f"[Xadarr] {ep_key} already processed this session — skipping")
                         else:
@@ -3133,6 +3135,130 @@ class XadarrIntegration(ServiceIntegration):
                 _guide_schedule_cache["at"] = now_ts
             return jsonify({"shows": shows})
 
+        def _radarr_guide_schedule():
+            """
+            Xadarr's two synthetic movie guide channels (Joe, 2026-09-30):
+              - "watchNow": downloaded movies not yet watched in Plex, played back to back
+                like a real linear channel. The order is a shuffle seeded by the date, so
+                every device agrees on what's on right now, and the schedule starts at local
+                midnight and loops to fill the next 36h. If everything is watched it falls
+                back to the whole downloaded library so the channel is never empty.
+              - "premiering": monitored movies Radarr doesn't have yet, soonest release
+                first (digital, then physical, then cinema date).
+            Self-contained like _sonarr_guide_schedule (direct Radarr + Plex HTTP only).
+            """
+            import requests as _req
+            import random as _random
+            from settings_db import get_radarr_config, get_plex_config
+
+            now_ts = time.time()
+            cached = _movie_guide_cache.get("data")
+            if cached is not None and (now_ts - _movie_guide_cache.get("at", 0.0)) < _GUIDE_SCHEDULE_TTL_SECONDS:
+                return jsonify(cached)
+
+            cfg = get_radarr_config() or {}
+            radarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key = cfg.get("api_key") or ""
+            if not radarr_url or not api_key:
+                return jsonify({"error": "Radarr not configured"}), 503
+            try:
+                resp = _req.get(f"{radarr_url}/api/v3/movie", headers={"X-Api-Key": api_key}, timeout=20)
+                resp.raise_for_status()
+                movies = resp.json()
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
+
+            watched_tmdb: set = set()
+            plex_cfg = get_plex_config() if _xw_plex_configured() else None
+            if plex_cfg and plex_cfg.get("url") and plex_cfg.get("api_key"):
+                purl = plex_cfg["url"].rstrip("/")
+                ph = {"X-Plex-Token": plex_cfg["api_key"], "Accept": "application/json"}
+                try:
+                    sections = _req.get(f"{purl}/library/sections", headers=ph, timeout=10).json()
+                    for sec in sections.get("MediaContainer", {}).get("Directory", []):
+                        if sec.get("type") != "movie":
+                            continue
+                        items = _req.get(
+                            f"{purl}/library/sections/{sec['key']}/all",
+                            params={"includeGuids": 1}, headers=ph, timeout=20,
+                        ).json().get("MediaContainer", {}).get("Metadata", [])
+                        for it in items:
+                            if not it.get("viewCount"):
+                                continue
+                            for g in it.get("Guid", []):
+                                gid = g.get("id", "")
+                                if gid.startswith("tmdb://"):
+                                    try:
+                                        watched_tmdb.add(int(gid[7:]))
+                                    except ValueError:
+                                        pass
+                except Exception as exc:
+                    logger.debug(f"[Xadarr] movie guide: Plex watched lookup failed: {exc}")
+
+            def _poster(m):
+                for img in m.get("images", []):
+                    if img.get("coverType") == "poster":
+                        return img.get("remoteUrl") or ""
+                return ""
+
+            downloaded = [m for m in movies if m.get("hasFile") and m.get("tmdbId")]
+            pool = [m for m in downloaded if m["tmdbId"] not in watched_tmdb] or downloaded
+            pool.sort(key=lambda m: m["tmdbId"])  # stable base order before the seeded shuffle
+            local_now = datetime.now().astimezone()
+            midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+            _random.Random(midnight.strftime("%Y-%m-%d")).shuffle(pool)
+
+            watch_now = []
+            if pool:
+                cursor_ms = int(midnight.timestamp() * 1000)
+                horizon_ms = int((local_now.timestamp() + 36 * 3600) * 1000)
+                i = 0
+                while cursor_ms < horizon_ms:
+                    m = pool[i % len(pool)]
+                    runtime_ms = int(m.get("runtime") or 120) * 60_000
+                    watch_now.append({
+                        "tmdbId": m["tmdbId"],
+                        "title": m.get("title", ""),
+                        "year": m.get("year"),
+                        "overview": m.get("overview", ""),
+                        "poster": _poster(m),
+                        "startMs": cursor_ms,
+                        "endMs": cursor_ms + runtime_ms,
+                    })
+                    cursor_ms += runtime_ms
+                    i += 1
+
+            def _release(m):
+                today = local_now.date().isoformat()
+                dates = [m.get(k) for k in ("digitalRelease", "physicalRelease", "inCinemas")]
+                dates = [d[:10] for d in dates if d]
+                future = sorted(d for d in dates if d >= today)
+                return future[0] if future else (max(dates) if dates else "")
+
+            premiering = [
+                {
+                    "tmdbId": m["tmdbId"],
+                    "title": m.get("title", ""),
+                    "year": m.get("year"),
+                    "overview": m.get("overview", ""),
+                    "poster": _poster(m),
+                    "releaseDate": _release(m),
+                }
+                for m in movies
+                if m.get("monitored") and not m.get("hasFile") and m.get("tmdbId")
+            ]
+            # Long-released movies Radarr just never found aren't "premiering" -- keep only
+            # upcoming ones and those released within the last month.
+            from datetime import timedelta as _td
+            cutoff = (local_now.date() - _td(days=30)).isoformat()
+            premiering = [p_ for p_ in premiering if not p_["releaseDate"] or p_["releaseDate"] >= cutoff]
+            premiering.sort(key=lambda x: x["releaseDate"] or "9999")
+
+            data = {"watchNow": watch_now, "premiering": premiering}
+            _movie_guide_cache["data"] = data
+            _movie_guide_cache["at"] = now_ts
+            return jsonify(data)
+
         # ── /api/episeerr/* aliases ───────────────────────────────────────────
         # The TV app routes Episeerr calls through $SYNC_SERVER_URL/api/episeerr/*.
         # xadarr-server proxies those to Episeerr's real endpoints; when Episeerr is
@@ -3245,6 +3371,10 @@ class XadarrIntegration(ServiceIntegration):
         @alias_bp.route("/sonarr/guide-schedule", methods=["GET"])
         def alias_sonarr_guide_schedule():
             return _sonarr_guide_schedule()
+
+        @alias_bp.route("/radarr/guide-schedule", methods=["GET"])
+        def alias_radarr_guide_schedule():
+            return _radarr_guide_schedule()
 
         # ── Generic notifications (polled by NotificationPollManager at
         # {sync_server}/api/notify/recent — a top-level path, not nested under
