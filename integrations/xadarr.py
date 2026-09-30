@@ -3105,6 +3105,7 @@ class XadarrIntegration(ServiceIntegration):
                         "season": now_ep["seasonNumber"],
                         "episode": now_ep["episodeNumber"],
                         "title": now_ep.get("title", ""),
+                        "overview": now_ep.get("overview", ""),
                     }
                     now_idx = ordered.index(now_ep)
                     next_ep = ordered[now_idx + 1] if now_idx + 1 < len(ordered) else None
@@ -3113,6 +3114,7 @@ class XadarrIntegration(ServiceIntegration):
                             "season": next_ep["seasonNumber"],
                             "episode": next_ep["episodeNumber"],
                             "title": next_ep.get("title", ""),
+                            "overview": next_ep.get("overview", ""),
                             "downloaded": bool(next_ep.get("hasFile")),
                             "airDate": next_ep.get("airDateUtc") or next_ep.get("airDate") or "",
                         }
@@ -3153,18 +3155,12 @@ class XadarrIntegration(ServiceIntegration):
 
         def _radarr_guide_schedule():
             """
-            Xadarr's two synthetic movie guide channels (Joe, 2026-09-30):
-              - "watchNow": downloaded movies not yet watched in Plex, played back to back
-                like a real linear channel. The order is a shuffle seeded by the date, so
-                every device agrees on what's on right now, and the schedule starts at local
-                midnight and loops to fill the next 36h. If everything is watched it falls
-                back to the whole downloaded library so the channel is never empty.
-              - "premiering": monitored movies Radarr doesn't have yet, soonest release
-                first (digital, then physical, then cinema date).
+            Xadarr's movie guide channels (Joe, 2026-09-30): "movies" is every downloaded movie
+            (one channel each, unwatched-in-Plex first), "premiering" is monitored movies Radarr
+            doesn't have yet, releasing soon or within the last month.
             Self-contained like _sonarr_guide_schedule (direct Radarr + Plex HTTP only).
             """
             import requests as _req
-            import random as _random
             from settings_db import get_radarr_config, get_plex_config
 
             now_ts = time.time()
@@ -3217,33 +3213,23 @@ class XadarrIntegration(ServiceIntegration):
                         return img.get("remoteUrl") or ""
                 return ""
 
-            downloaded = [m for m in movies if m.get("hasFile") and m.get("tmdbId")]
-            pool = [m for m in downloaded if m["tmdbId"] not in watched_tmdb] or downloaded
-            pool.sort(key=lambda m: m["tmdbId"])  # stable base order before the seeded shuffle
+            # One guide channel per downloaded movie (Joe, 2026-09-30: "every movie is a channel
+            # is better easier" -- replaced the back-to-back Watch Now timeline). Unwatched
+            # first, newest added first within each group.
             local_now = datetime.now().astimezone()
-            midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
-            _random.Random(midnight.strftime("%Y-%m-%d")).shuffle(pool)
-
-            watch_now = []
-            if pool:
-                cursor_ms = int(midnight.timestamp() * 1000)
-                horizon_ms = int((local_now.timestamp() + 36 * 3600) * 1000)
-                i = 0
-                while cursor_ms < horizon_ms:
-                    m = pool[i % len(pool)]
-                    runtime_ms = int(m.get("runtime") or 120) * 60_000
-                    watch_now.append({
-                        "tmdbId": m["tmdbId"],
-                        "title": m.get("title", ""),
-                        "year": m.get("year"),
-                        "overview": m.get("overview", ""),
-                        "poster": _poster(m),
-                        "fanart": _poster(m, "fanart"),
-                        "startMs": cursor_ms,
-                        "endMs": cursor_ms + runtime_ms,
-                    })
-                    cursor_ms += runtime_ms
-                    i += 1
+            downloaded = [m for m in movies if m.get("hasFile") and m.get("tmdbId")]
+            downloaded.sort(key=lambda m: m.get("added") or "", reverse=True)
+            downloaded.sort(key=lambda m: m["tmdbId"] in watched_tmdb)
+            library = [{
+                "radarrId": m.get("id"),
+                "tmdbId": m["tmdbId"],
+                "title": m.get("title", ""),
+                "year": m.get("year"),
+                "overview": m.get("overview", ""),
+                "fanart": _poster(m, "fanart"),
+                "runtime": m.get("runtime") or 0,
+                "watched": m["tmdbId"] in watched_tmdb,
+            } for m in downloaded]
 
             def _release(m):
                 today = local_now.date().isoformat()
@@ -3254,6 +3240,7 @@ class XadarrIntegration(ServiceIntegration):
 
             premiering = [
                 {
+                    "radarrId": m.get("id"),
                     "tmdbId": m["tmdbId"],
                     "title": m.get("title", ""),
                     "year": m.get("year"),
@@ -3272,7 +3259,7 @@ class XadarrIntegration(ServiceIntegration):
             premiering = [p_ for p_ in premiering if not p_["releaseDate"] or p_["releaseDate"] >= cutoff]
             premiering.sort(key=lambda x: x["releaseDate"] or "9999")
 
-            data = {"watchNow": watch_now, "premiering": premiering}
+            data = {"movies": library, "premiering": premiering}
             _movie_guide_cache["data"] = data
             _movie_guide_cache["at"] = now_ts
             return jsonify(data)
