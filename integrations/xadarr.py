@@ -3034,6 +3034,16 @@ class XadarrIntegration(ServiceIntegration):
             except Exception as exc:
                 logger.debug(f"[Xadarr] guide-schedule: history fetch failed: {exc}")
 
+            # Assigned Episeerr rule per series, for the guide's "Change Rule" action.
+            rule_by_series: Dict[str, str] = {}
+            try:
+                from episeerr import load_config
+                for rule_key, rule_details in (load_config().get("rules") or {}).items():
+                    for sid in (rule_details.get("series") or {}):
+                        rule_by_series[str(sid)] = rule_key
+            except Exception as exc:
+                logger.debug(f"[Xadarr] guide-schedule: rule lookup failed: {exc}")
+
             shows = []
             for series in all_series:
                 if not series.get("monitored", False):
@@ -3084,6 +3094,7 @@ class XadarrIntegration(ServiceIntegration):
                     # same URL style _sonarr_calendar uses for posters).
                     "fanart": f"{sonarr_url}/api/v3/mediacover/{series_id}/fanart.jpg?apikey={api_key}",
                     "overview": series.get("overview", ""),
+                    "rule": rule_by_series.get(str(series_id)),
                     "now": None,
                     "next": None,
                     "lastPlayed": None,
