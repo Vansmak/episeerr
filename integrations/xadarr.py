@@ -3096,6 +3096,8 @@ class XadarrIntegration(ServiceIntegration):
                     "overview": series.get("overview", ""),
                     "rule": rule_by_series.get(str(series_id)),
                     "tmdbId": series.get("tmdbId"),
+                    # Most recent episode import, for "latest download" picks in the app.
+                    "lastAdded": last_episode_added.get(series_id),
                     "now": None,
                     "next": None,
                     "lastPlayed": None,
@@ -3230,6 +3232,7 @@ class XadarrIntegration(ServiceIntegration):
                 "fanart": _poster(m, "fanart"),
                 "runtime": m.get("runtime") or 0,
                 "watched": m["tmdbId"] in watched_tmdb,
+                "lastAdded": (m.get("movieFile") or {}).get("dateAdded") or m.get("added"),
             } for m in downloaded]
 
             def _release(m):
