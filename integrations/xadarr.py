@@ -3095,6 +3095,7 @@ class XadarrIntegration(ServiceIntegration):
                     "fanart": f"{sonarr_url}/api/v3/mediacover/{series_id}/fanart.jpg?apikey={api_key}",
                     "overview": series.get("overview", ""),
                     "rule": rule_by_series.get(str(series_id)),
+                    "tmdbId": series.get("tmdbId"),
                     "now": None,
                     "next": None,
                     "lastPlayed": None,
