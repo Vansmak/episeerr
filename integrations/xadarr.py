@@ -2962,14 +2962,27 @@ class XadarrIntegration(ServiceIntegration):
                     try:
                         purl = plex_cfg["url"].rstrip("/")
                         token = plex_cfg["api_key"]
-                        search = _req.get(
-                            f"{purl}/search",
-                            params={"query": series_title, "X-Plex-Token": token},
-                            headers={"Accept": "application/json"}, timeout=10,
-                        )
-                        search.raise_for_status()
-                        hits = search.json().get("MediaContainer", {}).get("Metadata", [])
-                        show_hit = next((h for h in hits if h.get("type") == "show"), None)
+                        # Sonarr disambiguates same-name shows with a year ("Scrubs (2026)"),
+                        # and Plex's search finds nothing for that string, so marks made in
+                        # Plex never reached the guide (Joe, 2026-10-03). Retry without the year,
+                        # preferring a hit from that year when there's more than one.
+                        year_m = re.search(r"\s*\((\d{4})\)\s*$", series_title)
+                        queries = [series_title] + ([series_title[:year_m.start()]] if year_m else [])
+                        show_hit = None
+                        for q in queries:
+                            search = _req.get(
+                                f"{purl}/search",
+                                params={"query": q, "X-Plex-Token": token},
+                                headers={"Accept": "application/json"}, timeout=10,
+                            )
+                            search.raise_for_status()
+                            hits = [h for h in search.json().get("MediaContainer", {}).get("Metadata", [])
+                                    if h.get("type") == "show"]
+                            if year_m:
+                                hits.sort(key=lambda h: 0 if str(h.get("year")) == year_m.group(1) else 1)
+                            if hits:
+                                show_hit = hits[0]
+                                break
                         if show_hit:
                             leaves_resp = _req.get(
                                 f"{purl}/library/metadata/{show_hit['ratingKey']}/allLeaves",
