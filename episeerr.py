@@ -2667,15 +2667,26 @@ def api_sonarr_all_series():
                 timeout=15,
             )
             if history_resp.ok:
-                for record in history_resp.json().get('records', []):
+                records = history_resp.json().get('records', [])
+                # Quality upgrades re-import an episode that was already there —
+                # not a new episode, so it mustn't bump an old show (e.g. a
+                # cutoff-unmet search upgrading a 2005 sitcom) to the top.
+                upgraded_episodes = {
+                    r.get('episodeId') for r in records
+                    if r.get('eventType') == 'episodeFileDeleted'
+                    and (r.get('data') or {}).get('reason') == 'Upgrade'
+                }
+                for record in records:
                     if record.get('eventType') != 'downloadFolderImported':
+                        continue
+                    if record.get('episodeId') in upgraded_episodes:
                         continue
                     sid = record.get('seriesId')
                     date = record.get('date')
                     if sid is None or not date:
                         continue
                     # Records are already sorted newest-first, so the first date seen
-                    # per series is its most recent import.
+                    # per series is its most recent new-episode import.
                     last_episode_added.setdefault(sid, date)
         except Exception as e:
             app.logger.warning(f"Could not get Sonarr import history: {str(e)}")
