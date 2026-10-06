@@ -3169,6 +3169,52 @@ class XadarrIntegration(ServiceIntegration):
                 _guide_schedule_cache["at"] = now_ts
             return jsonify({"shows": shows})
 
+        def _sonarr_guide_downloads():
+            """
+            Live download progress for Xadarr's Shows guide (Joe, 2026-10-05: "this next EP is
+            downloading, it should show the progress"). One Sonarr /queue call, uncached and
+            cheap -- unlike guide-schedule's per-series fan-out -- so the app can poll it every
+            guide tick and merge it into the cached schedule.
+            """
+            import requests as _req
+            from settings_db import get_sonarr_config
+
+            cfg = get_sonarr_config()
+            sonarr_url = (cfg.get("url") or "").rstrip("/")
+            api_key = cfg.get("api_key") or ""
+            if not sonarr_url or not api_key:
+                return jsonify({"error": "Sonarr not configured"}), 503
+            try:
+                r = _req.get(
+                    f"{sonarr_url}/api/v3/queue", headers={"X-Api-Key": api_key},
+                    params={"includeEpisode": "true", "pageSize": 200}, timeout=10,
+                )
+                r.raise_for_status()
+                records = r.json().get("records", [])
+            except Exception as exc:
+                logger.debug(f"[Xadarr] guide-downloads: queue fetch failed: {exc}")
+                return jsonify({"downloads": []})
+
+            downloads = []
+            for rec in records:
+                ep = rec.get("episode") or {}
+                if not rec.get("seriesId") or not ep:
+                    continue
+                size = rec.get("size") or 0
+                left = rec.get("sizeleft") or 0
+                percent = int(round((size - left) * 100 / size)) if size > 0 else 0
+                downloads.append({
+                    "seriesId": rec.get("seriesId"),
+                    "season": ep.get("seasonNumber"),
+                    "episode": ep.get("episodeNumber"),
+                    "percent": max(0, min(100, percent)),
+                    # Sonarr's "HH:MM:SS" estimate; blank when unknown (queued, stalled).
+                    "timeLeft": rec.get("timeleft") or "",
+                    # downloading / queued / paused / importPending / importing ...
+                    "state": rec.get("trackedDownloadState") or rec.get("status") or "",
+                })
+            return jsonify({"downloads": downloads})
+
         def _radarr_guide_schedule():
             """
             Xadarr's movie guide channels (Joe, 2026-09-30): "movies" is every downloaded movie
@@ -3393,6 +3439,10 @@ class XadarrIntegration(ServiceIntegration):
         @alias_bp.route("/sonarr/guide-schedule", methods=["GET"])
         def alias_sonarr_guide_schedule():
             return _sonarr_guide_schedule()
+
+        @alias_bp.route("/sonarr/guide-downloads", methods=["GET"])
+        def alias_sonarr_guide_downloads():
+            return _sonarr_guide_downloads()
 
         @alias_bp.route("/radarr/guide-schedule", methods=["GET"])
         def alias_radarr_guide_schedule():
