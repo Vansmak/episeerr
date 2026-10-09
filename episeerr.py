@@ -5610,6 +5610,19 @@ def send_to_selection(series_id):
         return render_template('error.html', message=f"Error: {str(e)}")
 
 
+def _get_sonarr_seasons(series_id):
+    """Seasons as Sonarr numbers them, or None when Sonarr can't be asked."""
+    try:
+        prefs = sonarr_utils.load_preferences()
+        resp = http.get(f"{prefs['SONARR_URL']}/api/v3/series/{series_id}",
+                        headers={'X-Api-Key': prefs['SONARR_API_KEY']}, timeout=10)
+        if resp.ok:
+            return sonarr_utils.format_seasons(resp.json())
+        app.logger.warning(f"Could not get seasons of series {series_id} from Sonarr: HTTP {resp.status_code}")
+    except Exception as e:
+        app.logger.warning(f"Could not get seasons of series {series_id} from Sonarr: {e}")
+    return None
+
 @app.route('/select-seasons/<tmdb_id>')
 def select_seasons(tmdb_id):
     """Show season selection page."""
@@ -5635,6 +5648,12 @@ def select_seasons(tmdb_id):
                     'seasonNumber': season['season_number'],
                     'episodeCount': season.get('episode_count', '?')
                 })
+
+        pending = find_pending_request_by_tmdb(tmdb_id)
+        if pending and pending.get('series_id'):
+            sonarr_seasons = _get_sonarr_seasons(pending['series_id'])
+            if sonarr_seasons:
+                formatted_show['seasons'] = sonarr_seasons
         
         # NEW: Load available rules for the rule picker
         config = load_config()
@@ -5980,6 +5999,11 @@ def select_episodes(tmdb_id):
                     'seasonNumber': season_num,
                     'episodeCount': season.get('episode_count', '?')
                 })
+
+        if series_id:
+            sonarr_seasons = _get_sonarr_seasons(series_id)
+            if sonarr_seasons:
+                formatted_show['seasons'] = [s for s in sonarr_seasons if s['seasonNumber'] in selected_seasons]
         
         app.logger.info(f"Rendering episode selection with selected_seasons: {selected_seasons}")
         
@@ -6134,6 +6158,29 @@ def get_tmdb_season(tmdb_id, season_number):
         
     except Exception as e:
         app.logger.error(f"Error getting TMDB season data: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/sonarr/season/<int:series_id>/<int:season_number>')
+def get_sonarr_season(series_id, season_number):
+    """Get a season's episodes from Sonarr, numbered the way the selection is applied."""
+    try:
+        prefs = sonarr_utils.load_preferences()
+        headers = {'X-Api-Key': prefs['SONARR_API_KEY']}
+        episodes = []
+        for _attempt in range(15):
+            resp = http.get(f"{prefs['SONARR_URL']}/api/v3/episode",
+                            params={'seriesId': series_id, 'seasonNumber': season_number},
+                            headers=headers, timeout=15)
+            if not resp.ok:
+                return jsonify({"error": f"Sonarr returned HTTP {resp.status_code}"}), 502
+            episodes = resp.json()
+            if episodes:
+                break
+            time.sleep(1)
+        return jsonify({"episodes": sonarr_utils.format_season_episodes(episodes)})
+
+    except Exception as e:
+        app.logger.error(f"Error getting Sonarr season data: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/pending-requests')
