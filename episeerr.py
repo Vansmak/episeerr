@@ -5654,6 +5654,14 @@ def select_seasons(tmdb_id):
             sonarr_seasons = _get_sonarr_seasons(pending['series_id'])
             if sonarr_seasons:
                 formatted_show['seasons'] = sonarr_seasons
+        elif pending and (pending.get('sonarr_lookup') or {}).get('seasons'):
+            # Discover/Search: Sonarr add is deferred until episode selection, so
+            # there's no series_id yet. The stored lookup already has Sonarr's
+            # season numbering (it's what the deferred add sends), so list those
+            # instead of TMDB's -- e.g. anime where TMDB has one long season.
+            lookup_seasons = sonarr_utils.format_seasons(pending['sonarr_lookup'])
+            if lookup_seasons:
+                formatted_show['seasons'] = lookup_seasons
         
         # NEW: Load available rules for the rule picker
         config = load_config()

@@ -45,6 +45,26 @@ class FormatSeasonsTestCase(unittest.TestCase):
             {'seasonNumber': 2, 'episodeCount': '?'},
         ])
 
+    def test_series_lookup_without_statistics(self):
+        # Discover/Search: /series/lookup for a show not yet in Sonarr has
+        # Sonarr's season numbers but no per-season statistics.
+        lookup = {'title': 'Hunter x Hunter (2011)', 'seasons': [
+            {'seasonNumber': 0, 'monitored': False},
+            {'seasonNumber': 1, 'monitored': True},
+            {'seasonNumber': 2, 'monitored': True},
+            {'seasonNumber': 3, 'monitored': True},
+        ]}
+        self.assertEqual(format_seasons(lookup), [
+            {'seasonNumber': 1, 'episodeCount': '?'},
+            {'seasonNumber': 2, 'episodeCount': '?'},
+            {'seasonNumber': 3, 'episodeCount': '?'},
+        ])
+
+    def test_lookup_with_only_specials_is_empty(self):
+        # Caller falls back to TMDB when nothing usable comes back.
+        self.assertEqual(format_seasons({'seasons': [{'seasonNumber': 0}]}), [])
+        self.assertEqual(format_seasons({}), [])
+
 
 class FormatSeasonEpisodesTestCase(unittest.TestCase):
     def test_sonarr_numbers_with_absolute_number(self):
