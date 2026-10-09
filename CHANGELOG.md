@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.9.7
+
+### 🐛 Bug Fixes
+
+- **`release_keep_on_finale` never released a finale when Sonarr had an announced-but-unaired next season** — the finale gate (`_has_next_season_available`) kept the keep window protected whenever *any* later-season episode had no file and a future or missing air date, so a single TBA placeholder (e.g. a next season a year out) held the watched finale on disk indefinitely. It was wrong in the other direction too: an ended show whose later seasons had real past air dates but no files counted as "no next season". Replaced with `_next_episode_ready()`, which answers the question the decision actually needs — can you continue watching right now? Protection is now kept only if the next season's first regular episode already has a file or is grabbed/downloading in Sonarr's queue; otherwise the finale is released the same way the no-next-season path always has been (grace period if `grace_watched` is set, immediate delete otherwise; `always_have`/`keep_pilot` anchors still protected). A search fired by the same watch event (get-next or sequential advance) doesn't count on its own, since it's async and may find nothing for an unaired episode — only a real queue entry does. If the queue can't be read, protection is kept rather than risking a delete. (`media_processor.py`, `templates/edit_rule.html`, #97)
+
 ## v3.9.6
 
 ### 🐛 Bug Fixes
