@@ -66,6 +66,26 @@ def load_preferences():
     SONARR_URL, SONARR_API_KEY = get_sonarr_settings()
     return {'SONARR_URL': SONARR_URL, 'SONARR_API_KEY': SONARR_API_KEY}
 
+def format_seasons(series):
+    """Seasons of a Sonarr series (no specials) in the shape the selection templates use."""
+    return [
+        {'seasonNumber': season['seasonNumber'],
+         'episodeCount': (season.get('statistics') or {}).get('totalEpisodeCount') or '?'}
+        for season in series.get('seasons', [])
+        if season.get('seasonNumber', 0) > 0
+    ]
+
+def format_season_episodes(episodes):
+    """Sonarr episodes in the shape the episode picker reads from TMDB, plus the absolute number."""
+    return [
+        {'episode_number': episode['episodeNumber'],
+         'absolute_episode_number': episode.get('absoluteEpisodeNumber'),
+         'name': episode.get('title') or f"Episode {episode['episodeNumber']}",
+         'overview': episode.get('overview') or '',
+         'air_date': episode.get('airDate')}
+        for episode in sorted(episodes, key=lambda e: e['episodeNumber'])
+    ]
+
 def fetch_episode_file_details(episode_file_id):
     episode_file_url = f"{SONARR_URL}/api/v3/episodefile/{episode_file_id}"
     headers = {'X-Api-Key': SONARR_API_KEY}
