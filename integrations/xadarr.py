@@ -1531,6 +1531,62 @@ class XadarrIntegration(ServiceIntegration):
                     len(body.get("iptvFavoriteChannels") or []),
                 )
                 body["iptvFavoriteChannels"] = existing.get("iptvFavoriteChannels")
+            # ── Newer wins, never older (Xadarr sync contract) ─────────────────────────────
+            # Same rule the app enforces client-side (FavoritesSyncPolicy / pushToCloudLocked);
+            # the server enforces it too so no single client bug can clobber newer state.
+            #  1. Whole payload: an `updatedAt` older than the stored one is rejected (409, the
+            #     client then pulls). Equal is fine: an unchanged device re-sends the stamp it
+            #     pulled.
+            #  2. Favourite channels carry their own `favoritesUpdatedAt` per profile, so an
+            #     unrelated change can't drag a stale favourite list along: an older favourites
+            #     stamp keeps the stored favourites while the rest of the write goes through.
+            def _fav_count(blob):
+                try:
+                    pid_ = blob.get("activeProfileId") or "default"
+                    prof = (blob.get("iptvByProfile") or {}).get(pid_) or {}
+                    return len(prof.get("favoriteChannels") or [])
+                except Exception:
+                    return -1
+
+            def _as_int(v):
+                try:
+                    return int(v or 0)
+                except (TypeError, ValueError):
+                    return 0
+
+            existing_updated_at = _as_int(existing.get("updatedAt"))
+            incoming_updated_at = _as_int(body.get("updatedAt"))
+            if existing and incoming_updated_at < existing_updated_at:
+                logger.warning(
+                    "[Xadarr] Rejecting settings PUT from %s: older updatedAt %s < stored %s "
+                    "(incoming favourites=%d, stored favourites=%d)",
+                    caller, incoming_updated_at, existing_updated_at, _fav_count(body), _fav_count(existing),
+                )
+                return jsonify({
+                    "status": "conflict",
+                    "reason": "older updatedAt — pull the current settings and retry",
+                    "serverUpdatedAt": existing_updated_at,
+                    "serverVersion": int(existing.get("syncVersion") or 0),
+                }), 409
+            kept_favourites_for = []
+            for pid, existing_profile in (existing.get("iptvByProfile") or {}).items():
+                incoming_profile = (body.get("iptvByProfile") or {}).get(pid)
+                if not isinstance(existing_profile, dict) or not isinstance(incoming_profile, dict):
+                    continue
+                if _as_int(incoming_profile.get("favoritesUpdatedAt")) < _as_int(existing_profile.get("favoritesUpdatedAt")):
+                    for key in ("favoriteChannels", "favoriteChannelNames", "favoritesUpdatedAt"):
+                        if key in existing_profile:
+                            incoming_profile[key] = existing_profile.get(key)
+                    kept_favourites_for.append(pid)
+            if kept_favourites_for:
+                active_pid = body.get("activeProfileId") or "default"
+                if active_pid in kept_favourites_for:
+                    body["iptvFavoriteChannels"] = ((body.get("iptvByProfile") or {}).get(active_pid) or {}).get("favoriteChannels")
+                logger.warning(
+                    "[Xadarr] Settings PUT from %s carried older favourites for %s — kept stored favourites",
+                    caller, ",".join(kept_favourites_for),
+                )
+
             # Version check, not a timestamp check. A device proves it isn't stale by having
             # actually seen the current server state -- not by claiming a newer clock. Only
             # devices sending a syncVersion (any build with this change) are gated; a build
@@ -1562,7 +1618,10 @@ class XadarrIntegration(ServiceIntegration):
             if not ok:
                 return jsonify({"error": "Failed to write settings"}), 500
             profiles = len(body.get("profiles") or [])
-            logger.info(f"[Xadarr] Settings saved — {profiles} profile(s)")
+            logger.info(
+                "[Xadarr] Settings saved from %s — %d profile(s), updatedAt %s, favourites=%d, syncVersion now %s",
+                caller, profiles, incoming_updated_at, _fav_count(body), body.get("syncVersion"),
+            )
             return jsonify({"status": "saved", "profiles": profiles}), 200
 
         # ── POST /webhook ─────────────────────────────────────────────────────

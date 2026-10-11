@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 🐛 Bug Fixes (Xadarr server)
+
+- **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
+
 ### ✨ New Features (from episeerr_dev)
 
 - **Hold Automation (Vacation Mode)** — a single toggle on the Scheduler / Global Settings page that pauses everything: webhook-triggered episode processing, scheduled/manual cleanup, and movie cleanup. Gated at the single choke point `media_processor.main()` already runs every webhook and cleanup call through, so grace/dormant inactivity rules simply don't fire while held — no more coming back from vacation to a show deleted because nobody watched it while you were away. (`media_processor.py`, `episeerr.py`, `templates/scheduler_admin.html`)
