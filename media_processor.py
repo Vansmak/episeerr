@@ -681,6 +681,40 @@ def monitor_episodes(episode_ids, monitor=True):
         logger.error(f"Failed to set episodes {action}. Response: {response.text}")
 
 
+def fetch_episodes_by_ids(episode_ids):
+    """Bulk-fetch Sonarr episodes by ID. Returns a list, or None on failure."""
+    if not episode_ids:
+        return []
+    try:
+        response = http.get(
+            f"{SONARR_URL}/api/v3/episode",
+            headers={'X-Api-Key': SONARR_API_KEY},
+            params={'episodeIds': list(episode_ids)},
+            timeout=10,
+        )
+        if response.ok:
+            return response.json()
+        logger.error(f"Failed to bulk-fetch episodes: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error bulk-fetching episodes: {str(e)}")
+    return None
+
+
+def episodes_needing_search(episodes, episode_ids):
+    """
+    Return the requested episode IDs (in requested order) that have no file,
+    i.e. the only ones a watch-triggered search should ask Sonarr for (#99).
+
+    The watch path always searches individual episodes - including for
+    'seasons' rules, where "get the season" means the episodes left in it.
+    Season packs are only used when a series is first added (episeerr_utils).
+
+    Returns [] when nothing is missing (no search should be sent).
+    """
+    on_disk = {ep.get('id') for ep in episodes if ep.get('hasFile')}
+    return [i for i in episode_ids if i not in on_disk]
+
+
 def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=None, get_type='episodes'):
     """
     Trigger a search for specified episodes in Sonarr and send pending notification
@@ -689,64 +723,43 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
         episode_ids: List of Sonarr episode IDs to search
         series_id: Sonarr series ID
         series_title: Series name for notifications
-        get_type: Rule type ('seasons' or 'episodes') - determines season pack preference
+        get_type: Rule type - unused for the search itself; watch-triggered
+                  searches are always per-episode (season packs are only for
+                  newly added series, see episeerr_utils)
     """
     if not episode_ids:
         return
         
     url = f"{SONARR_URL}/api/v3/command"
     headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
-    
-    # NEW: If rule type is 'seasons', prefer season packs
-    episode = None
-    if get_type == 'seasons':
-        # Get the season number from the first episode
-        episode = get_episode_details_by_id(episode_ids[0])
-        if episode and series_id:
-            first_season = episode['seasonNumber']
-            
-            # BUGFIX: If there are multiple episodes, check if we should search the NEXT season
-            # This happens when the first episode is the remainder of the current season
-            if len(episode_ids) > 1:
-                # Check the second episode's season
-                second_episode = get_episode_details_by_id(episode_ids[1])
-                if second_episode and second_episode['seasonNumber'] > first_season:
-                    # The bulk of episodes are in the next season, search for that
-                    season_to_search = second_episode['seasonNumber']
-                    logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search} (next full season)")
-                else:
-                    # All episodes in same season
-                    season_to_search = first_season
-                    logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search}")
-            else:
-                # Only one episode, use its season
-                season_to_search = first_season
-                logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search}")
-            
-            # Use SeasonSearch to prefer season packs
-            data = {
-                "name": "SeasonSearch",
-                "seriesId": series_id,
-                "seasonNumber": season_to_search
-            }
-        else:
-            # Fallback to episode search if we can't determine season
-            logger.warning("Could not determine season, falling back to episode search")
-            data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
-    else:
-        # Default: Individual episode search
-        data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
-    
+
+    # Never search an episode that is already on disk, and never send a
+    # season-pack search from the watch path (issue #99). Without this, every
+    # watch event on a full-season rule re-fired a SeasonSearch for the season
+    # the user already has, and Sonarr could grab the pack again.
+    # If the lookup fails, keep the old behaviour and search them all.
+    episodes = fetch_episodes_by_ids(episode_ids)
+    if episodes is not None:
+        requested_count = len(episode_ids)
+        episode_ids = episodes_needing_search(episodes, episode_ids)
+        if not episode_ids:
+            logger.info(
+                f"Skipping search for {series_title or series_id}: all "
+                f"{requested_count} requested episodes already have files"
+            )
+            return
+
+    data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
     response = http.post(url, json=data, headers=headers)
-    
+
+    episode = None
+
     if response.ok:
-        search_type = "Season pack search" if get_type == 'seasons' else "Episode search"
-        logger.info(f"{search_type} command sent to Sonarr successfully.")
+        logger.info(f"Episode search command sent to Sonarr for {len(episode_ids)} episode(s).")
 
         # Log search event
         if series_id and series_title and episode_ids:
             from activity_storage import save_search_event
-            # episode already fetched above in seasons path; fetch now for episodes path
             if episode is None:
                 episode = get_episode_details_by_id(episode_ids[0])
             if episode:
