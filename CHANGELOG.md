@@ -6,6 +6,105 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
+## v3.9.8 (from episeerr_dev)
+
+### 🐛 Bug Fixes
+
+- **Full-season rules re-searched the season on every watch, so Sonarr could grab the pack again** — with `get_type: seasons` and action `search`, every watched event fired a `SeasonSearch` for the current season, even when the whole season was already downloaded, and any rule sent `EpisodeSearch` for episodes that already had files. On a watch event a seasons rule now means what it originally did: get the episodes left in the season (watched E5 of 10 → E6–E10), monitored and searched as individual episodes. Season-pack searches are back to being only for newly added series. Before searching, the requested episodes are looked up and any that already have a file are skipped; if they're all on disk, no search is sent. Monitoring is unchanged. (`media_processor.py`, #99)
+
+## v3.9.7
+
+### 🐛 Bug Fixes
+
+- **`release_keep_on_finale` never released a finale when Sonarr had an announced-but-unaired next season** — the finale gate (`_has_next_season_available`) kept the keep window protected whenever *any* later-season episode had no file and a future or missing air date, so a single TBA placeholder (e.g. a next season a year out) held the watched finale on disk indefinitely. It was wrong in the other direction too: an ended show whose later seasons had real past air dates but no files counted as "no next season". Replaced with `_next_episode_ready()`, which answers the question the decision actually needs — can you continue watching right now? Protection is now kept only if the next season's first regular episode already has a file or is grabbed/downloading in Sonarr's queue; otherwise the finale is released the same way the no-next-season path always has been (grace period if `grace_watched` is set, immediate delete otherwise; `always_have`/`keep_pilot` anchors still protected). A search fired by the same watch event (get-next or sequential advance) doesn't count on its own, since it's async and may find nothing for an unaired episode — only a real queue entry does. If the queue can't be read, protection is kept rather than risking a delete. (`media_processor.py`, `templates/edit_rule.html`, #97)
+
+- **Episode picker listed TMDB's episode numbering, so selections could match nothing in Sonarr** — the season and episode pages showed TMDB's seasons and episodes, but the selection is applied to Sonarr by season/episode number. When TMDB and Sonarr (TheTVDB) number a show differently, nothing got monitored: for Hunter x Hunter (2011), TMDB season 2 is episodes 63-136 while Sonarr's season 2 is 1-78, so ticking TMDB's "S2 121-136" logged "Episode 121 not found" for every episode. Once the series is in Sonarr, both pages now list Sonarr's own seasons and episodes (new `/api/sonarr/season/<series_id>/<season>` endpoint), with the absolute episode number shown next to each title. For Discover/Search requests, where the Sonarr add is deferred until episode selection, the season page now lists the seasons from the stored Sonarr series lookup instead of TMDB's, so shows TMDB lumps into one long season (common with anime) can still be picked by Sonarr's seasons (episode counts show as `?` until the series is added). It only falls back to TMDB when neither Sonarr source is available. Thanks @jornicornelese! (`episeerr.py`, `sonarr_utils.py`, `templates/episode_selection.html`, #98)
+
+## v3.9.6
+
+### 🐛 Bug Fixes
+
+- **Adding a new show via the search bar and clicking Apply Rule could silently monitor/search nothing** — `_apply_rule_to_selection_core` fetched the newly-added series' episodes from Sonarr immediately after the `POST /series` call, but Sonarr creates episode rows asynchronously (`RefreshEpisodeService`) after that call returns, so the very next `GET /episode` could come back empty — computing zero episodes to monitor, with no error or warning logged. Now polls for up to 15 seconds until Sonarr actually has episodes for the series, and logs a warning (instead of silently doing nothing) if it still comes up empty, or if the rule's `get_type`/`get_count` genuinely matches no episodes. (`episeerr.py`, #95)
+
+## v3.9.5
+
+### ✨ Improvements
+
+- **Plex watchlist TV adds ignored the "Auto-assign new series to default rule" setting** — a series added to Sonarr directly (no episeerr tag) already skips the review step when that global setting is on, but a watchlist-sync add always tagged `episeerr_select` unconditionally, forcing a manual rule/episode pick every time regardless of the setting. `add_tv_to_sonarr` now checks it too and tags straight to the configured default rule when enabled, so a watchlist add behaves the same as any other new-series entry point. Off by default (unchanged behavior) - only takes effect if you've already turned the global setting on. (`integrations/plex.py`)
+
+## v3.9.4
+
+### 🐛 Bug Fixes
+
+- **A watchlist item that disappeared from Sonarr/Radarr after being synced was never re-added** — the Plex watchlist sync cached a terminal status (`already_exists`, `added_to_sonarr`, `added_to_radarr`, `pending_selection`) the first time an item was successfully processed and trusted it forever, so if that series/movie/pending-request later went away outside Episeerr's control (a manual delete in Sonarr, a rejected pending request), the sync kept skipping it on every future run even though it was genuinely no longer there — and still sitting on the user's Plex watchlist. Confirmed live: a show stayed skipped indefinitely after being removed from Sonarr. Now every sync run re-verifies those statuses against Sonarr/Radarr's actual current state instead of trusting the cache, and re-adds if it's genuinely gone. Only truly deliberate terminal states (`watched`, `cleaned_up`) still hard-skip, since those represent an intentional decision that re-adding would fight. To keep this from costing a full-library fetch per watchlist item, `check_exists_in_sonarr`/`check_exists_in_radarr` now accept a pre-fetched list, and `sync_watchlist` fetches each once per run instead of once per item. (`integrations/plex.py`)
+
+## v3.9.3
+
+### 🐛 Bug Fixes
+
+- **v3.9.1's `monitorNewItems` fix (issue #93) never reached already-assigned series** — it only ran inside `sync_rule_tag_to_sonarr`, which is only called on rule assignment/reassignment, so a series whose tag already matched config was never touched again. Confirmed live by a reporter: 100 of 101 managed series were still on Sonarr's `"all"` default two days after upgrading to v3.9.1. Added `ensure_monitor_new_items_off()`, now called from `reconcile_series_drift`'s no-drift ("matches") branch — the same path the daily reconciliation sweep and every watch event already run for every managed series — so existing installs get swept without any manual per-series action. (`episeerr_utils.py`, #93)
+
+## v3.9.2
+
+### 🐛 Bug Fixes
+
+- **Jellyfin connections broke on Jellyfin 12+** — Jellyfin 12 disabled legacy auth by default, so it stopped accepting the `X-Emby-Token` header and `?api_key=` query param Episeerr used for every Jellyfin request; only `Authorization: MediaBrowser Token="..."` still works. Added a shared `media_server_auth_headers()` helper that sends both, so Jellyfin 12+ and Emby/pre-12 Jellyfin both keep working. Also fixed the `/api/integration/jellyfin/art` poster/thumbnail proxy, which relied entirely on the now-dead `?api_key=` param with no header fallback. (`episeerr_utils.py`, `integrations/jellyfin.py`, `dashboard.py`, `reconcile.py`, `movie_processor.py`, #94)
+
+### ✨ Improvements
+
+- **Dashboard "Recently Requested" only ever showed Jellyseerr requests** — the activity feed's add/request entry was populated exclusively from a Jellyseerr-specific request file, so anything added directly via Sonarr/Radarr, Xadarr, or Episeerr's own add flow never showed up there. The Sonarr/Radarr webhook handlers already fire for any new series/movie regardless of source, so the activity event is now logged from there instead — generically, with Jellyseerr's richer (season) data preserved when present. (`activity_storage.py`, `webhooks.py`, `dashboard.py`)
+
+## v3.9.1
+
+### 🐛 Bug Fixes
+
+- **Sonarr could silently grab episodes far outside a rule's intended window** — Sonarr's own `monitorNewItems` setting (`"all"` by default) independently monitors any episode a metadata refresh adds to an already-monitored season, regardless of what the rule actually wants. Episeerr only reacts to watch events, so an episode (or a whole newly-discovered season) that appears between two watch events was never seen and stayed monitored indefinitely — if a release existed, Sonarr's own RSS would grab it. Confirmed live on three real shows: `reconcile_future_seasons`' own "premiere caught" logic (which legitimately monitors just the season premiere) left the rest of that season vulnerable once Sonarr marked it monitored; separately, its `last_season + 1` deferral (skip a season assumed to be handled by the finale-advance webhook later) left that season completely unprotected in the meantime. Every Episeerr-managed series now has `monitorNewItems` set to `"none"` whenever its rule tag is synced — Episeerr's own reactive and scheduled reconciliation already independently decide what should be monitored, so this only removes a source of conflict, not a needed capability. (`episeerr_utils.py`, #93)
+- **Assigning a rule to an already-pending series left a stale "needs attention" entry behind** — a series resolved outside Episeerr's own flow (e.g. a manual grab via a raw Sonarr search) and then assigned a rule through the plain "existing series" path never had its pending-request entry cleared, since nothing in that path called the cleanup function. It now does. (`episeerr.py`)
+
+## v3.9.0
+
+### 🐛 Bug Fixes
+
+- **Blank "Unknown error occurred" on Pending Requests when TMDB wasn't configured** — `get_pending_requests()` returned `success: false` with no `error` field when `TMDB_API_KEY` was unset, so the frontend's generic fallback message showed instead of anything actionable. Now returns a real message pointing at Settings. (`episeerr.py`, #73)
+
+## v3.8.9
+
+### 🐛 Bug Fixes
+
+- **`reconcile_future_seasons` could permanently skip a season's premiere if you'd already finished the prior season's finale before the new season existed** — the `last_season`-deferral check assumed "next season after `last_season`" always meant the user was still mid-season and the normal get-next webhook would eventually handle it. If that webhook had already fired months earlier (finale watched before the new season aired), it was never coming again, so the premiere just sat unmonitored indefinitely. Now only defers when the tracked position genuinely hasn't reached that season's finale yet. (`media_processor.py`)
+
+## v3.8.8
+
+### 🐛 Bug Fixes
+
+- **Season premiere reconciliation regressions and gaps, fixed together** — `reconcile_future_seasons` no longer permanently skips a premiere it previously passed over; plain episode-count rules with no `always_have` expression now also get their season premiere caught (previously only `always_have` rules did); catching a premiere restores series-level monitoring instead of leaving a leftover `monitored: false` inconsistency that hid the show from calendar-based upcoming views; rewatching an earlier episode no longer regresses the tracked position; and catching a premiere now sends a Discord notification instead of happening silently. A "caught up" dormant-cleanup exemption added during this work was reverted after landing — the premise behind it didn't hold up. (`media_processor.py`)
+- **Jellyfin webhook docs were missing a required header** — setup instructions never mentioned that Jellyfin's webhook plugin needs an explicit `Content-Type: application/json` request header, without which Jellyfin silently rejects the webhook. Also flipped the documented recommendation: Mode B (webhook-triggered polling) is now called out as recommended for most users, with Mode A (continuous PlaybackProgress webhook spam) marked advanced. (`integrations/jellyfin.py`, `templates/documentation.html`, `README.md`)
+
+## v3.8.7
+
+### ✨ Improvements
+
+- **Dashboard stats bar is now collapsible** — the slim stats-pill row collapses by default and remembers your preference (`localStorage`), matching the existing pattern already used by the watchlist/calendar sections. (`templates/dashboard.html`)
+- Added Plex watchlist sync documentation. (`docs/features/plex-watchlist-sync.md`)
+
+## v3.8.6
+
+### 🐛 Bug Fixes
+
+- **Trakt token refresh race condition** — Trakt's refresh tokens are single-use, so multiple threads (dashboard widget load, scheduled sync, a manual Sync click) deciding a refresh was needed around the same moment — e.g. right after a container restart — could race: whichever request won got the fresh `refresh_token`, and any concurrent request retrying with the now-dead token got a 400, risking wedging the integration until manual re-auth. Added a lock plus a re-check of fresh DB state after acquiring it, so only one thread ever actually calls Trakt's token endpoint per expiry window. (`integrations/trakt.py`)
+
+### ✨ Improvements
+
+- **Per-integration dashboard pill opt-out** — each integration's Setup card now has a "Show pill on Dashboard" checkbox; defaults to shown so nothing changes unless you touch it. (`dashboard.py`, `templates/setup.html`)
+
+## v3.8.5
+
+### 🔧 Internal
+
+- **Cleanup subsystem refactor** — Grace Watched and Grace Unwatched cleanup now share their Phase-1 eligibility scan (`_scan_grace_candidates()`) instead of duplicating it, and all three cleanup tiers (Grace Watched, Grace Unwatched, Dormant) now accept a shared `series_lookup` so a single cleanup cycle fetches Sonarr's series list once instead of once per phase (`_fetch_sonarr_series_lookup()`). When `global_storage_min_gb` is configured, all three tiers now process series oldest-inactivity-first and stop as soon as free space clears the threshold — previously this incremental behavior only applied to Dormant. Clarified that `keep_pilot` is a permanent breadcrumb that survives even Dormant cleanup by design, unlike `always_have`, which Dormant intentionally bypasses. (`media_processor.py`, `README.md`)
+
+## v3.8.4
+
 ### ✨ New Features (from episeerr_dev)
 
 - **Hold Automation (Vacation Mode)** — a single toggle on the Scheduler / Global Settings page that pauses everything: webhook-triggered episode processing, scheduled/manual cleanup, and movie cleanup. Gated at the single choke point `media_processor.main()` already runs every webhook and cleanup call through, so grace/dormant inactivity rules simply don't fire while held — no more coming back from vacation to a show deleted because nobody watched it while you were away. (`media_processor.py`, `episeerr.py`, `templates/scheduler_admin.html`)

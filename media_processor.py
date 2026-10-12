@@ -666,6 +666,40 @@ def monitor_episodes(episode_ids, monitor=True):
         logger.error(f"Failed to set episodes {action}. Response: {response.text}")
 
 
+def fetch_episodes_by_ids(episode_ids):
+    """Bulk-fetch Sonarr episodes by ID. Returns a list, or None on failure."""
+    if not episode_ids:
+        return []
+    try:
+        response = http.get(
+            f"{SONARR_URL}/api/v3/episode",
+            headers={'X-Api-Key': SONARR_API_KEY},
+            params={'episodeIds': list(episode_ids)},
+            timeout=10,
+        )
+        if response.ok:
+            return response.json()
+        logger.error(f"Failed to bulk-fetch episodes: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Error bulk-fetching episodes: {str(e)}")
+    return None
+
+
+def episodes_needing_search(episodes, episode_ids):
+    """
+    Return the requested episode IDs (in requested order) that have no file,
+    i.e. the only ones a watch-triggered search should ask Sonarr for (#99).
+
+    The watch path always searches individual episodes - including for
+    'seasons' rules, where "get the season" means the episodes left in it.
+    Season packs are only used when a series is first added (episeerr_utils).
+
+    Returns [] when nothing is missing (no search should be sent).
+    """
+    on_disk = {ep.get('id') for ep in episodes if ep.get('hasFile')}
+    return [i for i in episode_ids if i not in on_disk]
+
+
 def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=None, get_type='episodes'):
     """
     Trigger a search for specified episodes in Sonarr and send pending notification
@@ -674,64 +708,43 @@ def trigger_episode_search_in_sonarr(episode_ids, series_id=None, series_title=N
         episode_ids: List of Sonarr episode IDs to search
         series_id: Sonarr series ID
         series_title: Series name for notifications
-        get_type: Rule type ('seasons' or 'episodes') - determines season pack preference
+        get_type: Rule type - unused for the search itself; watch-triggered
+                  searches are always per-episode (season packs are only for
+                  newly added series, see episeerr_utils)
     """
     if not episode_ids:
         return
         
     url = f"{SONARR_URL}/api/v3/command"
     headers = {'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'}
-    
-    # NEW: If rule type is 'seasons', prefer season packs
-    episode = None
-    if get_type == 'seasons':
-        # Get the season number from the first episode
-        episode = get_episode_details_by_id(episode_ids[0])
-        if episode and series_id:
-            first_season = episode['seasonNumber']
-            
-            # BUGFIX: If there are multiple episodes, check if we should search the NEXT season
-            # This happens when the first episode is the remainder of the current season
-            if len(episode_ids) > 1:
-                # Check the second episode's season
-                second_episode = get_episode_details_by_id(episode_ids[1])
-                if second_episode and second_episode['seasonNumber'] > first_season:
-                    # The bulk of episodes are in the next season, search for that
-                    season_to_search = second_episode['seasonNumber']
-                    logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search} (next full season)")
-                else:
-                    # All episodes in same season
-                    season_to_search = first_season
-                    logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search}")
-            else:
-                # Only one episode, use its season
-                season_to_search = first_season
-                logger.info(f"Rule type is 'seasons' - searching for season pack for Season {season_to_search}")
-            
-            # Use SeasonSearch to prefer season packs
-            data = {
-                "name": "SeasonSearch",
-                "seriesId": series_id,
-                "seasonNumber": season_to_search
-            }
-        else:
-            # Fallback to episode search if we can't determine season
-            logger.warning("Could not determine season, falling back to episode search")
-            data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
-    else:
-        # Default: Individual episode search
-        data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
-    
+
+    # Never search an episode that is already on disk, and never send a
+    # season-pack search from the watch path (issue #99). Without this, every
+    # watch event on a full-season rule re-fired a SeasonSearch for the season
+    # the user already has, and Sonarr could grab the pack again.
+    # If the lookup fails, keep the old behaviour and search them all.
+    episodes = fetch_episodes_by_ids(episode_ids)
+    if episodes is not None:
+        requested_count = len(episode_ids)
+        episode_ids = episodes_needing_search(episodes, episode_ids)
+        if not episode_ids:
+            logger.info(
+                f"Skipping search for {series_title or series_id}: all "
+                f"{requested_count} requested episodes already have files"
+            )
+            return
+
+    data = {"name": "EpisodeSearch", "episodeIds": episode_ids}
     response = http.post(url, json=data, headers=headers)
-    
+
+    episode = None
+
     if response.ok:
-        search_type = "Season pack search" if get_type == 'seasons' else "Episode search"
-        logger.info(f"{search_type} command sent to Sonarr successfully.")
+        logger.info(f"Episode search command sent to Sonarr for {len(episode_ids)} episode(s).")
 
         # Log search event
         if series_id and series_title and episode_ids:
             from activity_storage import save_search_event
-            # episode already fetched above in seasons path; fetch now for episodes path
             if episode is None:
                 episode = get_episode_details_by_id(episode_ids[0])
             if episode:
@@ -1182,25 +1195,70 @@ def find_episodes_leaving_keep_block(all_episodes, keep_type, keep_count, last_w
         logger.error(f"Error finding episodes leaving keep block: {str(e)}")
         return []
 
-def _has_next_season_available(all_episodes, current_season):
-    """Returns True if any next-season episode exists that hasn't aired yet (future or unscheduled)."""
-    now = datetime.now(timezone.utc)
-    for ep in all_episodes:
-        s = ep.get('seasonNumber', 0)
-        if s <= current_season or s == 0:
-            continue
-        if ep.get('hasFile'):
-            continue
-        air_date = ep.get('airDateUtc')
-        if not air_date:
-            return True  # unscheduled episode means next season is coming
-        try:
-            air_dt = datetime.fromisoformat(air_date.replace('Z', '+00:00'))
-            if air_dt > now:
-                return True
-        except Exception:
-            return True
-    return False
+def _next_season_first_episode(all_episodes, current_season):
+    """Return the first regular episode of the next season after current_season
+    (lowest season number > current_season, lowest episode number > 0), or None
+    if Sonarr has no later season at all."""
+    later = [
+        ep for ep in all_episodes
+        if ep.get('seasonNumber', 0) > current_season and ep.get('episodeNumber', 0) > 0
+    ]
+    if not later:
+        return None
+    next_season = min(ep['seasonNumber'] for ep in later)
+    return min(
+        (ep for ep in later if ep['seasonNumber'] == next_season),
+        key=lambda e: e['episodeNumber']
+    )
+
+
+def _episode_in_sonarr_queue(series_id, episode_id):
+    """True if episode_id is currently grabbed/downloading in Sonarr's queue.
+    Returns None if the queue couldn't be read (caller decides how to treat it)."""
+    try:
+        resp = http.get(
+            f"{SONARR_URL}/api/v3/queue/details",
+            headers={'X-Api-Key': SONARR_API_KEY},
+            params={'seriesId': series_id},
+            timeout=10,
+        )
+        if not resp.ok:
+            logger.warning(f"Sonarr queue check failed for series {series_id}: {resp.status_code}")
+            return None
+        data = resp.json()
+        records = data.get('records', []) if isinstance(data, dict) else (data or [])
+        return any(r.get('episodeId') == episode_id for r in records)
+    except Exception as e:
+        logger.warning(f"Sonarr queue check failed for series {series_id}: {e}")
+        return None
+
+
+def _next_episode_ready(all_episodes, current_season, series_id):
+    """
+    Finale gate for release_keep_on_finale (issue #97): should the keep window
+    stay protected because the viewer can actually continue into the next season?
+
+    Returns (ready, next_ep):
+      - ready=True only if the next season's first regular episode already has a
+        file, or is grabbed/downloading in Sonarr's queue right now.
+      - A merely announced season (TBA / future air date / no file) is NOT ready,
+        and neither is an aired-but-missing one: both release the finale.
+      - A search fired during this same watch event (get-next or sequential
+        advance) is async and doesn't count on its own — it only counts once
+        Sonarr has actually grabbed something into the queue. In practice the
+        playback-start prefetch (#62) has usually already queued it by the time
+        the finale is marked watched.
+      - If the queue can't be read, err on the side of keeping (not deleting).
+    """
+    next_ep = _next_season_first_episode(all_episodes, current_season)
+    if not next_ep:
+        return False, None
+    if next_ep.get('hasFile'):
+        return True, next_ep
+    queued = _episode_in_sonarr_queue(series_id, next_ep.get('id'))
+    if queued is None:
+        return True, next_ep
+    return queued, next_ep
 
 
 def _find_episodes_in_keep_window(all_episodes, keep_type, keep_count, last_watched_season, last_watched_episode):
@@ -1378,7 +1436,11 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                         f"from keep rule deletion"
                     )
 
-        # ── Season finale: release keep protection when no next season exists ─
+        # ── Season finale: release keep protection unless the next episode is ready ─
+        # Runs before the sequential advance below on purpose: that advance (and
+        # the get-next above) only fires an async Sonarr search, so it can't make
+        # the next episode "ready" within this event anyway. _next_episode_ready
+        # only trusts a file on disk or a real grab in Sonarr's queue (#97).
         if rule.get('release_keep_on_finale', False) and not skip_rule_processing and not prefetch_only:
             season_eps = sorted(
                 [ep for ep in all_episodes
@@ -1388,10 +1450,18 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
             is_finale = bool(season_eps and episode_number == season_eps[-1]['episodeNumber'])
 
             if is_finale:
-                if _has_next_season_available(all_episodes, season_number):
+                next_ready, next_ep = _next_episode_ready(all_episodes, season_number, series_id)
+                if next_ep:
+                    next_label = f"S{next_ep['seasonNumber']:02d}E{next_ep['episodeNumber']:02d}"
+                    why = f"next episode {next_label} not yet available"
+                else:
+                    next_label = None
+                    why = "no next season"
+                if next_ready:
+                    state = 'downloaded' if next_ep.get('hasFile') else 'queued'
                     logger.info(
                         f"🏁 {series_title or series_id} S{season_number} finale: "
-                        f"next season detected — keep protection unchanged"
+                        f"next episode {next_label} {state} — keep protection unchanged"
                     )
                 else:
                     kept = _find_episodes_in_keep_window(
@@ -1408,7 +1478,7 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                         grace_watched = rule.get('grace_watched')
                         if grace_watched:
                             logger.info(
-                                f"🏁 {title} S{season_number} finale — no next season: "
+                                f"🏁 {title} S{season_number} finale — {why}, releasing: "
                                 f"{len(releasable)} kept episode(s) released from keep protection, "
                                 f"entering grace period ({grace_watched}d): {ep_list}"
                             )
@@ -1422,18 +1492,18 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                                 finale_rule_name = _find_rule_name_for_series(series_id, finale_config)
                                 delete_episodes_immediately(
                                     releasable_with_files, series_id, title,
-                                    reason=f"Season finale, no next season (released from keep)",
+                                    reason=f"Season finale, {why} (released from keep)",
                                     rule_dry_run=rule.get('dry_run', False),
                                     rule_name=finale_rule_name
                                 )
                                 logger.info(
-                                    f"🏁 {title} S{season_number} finale — no next season: "
+                                    f"🏁 {title} S{season_number} finale — {why}, releasing: "
                                     f"deleted {len(releasable_with_files)} episode(s) released from keep. "
                                     f"Episodes: {ep_list}"
                                 )
                     else:
                         logger.info(
-                            f"🏁 {title} S{season_number} finale — no next season: "
+                            f"🏁 {title} S{season_number} finale — {why}: "
                             f"no releasable kept episodes (all anchor-protected)"
                         )
 

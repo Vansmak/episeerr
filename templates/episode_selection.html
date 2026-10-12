@@ -83,6 +83,10 @@
         .episode-title {
             font-weight: 500;
         }
+        .episode-absolute {
+            font-weight: normal;
+            opacity: 0.6;
+        }
         .episode-overview {
             font-size: 12px;
             opacity: 0.7;
@@ -297,7 +301,11 @@
         
     function fetchEpisodesForSeason(seasonNumber, container) {
         console.log(`Fetching episodes for season ${seasonNumber}`);
+        {% if series_id %}
+        fetch(`/api/sonarr/season/{{ series_id }}/${seasonNumber}`)
+        {% else %}
         fetch(`/api/tmdb/season/{{ show.id }}/${seasonNumber}`)
+        {% endif %}
             .then(response => {
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 return response.json();
@@ -307,11 +315,13 @@
                     let episodeHtml = '';
                     data.episodes.forEach(episode => {
                         const isSelected = episodeSelections[seasonNumber] && episodeSelections[seasonNumber].has(episode.episode_number);
+                        const absolute = episode.absolute_episode_number && episode.absolute_episode_number !== episode.episode_number
+                            ? ` <span class="episode-absolute">· ${episode.absolute_episode_number}</span>` : '';
                         episodeHtml += `
                             <div class="episode-item">
                                 <div class="episode-number">${episode.episode_number}</div>
                                 <div class="episode-info">
-                                    <div class="episode-title">${episode.name}</div>
+                                    <div class="episode-title">${episode.name}${absolute}</div>
                                     <div class="episode-overview">${episode.overview || 'No description available'}</div>
                                 </div>
                                 <input type="checkbox" name="episodes" value="${seasonNumber}:${episode.episode_number}" 
