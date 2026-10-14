@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- **Applying a rule to a pending Jellyseerr request for a specific season (e.g. "Season 4 only") still monitored/searched Season 1** — `_apply_rule_to_selection_core()` (the "Apply Rule" button on the Pending Requests page) hardcoded `starting_season = 1` for both `always_have` and `get_type`/`get_count` processing, ignoring the season Jellyseerr actually requested. This was already fixed for the direct Sonarr-add webhook path (episeerr#74), but that fix was never carried into this second, separate code path when it was added afterward. Now parses `requested_seasons` from the stored pending request the same way the webhook path does, and uses it as the starting season throughout. (`episeerr.py`, #100)
+
 ## v3.9.8
 
 ### 🐛 Bug Fixes

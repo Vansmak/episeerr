@@ -5781,10 +5781,24 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
     _request_source = request_data.get('source', '') if request_data else ''
     _rule_headers = {'X-Api-Key': SONARR_API_KEY}
 
+    # Use the requested season (e.g. a Jellyseerr "Season 4 only" request) instead of
+    # always defaulting to Season 1 - episeerr#74/#100. Same parsing as webhooks.py's
+    # direct-add path.
+    _starting_season = 1
+    _requested_seasons = request_data.get('requested_seasons') if request_data else None
+    if _requested_seasons:
+        try:
+            _seasons = [int(s.strip()) for s in str(_requested_seasons).split(',')]
+            if _seasons:
+                _starting_season = min(_seasons)
+                app.logger.info(f"✓ Using requested season {_starting_season} for series {series_id}")
+        except Exception as e:
+            app.logger.warning(f"Could not parse requested seasons '{_requested_seasons}': {e}")
+
     # always_have: monitor matching episodes (additive, never unmonitors)
     if _always_have:
         try:
-            media_processor.process_always_have(series_id, _always_have)
+            media_processor.process_always_have(series_id, _always_have, starting_season=_starting_season)
         except Exception as e:
             app.logger.error(f"always_have processing failed for series {series_id}: {e}")
 
@@ -5811,7 +5825,6 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
                         break
                 time.sleep(1)
             if _all_eps:
-                _starting_season = 1
                 _season_eps = sorted(
                     [ep for ep in _all_eps if ep.get('seasonNumber') == _starting_season],
                     key=lambda x: x.get('episodeNumber', 0)
