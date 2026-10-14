@@ -6,6 +6,10 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
+### 🐛 Bug Fixes (from episeerr_dev)
+
+- **Applying a rule to a pending Jellyseerr request for a specific season (e.g. "Season 4 only") still monitored/searched Season 1** — `_apply_rule_to_selection_core()` (the "Apply Rule" button on the Pending Requests page) hardcoded `starting_season = 1` for both `always_have` and `get_type`/`get_count` processing, ignoring the season Jellyseerr actually requested. This was already fixed for the direct Sonarr-add webhook path (episeerr#74), but that fix was never carried into this second, separate code path when it was added afterward. Now parses `requested_seasons` from the stored pending request the same way the webhook path does, and uses it as the starting season throughout. (`episeerr.py`, #100)
+
 ## v3.9.8 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
