@@ -12,6 +12,8 @@
 
 - **Container memory grew continually over long uptimes with no single process restart point** — the single Gunicorn worker ran indefinitely with no recycling, so any slow per-request growth (heap fragmentation, connection objects, etc.) only ever accumulated for as long as the container stayed up. Added `--max-requests`/`--max-requests-jitter` so the worker restarts gracefully every ~2000 requests; all app state lives in SQLite/files, and the scheduler/background threads (plus custom's SSE clients, which just reconnect) re-init on worker boot, so this is transparent. Reported at ~5GB RSS after a day of normal use (#101) — hasn't been profiled to confirm this is the entire cause, but it's the standard fix for this exact symptom. (`Dockerfile`, #101)
 
+- **Any enabled Sonarr webhook trigger other than "On Series Add"/"On Grab" could silently reset an existing, already-tracked series back to Season 1** — `process_sonarr_webhook()` had no gate on `eventType`: anything that wasn't `Grab`/`Download` fell straight into the tag-detection → unmonitor → `apply_initial_rule_selection(starting_season=1)` pipeline meant only for a fresh add, as long as the series carried a resolvable rule tag. If a user enabled an extra trigger (e.g. "On Rename") on that connection, a Rename event on an existing series already past Season 1 would get unmonitored and reprocessed from Season 1 again, discarding its real progress. Added an explicit `eventType == 'SeriesAdd'` check instead of relying on the Sonarr-side trigger config alone. (`webhooks.py`, #100)
+
 ## v3.9.8 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
