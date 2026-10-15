@@ -44,6 +44,18 @@ def process_sonarr_webhook():
         if event_type == 'Grab':
             return handle_episode_grab(json_data)
 
+        # Everything below assumes a fresh series add (tag detection, unmonitor,
+        # apply_initial_rule_selection starting from Season 1) - it must never run
+        # for an existing, already-tracked series. The README tells users to enable
+        # only "On Series Add"/"On Grab" on this webhook connection, but nothing
+        # enforced that: any other enabled trigger (e.g. "On Rename") on an existing
+        # rule-tagged series would fall through here and get silently reprocessed
+        # from Season 1, wiping out whatever season it had actually progressed to
+        # (episeerr#100). Explicit gate instead of trusting Sonarr-side config.
+        if event_type != 'SeriesAdd':
+            current_app.logger.info(f"Ignoring Sonarr webhook event type '{event_type}' - only SeriesAdd/Grab are processed")
+            return jsonify({"status": "success", "message": f"Event type '{event_type}' not processed"}), 200
+
         series = json_data.get('series', {})
         series_id = series.get('id')
         tvdb_id = series.get('tvdbId')

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- **Any enabled Sonarr webhook trigger other than "On Series Add"/"On Grab" could silently reset an existing, already-tracked series back to Season 1** — `process_sonarr_webhook()` had no gate on `eventType`: anything that wasn't `Grab`/`Download` fell straight into the tag-detection → unmonitor → `apply_initial_rule_selection(starting_season=1)` pipeline meant only for a fresh add, as long as the series carried a resolvable rule tag. If a user enabled an extra trigger (e.g. "On Rename") on that connection, a Rename event on an existing series already past Season 1 would get unmonitored and reprocessed from Season 1 again, discarding its real progress. Added an explicit `eventType == 'SeriesAdd'` check instead of relying on the Sonarr-side trigger config alone. (`webhooks.py`, #100)
+
 ## v3.9.9
 
 ### 🐛 Bug Fixes
