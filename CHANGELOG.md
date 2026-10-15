@@ -10,6 +10,8 @@
 
 - **Applying a rule to a pending Jellyseerr request for a specific season (e.g. "Season 4 only") still monitored/searched Season 1** — `_apply_rule_to_selection_core()` (the "Apply Rule" button on the Pending Requests page) hardcoded `starting_season = 1` for both `always_have` and `get_type`/`get_count` processing, ignoring the season Jellyseerr actually requested. This was already fixed for the direct Sonarr-add webhook path (episeerr#74), but that fix was never carried into this second, separate code path when it was added afterward. Now parses `requested_seasons` from the stored pending request the same way the webhook path does, and uses it as the starting season throughout. (`episeerr.py`, #100)
 
+- **Container memory grew continually over long uptimes with no single process restart point** — the single Gunicorn worker ran indefinitely with no recycling, so any slow per-request growth (heap fragmentation, connection objects, etc.) only ever accumulated for as long as the container stayed up. Added `--max-requests`/`--max-requests-jitter` so the worker restarts gracefully every ~2000 requests; all app state lives in SQLite/files, and the scheduler/background threads (plus custom's SSE clients, which just reconnect) re-init on worker boot, so this is transparent. Reported at ~5GB RSS after a day of normal use (#101) — hasn't been profiled to confirm this is the entire cause, but it's the standard fix for this exact symptom. (`Dockerfile`, #101)
+
 ## v3.9.8 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
