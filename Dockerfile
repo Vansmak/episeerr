@@ -48,4 +48,10 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 EXPOSE 5002
 
 # Use Gunicorn to serve the application
-CMD ["gunicorn", "--workers", "1", "--worker-class", "gthread", "--threads", "8", "--bind", "0.0.0.0:5002", "--access-logfile", "-", "--error-logfile", "-", "episeerr:app"]
+# --max-requests recycles the worker periodically so long-running heap
+# fragmentation/slow growth doesn't accumulate for the container's whole
+# uptime (episeerr#101) - jitter avoids every restart landing at the exact
+# same request count. All app state lives in SQLite/files, not in-process
+# memory, and the scheduler/background threads re-init on worker boot
+# (module-level in episeerr.py), so a recycle is transparent.
+CMD ["gunicorn", "--workers", "1", "--worker-class", "gthread", "--threads", "8", "--max-requests", "2000", "--max-requests-jitter", "200", "--bind", "0.0.0.0:5002", "--access-logfile", "-", "--error-logfile", "-", "episeerr:app"]
