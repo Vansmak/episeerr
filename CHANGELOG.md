@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v3.9.9
 
 ### 🐛 Bug Fixes
 
