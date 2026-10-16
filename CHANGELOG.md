@@ -6,7 +6,19 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
-### 🐛 Bug Fixes (from episeerr_dev)
+## v4.0.0 (from episeerr_dev)
+
+### ✨ New Feature
+
+- **"Premiere" — a new `always_have` rule pattern for catching up on a long-running show from the newest season instead of Season 1** — new `c` (current season) token: `sc` (whole current season) / `sce1` (just its premiere), re-resolved against Sonarr's actual air dates on every check rather than fixed at the moment the rule was applied. With `sce1`, the current season's premiere downloads and sits held, unwatched; if a newer season's premiere finishes downloading before you watch it, the old one is automatically dropped and the new one takes its place — repeating for as many seasons as show up, with no gap where neither is available. Watching whichever premiere is sitting there hands off into the same advance-on-finale behavior as `e1+` (Sequential Activation), continuing chronologically from that season rather than always from S1. `c` always tracks activation state and is never cleanup-protected while held, regardless of `+`/`-` — neither existing modifier combination gives "track it, but don't protect it while waiting," which this needs so Grace is free to evict a stale, never-watched premiere. New swap-eviction runs as its own cleanup phase (0.6), separate from the existing future-season reconciliation, since it specifically has to wait for the new season's file to be confirmed on disk before touching the old one. From discussion #102. (`media_processor.py`, `README.md`, `templates/edit_rule.html`, `templates/create_rule.html`, `templates/documentation.html`)
+
+### 🐛 Bug Fixes
+
+- **Scheduled cleanup logged a false ERROR every cycle** — `GlobalStorageScheduler`'s scheduled/manual cleanup runs call `media_processor.py` with no webhook argv, which `get_server_activity()` correctly falls through to cleanup mode for, but not before trying (and failing) to open a webhook payload file that was never going to exist in that mode, logging at ERROR and burying real errors in the log. Now recognized as the normal no-webhook-file case and logged at DEBUG instead. (`media_processor.py`, #103)
+
+## v3.9.9 (from episeerr_dev)
+
+### 🐛 Bug Fixes
 
 - **Applying a rule to a pending Jellyseerr request for a specific season (e.g. "Season 4 only") still monitored/searched Season 1** — `_apply_rule_to_selection_core()` (the "Apply Rule" button on the Pending Requests page) hardcoded `starting_season = 1` for both `always_have` and `get_type`/`get_count` processing, ignoring the season Jellyseerr actually requested. This was already fixed for the direct Sonarr-add webhook path (episeerr#74), but that fix was never carried into this second, separate code path when it was added afterward. Now parses `requested_seasons` from the stored pending request the same way the webhook path does, and uses it as the starting season throughout. (`episeerr.py`, #100)
 
