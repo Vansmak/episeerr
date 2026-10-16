@@ -517,6 +517,12 @@ def get_server_activity(filepath=None):
         if not os.path.exists(filepath):
             filepath = '/app/temp/data_from_tautulli.json'
 
+        if not os.path.exists(filepath):
+            # Normal for a scheduled/manual cleanup run (no argv webhook file) -
+            # there's no webhook payload to read in that mode, not an error (#103).
+            logger.debug(f"No webhook data file at {filepath} - not a webhook call")
+            return None, None, None, None, None, False
+
         with open(filepath, 'r') as file:
             data = json.load(file)
         
@@ -1342,7 +1348,7 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
         parsed_ah = parse_always_have(always_have) if always_have else None
         skip_rule_processing = False
 
-        if parsed_ah and parsed_ah['has_plus']:
+        if parsed_ah and (parsed_ah['has_plus'] or parsed_ah['has_c']):
             config = load_config()
             rule_name = _find_rule_name_for_series(series_id, config)
             if rule_name:
@@ -1351,7 +1357,9 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                 act_seasons = series_data.get('activation_seasons', {})
                 season_state = act_seasons.get(str(season_number))
 
-                if season_state == 'held':
+                # 'premiere_held' is the 'c' token's equivalent of 'held' (#102) -
+                # released the same way, by watching the activation episode.
+                if season_state in ('held', 'premiere_held'):
                     activation_ep = parsed_ah['activation_ep']
                     if activation_ep and episode_number == activation_ep:
                         # Release this season — rule runs normally from here
@@ -1523,8 +1531,11 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
                         )
 
         # ── Sequential mode: advance to next season on finale ──────────────
-        if (parsed_ah and parsed_ah['has_plus'] and parsed_ah['is_sequential']
-                and not skip_rule_processing and not prefetch_only):
+        # A released 'c' token (#102) hands off into the same advance-on-finale
+        # logic as e1+ sequential mode, continuing chronologically from whatever
+        # season the viewer actually started at - not just from e1+'s season 1.
+        if (parsed_ah and not skip_rule_processing and not prefetch_only
+                and ((parsed_ah['has_plus'] and parsed_ah['is_sequential']) or parsed_ah['has_c'])):
             _advance_sequential_if_finale(
                 series_id, season_number, episode_number, rule, series_title, all_episodes
             )
@@ -1862,10 +1873,16 @@ def parse_always_have(expression):
         base (str)          : expression with modifiers stripped
         has_plus (bool)     : activation (+) modifier present
         has_minus (bool)    : removable (-) modifier present
+        has_c (bool)        : any part uses the 'c' (current season) token -
+                               see resolve_current_season()/resolve_c_tokens().
+                               Always tracks activation state and is never
+                               cleanup-protected, regardless of +/- (#102) -
+                               neither existing modifier combination gives
+                               "track it, but don't protect it while waiting".
         is_sequential (bool): True when base starts with 'eN' (no season prefix)
         activation_ep (int) : episode number for activation / sequential advance
     """
-    empty = {'base': '', 'has_plus': False, 'has_minus': False,
+    empty = {'base': '', 'has_plus': False, 'has_minus': False, 'has_c': False,
              'is_sequential': False, 'activation_ep': None}
     if not expression or not expression.strip():
         return empty
@@ -1876,6 +1893,7 @@ def parse_always_have(expression):
 
     has_plus = False
     has_minus = False
+    has_c = False
     base_parts = []
 
     for part in expr.split(','):
@@ -1885,6 +1903,8 @@ def parse_always_have(expression):
         base_part, p_plus, p_minus = _strip_modifiers(part)
         has_plus = has_plus or p_plus
         has_minus = has_minus or p_minus
+        if re.match(r'^sc(e\d+(?:-\d+)?)?$', base_part):
+            has_c = True
         base_parts.append(base_part)
 
     if not base_parts:
@@ -1904,15 +1924,75 @@ def parse_always_have(expression):
         'base': base,
         'has_plus': has_plus,
         'has_minus': has_minus,
+        'has_c': has_c,
         'is_sequential': is_sequential,
         'activation_ep': activation_ep,
     }
 
 
 _ALWAYS_HAVE_PART_RE = re.compile(
-    r'^(?:all|s\*e\d+|s\d+e\d+(?:-\d+)?|s\d+(?:-\d+)?|e\d+)[+\-]*$',
+    r'^(?:all|s\*e\d+|sce\d+(?:-\d+)?|sc|s\d+e\d+(?:-\d+)?|s\d+(?:-\d+)?|e\d+)[+\-]*$',
     re.IGNORECASE,
 )
+
+_C_TOKEN_RE = re.compile(r'^sc(e\d+(?:-\d+)?)?$', re.IGNORECASE)
+
+
+def resolve_current_season(all_episodes):
+    """
+    The highest season number with at least one episode whose air date has
+    already passed - i.e. "whatever season the show is presently on" (#102's
+    'c' token). An announced-but-unaired season doesn't count (nothing to
+    download yet), nor does season 0 (specials). Returns None if no season
+    has aired anything yet (e.g. a just-added, fully-upcoming series).
+    """
+    now = datetime.now(timezone.utc)
+    aired_seasons = set()
+    for ep in all_episodes:
+        season = ep.get('seasonNumber', 0)
+        if season <= 0:
+            continue
+        air_str = ep.get('airDateUtc', '')
+        if not air_str:
+            continue
+        try:
+            air_dt = datetime.fromisoformat(air_str.replace('Z', '+00:00'))
+        except Exception:
+            continue
+        if air_dt < now:
+            aired_seasons.add(season)
+    return max(aired_seasons) if aired_seasons else None
+
+
+def resolve_c_tokens(expression, current_season):
+    """
+    Substitute the 'c' (current season) token with its resolved literal
+    season number for this evaluation pass - e.g. 'sce1-' -> 's5e1-' when
+    resolve_current_season() says season 5 is current. Every other token is
+    left untouched, so the result can be fed straight into
+    parse_always_have()/is_protected_by_expression() unchanged.
+
+    current_season=None (nothing has aired yet) drops any 'c' part entirely,
+    since there's nothing to resolve it to yet.
+    """
+    if not expression or 'c' not in expression.lower():
+        return expression
+
+    resolved_parts = []
+    for part in expression.split(','):
+        raw = part.strip()
+        base_part, has_plus, has_minus = _strip_modifiers(raw.lower())
+        m = _C_TOKEN_RE.match(base_part)
+        if not m:
+            resolved_parts.append(raw)
+            continue
+        if current_season is None:
+            continue
+        ep_suffix = m.group(1) or ''
+        mods = ('+' if has_plus else '') + ('-' if has_minus else '')
+        resolved_parts.append(f's{current_season}{ep_suffix}{mods}')
+
+    return ','.join(resolved_parts)
 
 
 def validate_always_have_expression(expression):
@@ -2090,20 +2170,19 @@ def process_always_have(series_id, expression, starting_season=None):
     Handles +/- modifier suffixes:
       +  activation modifier — sets per-season held state; skips if series already watched
       -  removable modifier  — no special grab logic, only affects anchor protection
+    'c' (current season) token (#102): always tracked and never cleanup-protected,
+    regardless of +/- — resolved fresh against live Sonarr data every call via
+    resolve_current_season()/resolve_c_tokens().
     Sequential mode (eN without s prefix): grabs only the requested starting season's EN,
     falling back to the lowest-numbered season if starting_season is not in the series.
     """
     if not expression or not expression.strip():
         return
 
-    parsed = parse_always_have(expression)
-    base = parsed['base']
-    has_plus = parsed['has_plus']
-    is_sequential = parsed['is_sequential']
-    activation_ep = parsed['activation_ep']
-
-    if not base:
-        return
+    # has_c is read from the ORIGINAL expression - resolve_c_tokens() below
+    # rewrites 'c' into a literal season number for matching purposes, which
+    # would otherwise make it indistinguishable from a plain sNe1 token.
+    has_c = parse_always_have(expression)['has_c']
 
     headers = {'X-Api-Key': SONARR_API_KEY}
 
@@ -2117,6 +2196,26 @@ def process_always_have(series_id, expression, starting_season=None):
             return
 
         all_episodes = resp.json()
+
+        resolved_expression = expression
+        if has_c:
+            current_season = resolve_current_season(all_episodes)
+            resolved_expression = resolve_c_tokens(expression, current_season)
+            if not resolved_expression:
+                logger.info(
+                    f"process_always_have: 'c' token but no season has aired yet for "
+                    f"series {series_id} - nothing to grab"
+                )
+                return
+
+        parsed = parse_always_have(resolved_expression)
+        base = parsed['base']
+        has_plus = parsed['has_plus']
+        is_sequential = parsed['is_sequential']
+        activation_ep = parsed['activation_ep']
+
+        if not base:
+            return
 
         # Collect unmonitored episodes that match the expression
         to_monitor = []
@@ -2183,8 +2282,11 @@ def process_always_have(series_id, expression, starting_season=None):
             else:
                 logger.error(f"process_always_have: search trigger failed: {search_resp.text}")
 
-        # Initialize per-season held state for + modifier
-        if has_plus and grabbed_seasons:
+        # Initialize per-season held state for + modifier, or 'premiere_held' for
+        # a 'c' token (#102) - a distinct state so is_anchor_episode never protects
+        # it (unlike plain 'held'), while still letting the watched-event handler
+        # recognize it as the thing being waited on and release/hand off from it.
+        if (has_plus or has_c) and grabbed_seasons:
             config = load_config()
             rule_name = _find_rule_name_for_series(series_id, config)
             if rule_name:
@@ -2199,15 +2301,16 @@ def process_always_have(series_id, expression, starting_season=None):
                     )
                 else:
                     act_seasons = series_data.setdefault('activation_seasons', {})
+                    state = 'premiere_held' if has_c else 'held'
                     newly_held = []
                     for s in grabbed_seasons:
                         if str(s) not in act_seasons:
-                            act_seasons[str(s)] = 'held'
+                            act_seasons[str(s)] = state
                             newly_held.append(s)
                     if newly_held:
                         save_config(config)
                         logger.info(
-                            f"process_always_have: set held state for series {series_id} "
+                            f"process_always_have: set {state} state for series {series_id} "
                             f"seasons {sorted(newly_held)}"
                         )
 
@@ -2269,9 +2372,17 @@ def is_anchor_episode(episode, series_id=None, check_always_have=True):
                 parsed = parse_always_have(always_have)
                 has_plus = parsed['has_plus']
                 has_minus = parsed['has_minus']
+                has_c = parsed['has_c']
                 is_sequential = parsed['is_sequential']
                 activation_ep = parsed['activation_ep']
                 base = parsed['base']
+
+                # 'c' (current season) token: never anchor, regardless of +/- (#102) -
+                # Grace/Keep must be free to clean it up if it's never watched, so a
+                # newer season can take its place. Checked before the -only-modifier
+                # case below since 'c' doesn't need a literal '-' to get this behavior.
+                if has_c:
+                    return False
 
                 # - only modifier: never anchor regardless of expression match
                 if has_minus and not has_plus:
@@ -3396,6 +3507,130 @@ def reconcile_future_seasons():
     return reconciled_seasons
 
 
+def reconcile_premiere_swaps():
+    """
+    For every series whose rule's always_have uses the 'c' (current season)
+    token and is still in the pre-watch 'premiere_held' state, check whether a
+    newer season's premiere has actually finished downloading. If so, evict the
+    old (never-watched) held episode and grab+hold the new one instead (#102).
+
+    Deliberately separate from reconcile_future_seasons(): that function only
+    ever looks at seasons that haven't aired yet and stops once a season has
+    been handled once. This needs the opposite timing - wait until the NEW
+    season's premiere is confirmed on disk before touching the old one, so
+    there's never a gap where neither is available (the swap is a replace,
+    not a delete-then-wait). Runs every cleanup cycle; a series with nothing
+    to do is a cheap no-op (one episode list fetch, no writes).
+    """
+    config = load_config()
+    headers = {'X-Api-Key': SONARR_API_KEY}
+    config_changed = False
+    swapped = 0
+
+    for rule_name, rule_data in config.get('rules', {}).items():
+        always_have = rule_data.get('always_have', '')
+        parsed_ah = parse_always_have(always_have) if always_have else None
+        if not parsed_ah or not parsed_ah['has_c'] or parsed_ah['activation_ep'] is None:
+            continue
+        activation_ep = parsed_ah['activation_ep']
+
+        for series_id_str, series_data in list(rule_data.get('series', {}).items()):
+            activation_seasons = series_data.get('activation_seasons', {})
+            held_season = next(
+                (int(s) for s, state in activation_seasons.items() if state == 'premiere_held'),
+                None
+            )
+            if held_season is None:
+                continue  # nothing dangled for this series right now
+
+            series_id = int(series_id_str)
+            try:
+                resp = http.get(
+                    f"{SONARR_URL}/api/v3/episode?seriesId={series_id}",
+                    headers=headers
+                )
+                if not resp.ok:
+                    cleanup_logger.warning(
+                        f"Premiere swap: cannot fetch episodes for series {series_id}"
+                    )
+                    continue
+
+                all_episodes = resp.json()
+                current_season = resolve_current_season(all_episodes)
+                if current_season is None or current_season <= held_season:
+                    continue  # nothing newer has actually aired yet
+
+                new_ep = next(
+                    (ep for ep in all_episodes
+                     if ep['seasonNumber'] == current_season
+                     and ep['episodeNumber'] == activation_ep),
+                    None
+                )
+                # Wait for the new premiere to actually be on disk - swapping on
+                # "newly aired" alone would open a gap with nothing available,
+                # which is exactly what #102 asked to avoid.
+                if not new_ep or not new_ep.get('hasFile', False):
+                    continue
+
+                old_ep = next(
+                    (ep for ep in all_episodes
+                     if ep['seasonNumber'] == held_season
+                     and ep['episodeNumber'] == activation_ep),
+                    None
+                )
+
+                series_title = None
+                try:
+                    sr = http.get(f"{SONARR_URL}/api/v3/series/{series_id}", headers=headers)
+                    series_title = sr.json().get('title') if sr.ok else None
+                except Exception:
+                    pass
+                series_title = series_title or f"series:{series_id}"
+
+                if old_ep and old_ep.get('hasFile', False):
+                    delete_episodes_immediately(
+                        [old_ep], series_id, series_title,
+                        reason=f"Premiere swap: S{current_season} replaces S{held_season}",
+                        rule_dry_run=rule_data.get('dry_run', False),
+                        rule_name=rule_name,
+                    )
+                elif old_ep:
+                    unmonitor_episodes([old_ep['id']])
+
+                mon_resp = http.put(
+                    f"{SONARR_URL}/api/v3/episode/monitor",
+                    headers=headers,
+                    json={"episodeIds": [new_ep['id']], "monitored": True}
+                )
+                if not mon_resp.ok:
+                    cleanup_logger.error(
+                        f"Premiere swap: failed to monitor S{current_season}E{activation_ep} "
+                        f"for '{series_title}': {mon_resp.text}"
+                    )
+                    continue
+
+                del activation_seasons[str(held_season)]
+                activation_seasons[str(current_season)] = 'premiere_held'
+                series_data['activation_seasons'] = activation_seasons
+                config_changed = True
+                swapped += 1
+                cleanup_logger.info(
+                    f"🔄 Premiere swap: '{series_title}' S{held_season} → S{current_season} "
+                    f"(always_have: '{always_have}')"
+                )
+
+            except Exception as e:
+                cleanup_logger.error(
+                    f"Premiere swap error for series {series_id}: {e}", exc_info=True
+                )
+
+    if config_changed:
+        save_config(config)
+
+    cleanup_logger.info(f"🔄 Premiere swap reconciliation complete: {swapped} swap(s)")
+    return swapped
+
+
 def run_unified_cleanup():
     """
     UNIFIED CLEANUP: Uses your 3 existing functions with smart storage logic
@@ -3487,6 +3722,15 @@ def run_unified_cleanup():
         except Exception as e:
             cleanup_logger.error(f"❌ Error in future season reconciliation: {str(e)}")
         # ==================== END PHASE 0.5 ====================
+
+        # ==================== PHASE 0.6 - PREMIERE SWAP RECONCILIATION ====================
+        cleanup_logger.info("=" * 80)
+        cleanup_logger.info("🔄 Phase 0.6: Premiere swap reconciliation (#102)")
+        try:
+            reconcile_premiere_swaps()
+        except Exception as e:
+            cleanup_logger.error(f"❌ Error in premiere swap reconciliation: {str(e)}")
+        # ==================== END PHASE 0.6 ====================
 
         total_processed = 0
 

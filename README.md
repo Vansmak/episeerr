@@ -922,6 +922,8 @@ This is about setting up the show, not ongoing watching. When a show enters a ru
 | `s1, s*e1` | Season 1 + first ep of every other season |
 | `s1-3` | Seasons 1 through 3 |
 | `s1e1-5` | Season 1, episodes 1-5 |
+| `sc` | The current season — whichever season has the highest aired episode right now, re-resolved every check |
+| `sce1` | Episode 1 of the current season |
 | `all` | Everything |
 
 **Modifiers** (append to any base expression):
@@ -935,9 +937,11 @@ This is about setting up the show, not ongoing watching. When a show enters a ru
 | `e1+` | Sequential: grab one season at a time, advance on finale |
 | `s1e1+` | Activation gate on pilot only; full auto from S2 |
 | `pilot+` | Alias for `e1+` |
+| `sce1` | **Premiere**: dangle the current season's premiere; swaps for a newer one automatically; watching it hands off to sequential advance from there — see below |
 
 - **`+`** — suppresses get-count until the activation episode **starts playing** (per-season state); fires on playback start across Plex, Jellyfin, Emby, and Tautulli
 - **`-`** — activation episode is removable by grace/keep after activation fires
+- **`c` ignores +/-** — it always tracks and is always removable by grace/keep while unwatched, regardless of any modifier you add. Neither existing combination gives "track it, but don't protect it while waiting," which is what a token that's meant to be replaced by a newer one needs.
 
 Combine with commas. Leave blank to skip. Always Have, Get, Keep, Grace, and Dormant are all independent — use any combination.
 
@@ -1147,6 +1151,26 @@ Action: Search
 - Press play on S1E1 → activation fires immediately, get-count unlocked, normal Get/Keep applies
 - Watch S1 finale → S2E1 grabbed, get-count held again until S2E1 starts playing
 - Ended series: does not advance past the final season
+
+---
+
+### Premiere (sample the newest season, then watch in order)
+
+**Profile:** For catching up on a long-running show — try the newest season first instead of starting at S1; once you commit, finish in order from there
+
+```yaml
+Rule Name: premiere
+Always Have: sce1
+GET: 1 episode
+KEEP: 1 episode
+Action: Search
+```
+
+**What happens:**
+- Show added, 5 seasons already out → S5E1 (the current season's premiere) downloads, held unwatched — nothing else does
+- A 6th season airs before you've watched S5E1 → once S6E1 is actually downloaded, S5E1 is dropped and S6E1 takes its place, automatically, as many times as a newer season shows up
+- Press play on whichever premiere happens to be sitting there → it locks in: normal Get/Keep takes over from that season, and finishing the finale advances one season at a time from there (same as Sequential Activation), regardless of what's aired since
+- Grace/Keep are free to clean up the held premiere if it goes stale — that's what lets a newer one replace it; once watched, it's no longer eligible to be swapped
 
 ---
 

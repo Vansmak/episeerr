@@ -1,10 +1,16 @@
 # Changelog
 
-## Unreleased
+## v4.0.0
+
+### ✨ New Feature
+
+- **"Premiere" — a new `always_have` rule pattern for catching up on a long-running show from the newest season instead of Season 1** — new `c` (current season) token: `sc` (whole current season) / `sce1` (just its premiere), re-resolved against Sonarr's actual air dates on every check rather than fixed at the moment the rule was applied. With `sce1`, the current season's premiere downloads and sits held, unwatched; if a newer season's premiere finishes downloading before you watch it, the old one is automatically dropped and the new one takes its place — repeating for as many seasons as show up, with no gap where neither is available. Watching whichever premiere is sitting there hands off into the same advance-on-finale behavior as `e1+` (Sequential Activation), continuing chronologically from that season rather than always from S1. `c` always tracks activation state and is never cleanup-protected while held, regardless of `+`/`-` — neither existing modifier combination gives "track it, but don't protect it while waiting," which this needs so Grace is free to evict a stale, never-watched premiere. New swap-eviction runs as its own cleanup phase (0.6), separate from the existing future-season reconciliation, since it specifically has to wait for the new season's file to be confirmed on disk before touching the old one. From discussion #102. (`media_processor.py`, `README.md`, `templates/edit_rule.html`, `templates/create_rule.html`, `templates/documentation.html`)
 
 ### 🐛 Bug Fixes
 
 - **Any enabled Sonarr webhook trigger other than "On Series Add"/"On Grab" could silently reset an existing, already-tracked series back to Season 1** — `process_sonarr_webhook()` had no gate on `eventType`: anything that wasn't `Grab`/`Download` fell straight into the tag-detection → unmonitor → `apply_initial_rule_selection(starting_season=1)` pipeline meant only for a fresh add, as long as the series carried a resolvable rule tag. If a user enabled an extra trigger (e.g. "On Rename") on that connection, a Rename event on an existing series already past Season 1 would get unmonitored and reprocessed from Season 1 again, discarding its real progress. Added an explicit `eventType == 'SeriesAdd'` check instead of relying on the Sonarr-side trigger config alone. (`webhooks.py`, #100)
+
+- **Scheduled cleanup logged a false ERROR every cycle** — `GlobalStorageScheduler`'s scheduled/manual cleanup runs call `media_processor.py` with no webhook argv, which `get_server_activity()` correctly falls through to cleanup mode for, but not before trying (and failing) to open a webhook payload file that was never going to exist in that mode, logging at ERROR and burying real errors in the log. Now recognized as the normal no-webhook-file case and logged at DEBUG instead. (`media_processor.py`, #103)
 
 ## v3.9.9
 

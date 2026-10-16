@@ -490,6 +490,11 @@
                                 <td>Try first handful of episodes</td>
                             </tr>
                             <tr>
+                                <td><code>sc</code> / <code>sce1</code></td>
+                                <td>The current season / its premiere — re-resolved every check, so it follows whichever season has aired most recently</td>
+                                <td>Catching up on a long-running show from the newest season instead of S1 (see "Premiere" below)</td>
+                            </tr>
+                            <tr>
                                 <td><code>all</code></td>
                                 <td>Everything</td>
                                 <td>Combined with Keep for full protection</td>
@@ -539,6 +544,10 @@
                                 <td><code>pilot+</code></td>
                                 <td>Alias for <code>e1+</code> (sequential mode)</td>
                             </tr>
+                            <tr>
+                                <td><code>sce1</code></td>
+                                <td><strong>Premiere</strong>: dangle the current season's premiere, held unwatched. A newer season's premiere automatically replaces it once that episode is actually downloaded — no gap where neither is available. Watching whichever one is sitting there hands off into the same advance-on-finale behavior as <code>e1+</code>, continuing from that season instead of S1. Ignores <code>+</code>/<code>-</code> — always tracked, never protected while unwatched, since no existing modifier combination gives that.</td>
+                            </tr>
                         </tbody>
                     </table>
 
@@ -549,6 +558,7 @@
                             <li><strong><code>-</code></strong> — removable: the always-have episode is <em>not</em> permanently anchored; grace/keep cleanup can delete it once it has been watched.</li>
                             <li>Series already in progress when a <code>+</code> rule is assigned are treated as immediately active — no retroactive hold.</li>
                             <li>Sequential mode (<code>e1+</code>) does not advance past the final season of an ended series.</li>
+                            <li><strong><code>c</code></strong> (current season) is its own case: always tracked, never protected while unwatched, regardless of <code>+</code>/<code>-</code>. Re-evaluated every cleanup cycle against Sonarr's actual air dates, not just whatever season existed when the rule was applied.</li>
                         </ul>
                     </div>
 
@@ -574,6 +584,7 @@
                     <li><strong>Get 1 season, Keep 1 season:</strong> Season-based - entire seasons at a time</li>
                     <li><strong>Get All, Keep All:</strong> Hoarder mode - download everything, keep forever</li>
                     <li><strong>Always Have: s1, s*e1 + Get 1:</strong> Showcase — Plex shows all seasons, grab 1 at a time when watching</li>
+                    <li><strong>Always Have: sce1 + Get 1:</strong> Premiere — try the newest season first, commit to in-order viewing once you start watching</li>
                 </ul>
             </div>
         </div>
