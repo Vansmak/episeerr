@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.1
+
+### 🐛 Bug Fixes
+
+- **Premiere's swap never actually happened if the new season's premiere hadn't aired-and-downloaded by the time a cleanup cycle saw it** — `reconcile_premiere_swaps()` only ever checked `hasFile`, never actually triggered a monitor/search for the newly-current season, so if it wasn't already downloaded nothing ever made it get downloaded. `reconcile_future_seasons()` couldn't fill that gap either, since `resolve_current_season()` only ever points at an already-aired season, so there's nothing for a `c` token to correctly match while the new season is still future - that function now explicitly skips `c`-token rules instead of silently failing to match. `reconcile_premiere_swaps()` now proactively monitors and searches the newly-current premiere the moment it's detected, while still holding off on evicting the old one until the new one is actually confirmed on disk. Reported against the real v4.0.0 code the same day it shipped - discussion #102. (`media_processor.py`)
+
+- **Sonarr v5 beta rejects every rule tag Episeerr tries to create** — Sonarr v5 enforces `^[a-z0-9-]+$` on tag labels (lowercase, digits, hyphens only); Episeerr always built rule tags as `episeerr_<rule_name>`, and the underscore (plus any uppercase or underscores already in the rule name, e.g. `episeerr_Ended_unmonitor`) gets rejected outright. New tag creation silently failed, so new/renamed rules never got tagged in Sonarr, which cascaded into `sync_rule_tag_to_sonarr()` failures, drift detection moving series back to their old rule on the next reconcile, and `monitorNewItems` never getting set to `none`. Existing already-created tags were unaffected (Sonarr doesn't re-validate stored labels), so this only bit new rules going forward. New tags are now created as `episeerr-<rule-name>`, sanitized (lowercased, every non-`[a-z0-9-]` character collapsed to a hyphen) so they always pass Sonarr's validation on both v4 and v5. Tag resolution (`resolve_rule_from_tags`, `validate_series_tag`, delay-profile/select-tag detection, etc.) now accepts both the legacy `episeerr_` and new `episeerr-` prefixes, matching rule names tolerantly of hyphen vs. underscore, so nothing already tagged under the old format breaks. A new idempotent `migrate_legacy_episeerr_tags()` runs on every startup and renames existing `episeerr_*` tags to their sanitized form in place (same tag ID, so no series loses its association) — safe to run repeatedly, and harmless on v4 too since hyphens are valid there as well. Reported running Sonarr v5 beta 5.0.0.2635. (`episeerr_utils.py`, `episeerr.py`, #104)
+
 ## v4.0.0
 
 ### ✨ New Feature

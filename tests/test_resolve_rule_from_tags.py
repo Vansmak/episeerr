@@ -88,6 +88,29 @@ class ResolveRuleFromTagsTestCase(unittest.TestCase):
         self.assertTrue(is_select)
         self.assertIsNone(rule)
 
+    # episeerr#104: Sonarr v5 rejects '_' in tag labels, so new tags are
+    # created as 'episeerr-<rule>' instead - both the prefix delimiter and
+    # any underscore in the rule name itself get hyphenated.
+    def test_hyphenated_prefix_is_accepted(self):
+        tag_mapping = {7: 'episeerr-one_at_a_time'}
+        rule, is_select = resolve_rule_from_tags([7], tag_mapping, CONFIG)
+        self.assertEqual(rule, 'one_at_a_time')
+
+    def test_hyphenated_rule_name_matches_underscored_config_rule(self):
+        tag_mapping = {8: 'episeerr-one-at-a-time'}
+        rule, is_select = resolve_rule_from_tags([8], tag_mapping, CONFIG)
+        self.assertEqual(rule, 'one_at_a_time')
+
+    def test_hyphenated_select_tag_still_recognized(self):
+        tag_mapping = {9: 'episeerr-select'}
+        rule, is_select = resolve_rule_from_tags([9], tag_mapping, CONFIG)
+        self.assertTrue(is_select)
+
+    def test_hyphenated_default_tag_still_resolves_through_config(self):
+        tag_mapping = {10: 'episeerr-default'}
+        rule, is_select = resolve_rule_from_tags([10], tag_mapping, CONFIG)
+        self.assertEqual(rule, 'one_at_a_time')
+
 
 if __name__ == '__main__':
     unittest.main()

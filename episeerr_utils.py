@@ -190,9 +190,9 @@ def create_episeerr_default_tag():
         # Still check if tag exists, just don't create it
         try:
             for tag in get_sonarr_tags():
-                if tag['label'].lower() == 'episeerr_default':
+                if tag['label'].lower() in ('episeerr_default', 'episeerr-default'):
                     EPISEERR_DEFAULT_TAG_ID = tag['id']
-                    logger.info(f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
+                    logger.info(f"Found existing '{tag['label']}' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
                     return EPISEERR_DEFAULT_TAG_ID
 
             logger.warning("episeerr_default tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
@@ -201,28 +201,31 @@ def create_episeerr_default_tag():
         except Exception as e:
             logger.warning(f"Could not check for existing tags: {str(e)}")
             return None
-    
+
     # Original auto-creation logic (when AUTO_CREATE_TAGS=true)
     if EPISEERR_DEFAULT_TAG_ID is not None:
         logger.debug(f"'episeerr_default' tag ID already set: {EPISEERR_DEFAULT_TAG_ID}")
         return EPISEERR_DEFAULT_TAG_ID
-    
+
     try:
         headers = get_sonarr_headers()
         logger.debug(f"Fetching tags from {SONARR_URL}/api/v3/tag")
         tags = get_sonarr_tags()
 
+        # Accept the legacy underscore label too (episeerr#104) - Sonarr v5
+        # rejects creating it, but an already-existing one from before the
+        # upgrade (or before migrate_legacy_episeerr_tags() ran) still works.
         for tag in tags:
-            if tag['label'].lower() == 'episeerr_default':
+            if tag['label'].lower() in ('episeerr_default', 'episeerr-default'):
                 EPISEERR_DEFAULT_TAG_ID = tag['id']
-                logger.info(f"Found existing 'episeerr_default' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
+                logger.info(f"Found existing '{tag['label']}' tag with ID {EPISEERR_DEFAULT_TAG_ID}")
                 return EPISEERR_DEFAULT_TAG_ID
-       
-        logger.debug("No 'episeerr_default' tag found, creating new tag")
+
+        logger.debug("No 'episeerr-default' tag found, creating new tag")
         tag_create_response = http.post(
             f"{SONARR_URL}/api/v3/tag",
             headers=headers,
-            json={"label": "episeerr_default"},
+            json={"label": "episeerr-default"},
             timeout=10
         )
         if tag_create_response.ok:
@@ -250,9 +253,9 @@ def create_episeerr_select_tag():
         # Still check if tag exists, just don't create it
         try:
             for tag in get_sonarr_tags():
-                if tag['label'].lower() == 'episeerr_select':
+                if tag['label'].lower() in ('episeerr_select', 'episeerr-select'):
                     EPISEERR_SELECT_TAG_ID = tag['id']
-                    logger.info(f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
+                    logger.info(f"Found existing '{tag['label']}' tag with ID {EPISEERR_SELECT_TAG_ID}")
                     return EPISEERR_SELECT_TAG_ID
 
             logger.warning("episeerr_select tag not found. Please create manually in Sonarr or set EPISEERR_AUTO_CREATE_TAGS=true")
@@ -261,28 +264,30 @@ def create_episeerr_select_tag():
         except Exception as e:
             logger.warning(f"Could not check for existing tags: {str(e)}")
             return None
-    
-    # Original auto-creation logic (when AUTO_CREATE_TAGS=true)  
+
+    # Original auto-creation logic (when AUTO_CREATE_TAGS=true)
     if EPISEERR_SELECT_TAG_ID is not None:
         logger.debug(f"'episeerr_select' tag ID already set: {EPISEERR_SELECT_TAG_ID}")
         return EPISEERR_SELECT_TAG_ID
-    
+
     try:
         headers = get_sonarr_headers()
         logger.debug(f"Fetching tags from {SONARR_URL}/api/v3/tag")
         tags = get_sonarr_tags()
 
+        # Accept the legacy underscore label too (episeerr#104) - see
+        # create_episeerr_default_tag() for why.
         for tag in tags:
-            if tag['label'].lower() == 'episeerr_select':
+            if tag['label'].lower() in ('episeerr_select', 'episeerr-select'):
                 EPISEERR_SELECT_TAG_ID = tag['id']
-                logger.info(f"Found existing 'episeerr_select' tag with ID {EPISEERR_SELECT_TAG_ID}")
+                logger.info(f"Found existing '{tag['label']}' tag with ID {EPISEERR_SELECT_TAG_ID}")
                 return EPISEERR_SELECT_TAG_ID
-       
-        logger.debug("No 'episeerr_select' tag found, creating new tag")
+
+        logger.debug("No 'episeerr-select' tag found, creating new tag")
         tag_create_response = http.post(
             f"{SONARR_URL}/api/v3/tag",
             headers=headers,
-            json={"label": "episeerr_select"},
+            json={"label": "episeerr-select"},
             timeout=10
         )
         if tag_create_response.ok:
@@ -300,30 +305,136 @@ def create_episeerr_select_tag():
     except Exception as e:
         logger.error(f"Error creating 'episeerr_select' tag: {str(e)}")
         return None
+def is_episeerr_tag(label):
+    """True if this Sonarr tag label is one of ours, under either prefix
+    (episeerr#104: 'episeerr_' is the legacy, pre-Sonarr-v5 delimiter;
+    'episeerr-' is what's created going forward)."""
+    label = (label or '').lower()
+    return label.startswith('episeerr_') or label.startswith('episeerr-')
+
+
+def strip_episeerr_prefix(label):
+    """Strip whichever episeerr prefix (legacy '_' or current '-') this tag
+    label uses, returning just the rule/control-tag name. '' if neither
+    prefix matches."""
+    label = (label or '').lower()
+    if label.startswith('episeerr_'):
+        return label[len('episeerr_'):]
+    if label.startswith('episeerr-'):
+        return label[len('episeerr-'):]
+    return ''
+
+
+def sanitize_tag_label(rule_name):
+    """
+    Build a Sonarr-v5-safe tag label for a rule name: episeerr-<rule-name>,
+    lowercased, with anything outside [a-z0-9-] (including the legacy '_'
+    delimiter and any underscores already in the rule name itself) collapsed
+    to a single '-'. Sonarr v5 enforces ^[a-z0-9-]+$ on tag labels and rejects
+    the old 'episeerr_<rulename>' form outright (episeerr#104).
+    """
+    raw = f"episeerr-{rule_name}".lower()
+    sanitized = re.sub(r'[^a-z0-9-]+', '-', raw)
+    sanitized = re.sub(r'-+', '-', sanitized).strip('-')
+    return sanitized
+
+
+def migrate_legacy_episeerr_tags():
+    """
+    One-time-per-Sonarr migration (episeerr#104): rename every existing
+    'episeerr_*' tag to its Sonarr-v5-safe 'episeerr-*' form in place, via
+    Sonarr's tag rename endpoint - the tag ID (and every series association
+    on it) is preserved, nothing is re-tagged or re-matched.
+
+    Safe to call on every startup: already-migrated tags (no 'episeerr_'
+    tags left) make this a single GET and nothing else. A target label that
+    already exists as a *different* tag (unexpected - would mean both an
+    old and a new tag for the same rule somehow coexist) is left alone and
+    logged rather than merged, since merging would mean reassigning every
+    series on the old tag to the new one's ID, which is real enough risk
+    to leave as a manual cleanup step rather than something it force-fixes
+    silently.
+
+    Harmless on Sonarr v4 too - hyphens are valid there as well, so this
+    isn't gated on detecting the Sonarr version.
+    """
+    try:
+        headers = get_sonarr_headers()
+        tags = get_sonarr_tags()
+        legacy_tags = [t for t in tags if t['label'].lower().startswith('episeerr_')]
+        if not legacy_tags:
+            return 0
+
+        existing_labels = {t['label'].lower() for t in tags}
+        migrated = 0
+
+        for tag in legacy_tags:
+            old_label = tag['label']
+            rule_or_control_name = old_label.lower()[len('episeerr_'):]
+            new_label = sanitize_tag_label(rule_or_control_name) if rule_or_control_name not in (
+                'select', 'default'
+            ) else f"episeerr-{rule_or_control_name}"
+
+            if new_label == old_label.lower():
+                continue  # nothing to change (shouldn't happen, but cheap to check)
+
+            if new_label in existing_labels:
+                logger.warning(
+                    f"Tag migration: '{old_label}' would rename to '{new_label}', which "
+                    f"already exists as a separate tag - leaving both as-is, check Sonarr manually"
+                )
+                continue
+
+            resp = http.put(
+                f"{SONARR_URL}/api/v3/tag/{tag['id']}",
+                headers=headers,
+                json={"id": tag['id'], "label": new_label},
+                timeout=10
+            )
+            if resp.ok:
+                logger.info(f"Tag migration: renamed '{old_label}' -> '{new_label}' (ID {tag['id']} unchanged)")
+                existing_labels.discard(old_label.lower())
+                existing_labels.add(new_label)
+                migrated += 1
+            else:
+                logger.error(f"Tag migration: failed to rename '{old_label}' -> '{new_label}': {resp.text}")
+
+        if migrated:
+            invalidate_tags_cache()
+        return migrated
+
+    except Exception as e:
+        logger.error(f"Tag migration error: {e}", exc_info=True)
+        return 0
+
+
 def get_or_create_rule_tag_id(rule_name):
     """
-    Create episeerr_<rulename> tag in Sonarr if doesn't exist.
-    Returns tag ID.
-    
+    Create episeerr-<rulename> tag in Sonarr if doesn't exist (sanitized to
+    Sonarr v5's ^[a-z0-9-]+$ - episeerr#104). Returns tag ID.
+
     Args:
         rule_name: Name of the rule (e.g., 'one_at_a_time')
-        
+
     Returns:
         int: Tag ID or None if failed
     """
     try:
-        tag_label = f"episeerr_{rule_name}"
+        tag_label = sanitize_tag_label(rule_name)
+        legacy_label = f"episeerr_{rule_name}".lower()
         headers = get_sonarr_headers()
-        
-        # Check if tag already exists
+
+        # Check if tag already exists under either the new sanitized form or
+        # the legacy underscore form (pre-migration / migration hasn't run
+        # yet this session) - never create a duplicate for the same rule.
         tags = get_sonarr_tags()
 
-        # Look for existing tag
         for tag in tags:
-            if tag['label'].lower() == tag_label.lower():
-                logger.debug(f"Found existing tag '{tag_label}' with ID {tag['id']}")
+            label_lower = tag['label'].lower()
+            if label_lower == tag_label or label_lower == legacy_label:
+                logger.debug(f"Found existing tag '{tag['label']}' with ID {tag['id']}")
                 return tag['id']
-        
+
         # Tag doesn't exist - create it
         logger.info(f"Creating new tag '{tag_label}'")
         tag_create_response = http.post(
@@ -405,10 +516,19 @@ def resolve_rule_from_tags(series_tags, tag_mapping, config):
             logger.error(f"Unexpected tag type: {tag_item} (type: {type(tag_item)})")
             continue
 
-        if not tag_label or not tag_label.startswith('episeerr_'):
+        # Accept both the legacy 'episeerr_' prefix and the Sonarr-v5-safe
+        # 'episeerr-' prefix (episeerr#104) - existing installs may still have
+        # underscore-labeled tags even after migrate_legacy_episeerr_tags()
+        # runs, if that migration hasn't reached this Sonarr yet or a tag was
+        # recreated manually.
+        if tag_label.startswith('episeerr_'):
+            rule_name = tag_label[len('episeerr_'):]
+        elif tag_label.startswith('episeerr-'):
+            rule_name = tag_label[len('episeerr-'):]
+        else:
             continue
-
-        rule_name = tag_label.replace('episeerr_', '')
+        if not rule_name:
+            continue
 
         if rule_name == 'select':
             logger.info("Detected episeerr_select tag -> selection workflow")
@@ -422,15 +542,21 @@ def resolve_rule_from_tags(series_tags, tag_mapping, config):
             logger.warning(f"episeerr_default tag present but default rule '{default_rule_name}' missing from config")
             return None, False
 
-        # Direct rule tag - case-insensitive lookup
+        # Direct rule tag - case-insensitive, hyphen/underscore-tolerant lookup.
+        # A Sonarr-v5-safe tag sanitizes a rule name like 'one_at_a_time' down
+        # to 'one-at-a-time', so the comparison has to fold both sides the
+        # same way rather than just lowercasing.
+        normalized_tag_rule = rule_name.lower().replace('-', '_')
         actual_rule_name = next(
-            (rn for rn in config.get('rules', {}).keys() if rn.lower() == rule_name.lower()), None
+            (rn for rn in config.get('rules', {}).keys()
+             if rn.lower().replace('-', '_') == normalized_tag_rule),
+            None
         )
         if actual_rule_name:
-            logger.info(f"Detected direct rule tag: episeerr_{rule_name} -> matched rule '{actual_rule_name}'")
+            logger.info(f"Detected direct rule tag: episeerr-{rule_name} -> matched rule '{actual_rule_name}'")
             return actual_rule_name, False
 
-        logger.warning(f"Ignoring unknown rule tag: episeerr_{rule_name} (available: {list(config.get('rules', {}).keys())})")
+        logger.warning(f"Ignoring unknown rule tag: episeerr-{rule_name} (available: {list(config.get('rules', {}).keys())})")
 
     return None, False
 
@@ -458,7 +584,7 @@ def get_episeerr_delay_profile_id():
                 # Get tag names
                 tag_map = get_tag_mapping()
                 tag_names = [tag_map.get(tid, '').lower() for tid in tags]
-                if any(n.startswith('episeerr_') for n in tag_names):
+                if any(is_episeerr_tag(n) for n in tag_names):
                     logger.info(f"Using Episeerr delay profile ID {p['id']}")
                     return p['id']
         
@@ -693,7 +819,7 @@ def sync_rule_tag_to_sonarr(series_id, new_rule_name):
             # - OR is episeerr_select (needs special handling in webhook, removed separately)
             # Remove: episeerr_<old_rulename> (old assignment, including episeerr_default
             # if this series is moving off the default rule)
-            if not tag_name.startswith('episeerr_') or tag_name == 'episeerr_select':
+            if not is_episeerr_tag(tag_name) or tag_name in ('episeerr_select', 'episeerr-select'):
                 updated_tags.append(tag_id)
             else:
                 logger.debug(f"Removing tag '{tag_name}' from series {series_id}")
@@ -782,7 +908,7 @@ def remove_all_episeerr_tags(series_id):
         # Keep only non-episeerr tags
         updated_tags = [
             tag_id for tag_id in current_tags
-            if not tag_mapping.get(tag_id, '').lower().startswith('episeerr_')
+            if not is_episeerr_tag(tag_mapping.get(tag_id, ''))
         ]
         
         if len(updated_tags) != len(current_tags):
@@ -826,8 +952,8 @@ def validate_series_tag(series_id, expected_rule, series_data=None, config=None)
         episeerr_tags = []
         for tag_id in series.get('tags', []):
             tag_name = tag_mapping.get(tag_id, '')
-            if tag_name.startswith('episeerr_'):
-                rule_name = tag_name.replace('episeerr_', '')
+            if is_episeerr_tag(tag_name):
+                rule_name = strip_episeerr_prefix(tag_name)
                 # Skip select - transient workflow marker, not a rule tag.
                 # 'default' IS a real rule tag (the shipped default rule),
                 # but resolved dynamically through config['default_rule']
@@ -854,8 +980,10 @@ def validate_series_tag(series_id, expected_rule, series_data=None, config=None)
         # Single rule tag (NORMAL STATE)
         else:
             actual_rule = episeerr_tags[0]
-            # FIXED: Case-insensitive comparison (Sonarr lowercases all tags)
-            matches = (actual_rule.lower() == expected_rule.lower())
+            # Case-insensitive AND hyphen/underscore-tolerant (episeerr#104) -
+            # a Sonarr-v5-safe tag sanitizes 'one_at_a_time' to 'one-at-a-time',
+            # which must still match the real config rule name here.
+            matches = (actual_rule.lower().replace('-', '_') == expected_rule.lower().replace('-', '_'))
             return (matches, actual_rule)
             
     except Exception as e:
