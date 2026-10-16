@@ -7085,9 +7085,19 @@ def initialize_episeerr():
     # NEW: Comprehensive tag reconciliation (create, migrate, drift, orphaned)
     try:
         app.logger.info("🏷️  Starting comprehensive tag reconciliation...")
-        
+
         config = load_config()
-        
+
+        # Step 0: Rename any legacy 'episeerr_*' tags to the Sonarr-v5-safe
+        # 'episeerr-*' form in place (episeerr#104) - before anything below
+        # tries to create or look up tags, so it sees the migrated labels.
+        try:
+            renamed = episeerr_utils.migrate_legacy_episeerr_tags()
+            if renamed:
+                app.logger.info(f"  Tag migration: renamed {renamed} legacy tag(s) to Sonarr-v5-safe labels")
+        except Exception as e:
+            app.logger.error(f"  Tag migration failed: {e}")
+
         # Step 1: Create/verify all rule tags exist in Sonarr
         created, failed = migrate_create_rule_tags()
         if created > 0 or failed > 0:
