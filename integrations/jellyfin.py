@@ -166,6 +166,41 @@ class JellyfinIntegration(ServiceIntegration):
             logger.warning(f"Failed to resolve Jellyfin user ID: {e}")
             return None
 
+    def _resolve_series_tvdb_id(self, jellyfin_series_id: Optional[str]) -> Optional[str]:
+        """
+        Resolve a Jellyfin series to its TVDB ID, so series matching can use
+        Sonarr's own get_series_id(thetvdb_id=...) path instead of a fragile
+        title match - Jellyfin display titles don't always match Sonarr's
+        exactly. The episode item's own ProviderIds.Tvdb is the *episode's*
+        TVDB ID, not useful here; the parent Series item has to be fetched
+        separately for the series-level one. One extra lightweight call per
+        episode processed, not per poll tick. Returns None (not an error) if
+        this series has no TVDB provider ID in Jellyfin - callers should fall
+        back to title matching exactly as before.
+        """
+        if not jellyfin_series_id:
+            return None
+        config = self.get_config()
+        if not config:
+            return None
+        user_id = self._resolve_user_id(config)
+        if not user_id:
+            return None
+        try:
+            resp = http.get(
+                f"{config['url']}/Users/{user_id}/Items/{jellyfin_series_id}",
+                headers=media_server_auth_headers(config['api_key']),
+                params={'Fields': 'ProviderIds'},
+                timeout=10
+            )
+            if not resp.ok:
+                return None
+            tvdb_id = (resp.json().get('ProviderIds') or {}).get('Tvdb')
+            return tvdb_id or None
+        except Exception as e:
+            logger.debug(f"Could not resolve TVDB ID for Jellyfin series {jellyfin_series_id}: {e}")
+            return None
+
     def fetch_favorites(self) -> List[Dict]:
         """Fetch favorited Series and Movies from Jellyfin."""
         config = self.get_config()
@@ -280,6 +315,7 @@ class JellyfinIntegration(ServiceIntegration):
             
             return {
                 'series_name': now_playing.get('SeriesName'),
+                'jellyfin_series_id': now_playing.get('SeriesId'),
                 'season_number': now_playing.get('ParentIndexNumber'),
                 'episode_number': now_playing.get('IndexNumber'),
                 'progress_percent': progress,
@@ -421,13 +457,17 @@ class JellyfinIntegration(ServiceIntegration):
             
             logger.info(f"🎯 Processing Jellyfin episode: {series_name} S{season}E{episode} at {progress:.1f}%")
 
-            # Get Sonarr series ID
+            # Get Sonarr series ID - prefer TVDB ID (resolved from Jellyfin's
+            # SeriesId) over title match, since display titles don't always
+            # match Sonarr's exactly. get_series_id() already tries thetvdb_id
+            # first and falls back to title matching on its own if this is None.
+            tvdb_id = self._resolve_series_tvdb_id(episode_info.get('jellyfin_series_id'))
             from media_processor import get_series_id
-            series_id = get_series_id(series_name)
+            series_id = get_series_id(series_name, thetvdb_id=tvdb_id)
             if not series_id:
                 logger.warning(f"❌ Sonarr series not found for '{series_name}' — check title matches Sonarr exactly")
                 return False
-            logger.info(f"✅ Found Sonarr series ID {series_id} for '{series_name}'")
+            logger.info(f"✅ Found Sonarr series ID {series_id} for '{series_name}'" + (f" (TVDB match: {tvdb_id})" if tvdb_id else ""))
             
             # Tag sync & drift correction
             from episeerr_utils import reconcile_series_drift
