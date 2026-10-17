@@ -6,6 +6,12 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
+## v4.0.2 (from episeerr_dev)
+
+### 🐛 Bug Fixes
+
+- **Jellyfin matched series by title only, with no fallback when display titles don't match Sonarr's exactly** — the Jellyfin integration resolved a watched episode's series purely via `get_series_id(series_name)`, a title string match, even though `get_series_id()` already supports TVDB-ID matching as its preferred, more reliable path (used elsewhere via the Sonarr webhook). Jellyfin's session data already carries the playing episode's `SeriesId`; a new `_resolve_series_tvdb_id()` resolves that to the series' TVDB ID via one extra lightweight Jellyfin API call (the *episode's* own TVDB ID isn't useful here — only the parent Series item carries the series-level one), and passes it into the existing `get_series_id(series_name, thetvdb_id=...)` call. Falls straight back to the exact same title match as before if the TVDB ID is missing or doesn't resolve to anything in Sonarr, so this is purely additive - no behavior change for anyone without clean TVDB metadata in Jellyfin. Verified live against a real Jellyfin + Sonarr pair before release. From discussion #102. (`integrations/jellyfin.py`)
+
 ## v4.0.1 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
