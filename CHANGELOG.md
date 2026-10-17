@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.3
+
+### 🐛 Bug Fixes
+
+- **A Keep window could end up with zero actual files if the watched episode itself had none** — Keep's anchor is strictly the webhook-reported watched position, which is correct and unchanged; but if that specific episode had no file for any reason (a race with an earlier cleanup pass, watched-status synced in from somewhere that isn't a local play), Keep would just silently leave the window empty rather than ensuring what it's meant to retain actually exists. "Keep N" should mean N episodes actually exist, not N positions that may or may not have files. When the rule wants the watched episode to stay present (`monitor_watched`, default True) and it has no file, Episeerr now actively monitors/searches for it (respecting the rule's own `action_option`, same as Get) instead of leaving it empty. Does not change which episode is kept, or the "remove everything before the watched position" rule - purely closes the gap between Keep saying it's keeping something and that thing actually being on disk. From discussion #102. (`media_processor.py`)
+
 ## v4.0.2
 
 ### 🐛 Bug Fixes

@@ -1393,9 +1393,28 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
             logger.error(f"Could not find current episode S{season_number}E{episode_number}")
             return
 
-        # Unmonitoring the current episode means "done with it" — on playback
-        # start it is still being played, so leave it monitored until watched.
-        if not rule.get('monitor_watched', True) and not prefetch_only:
+        # Keep's anchor is whatever's reported watched - "Keep N" should mean N
+        # episodes actually exist, not N positions that may or may not have
+        # files (episeerr discussion #102). If the rule wants this episode to
+        # stay present (monitor_watched, default True) but it has no file for
+        # any reason (a race with an earlier cleanup, watched-status synced in
+        # from somewhere that isn't a local play), actively fetch it instead
+        # of silently leaving the keep window empty. Respects the rule's own
+        # action_option the same way Get does - only actually searches if
+        # the rule says to, otherwise just monitors and leaves it to Sonarr's
+        # own RSS. Unmonitoring on completion (the "done with it" case below)
+        # is unaffected - these are mutually exclusive on monitor_watched.
+        if rule.get('monitor_watched', True):
+            if not prefetch_only and not current_episode.get('hasFile', False):
+                monitor_or_search_episodes(
+                    [current_episode['id']], rule.get('action_option', 'monitor'),
+                    series_id, series_title, get_type
+                )
+                logger.info(
+                    f"Keep anchor S{season_number}E{episode_number} has no file — "
+                    f"triggered {rule.get('action_option', 'monitor')} to get it"
+                )
+        elif not prefetch_only:
             unmonitor_episodes([current_episode['id']])
 
         if not skip_rule_processing:
