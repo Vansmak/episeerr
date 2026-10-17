@@ -6,6 +6,12 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
+## v4.0.3 (from episeerr_dev)
+
+### 🐛 Bug Fixes
+
+- **A Keep window could end up with zero actual files if the watched episode itself had none** — Keep's anchor is strictly the webhook-reported watched position, which is correct and unchanged; but if that specific episode had no file for any reason (a race with an earlier cleanup pass, watched-status synced in from somewhere that isn't a local play), Keep would just silently leave the window empty rather than ensuring what it's meant to retain actually exists. "Keep N" should mean N episodes actually exist, not N positions that may or may not have files. When the rule wants the watched episode to stay present (`monitor_watched`, default True) and it has no file, Episeerr now actively monitors/searches for it (respecting the rule's own `action_option`, same as Get) instead of leaving it empty. Does not change which episode is kept, or the "remove everything before the watched position" rule - purely closes the gap between Keep saying it's keeping something and that thing actually being on disk. From discussion #102. (`media_processor.py`)
+
 ## v4.0.2 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
