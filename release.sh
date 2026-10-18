@@ -352,6 +352,7 @@ if [ "$IS_TEST" = false ]; then
         if [ ! -s "$NOTES_FILE" ]; then
             echo "v$VERSION" > "$NOTES_FILE"
         fi
+        printf '\n---\n☕ If Episeerr saves you time, you can support development at https://buymeacoffee.com/vansmak\n' >> "$NOTES_FILE"
 
         GH_RELEASE_ARGS=(--title "Episeerr v$VERSION" --notes-file "$NOTES_FILE")
         if [ "$IS_PRERELEASE" = true ]; then
