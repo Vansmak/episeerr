@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.4
+
+### Other
+
+- Added a small "☕ Support Episeerr" link to the sidebar footer and to the GitHub Release notes `release.sh` generates, for anyone who wants to support development.
+
 ## v4.0.3
 
 ### 🐛 Bug Fixes
