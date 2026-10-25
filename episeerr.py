@@ -1337,7 +1337,10 @@ class OCDarrScheduler:
         self.cleanup_thread = threading.Thread(target=self._scheduler_loop, daemon=True)
         self.cleanup_thread.start()
 
-        # One-shot startup checks - no periodic interval for either.
+        # Startup checks. Missed-watch-event detection also re-runs on the
+        # cleanup cadence in _scheduler_loop; delay-tagged series detection
+        # stays startup-only (it's "a SeriesAdd webhook never ran while
+        # Episeerr was down", which only needs checking once per restart).
         def _startup_reconcile_check():
             try:
                 import reconcile
@@ -1369,6 +1372,19 @@ class OCDarrScheduler:
                     print("⏰ Starting scheduled global storage gate cleanup...")
                     self._run_cleanup()
                     self.last_cleanup = current_time
+
+                    # Re-run the missed-watch-event sweep on the same cadence
+                    # as cleanup, not just at startup, so watched marks set
+                    # outside a live playback webhook (e.g. imported history)
+                    # eventually surface in the pending-review queue instead
+                    # of only being caught if Episeerr happened to restart.
+                    # Still never auto-replays - reconcile_enabled/
+                    # automation_held gate this internally, same as startup.
+                    try:
+                        import reconcile
+                        reconcile.check_for_missed_watch_events()
+                    except Exception as reconcile_err:
+                        print(f"Periodic reconcile check error: {reconcile_err}")
 
                 # Daily aired-but-not-downloaded notification check
                 hours_since_aired = (current_time - self.last_aired_check) / 3600

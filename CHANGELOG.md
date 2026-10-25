@@ -6,6 +6,16 @@
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
 
+### 🐛 Bug Fixes (from episeerr_dev)
+
+- **Watched marks set outside a live playback webhook (e.g. watch history imported into Jellyfin/Emby from another source) were only ever caught at Episeerr startup** — `check_for_missed_watch_events()` already detects these correctly (it reads Jellyfin/Emby's own "played" state directly, not webhooks) and queues them for human review in the Pending Watch Events list, but it only ran once per restart. It now also re-runs on the same cadence as scheduled cleanup, so a long-running instance eventually surfaces these without needing a restart. Still never auto-replays anything - same human-review queue, same `reconcile_enabled` opt-in gate as before. From discussion #102. (`episeerr.py`)
+
+## v4.0.4 (from episeerr_dev)
+
+### Other
+
+- Added a small "☕ Support Episeerr" link to the sidebar footer and to the GitHub Release notes `release.sh` generates, for anyone who wants to support development.
+
 ## v4.0.3 (from episeerr_dev)
 
 ### 🐛 Bug Fixes
