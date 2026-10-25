@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes
+
+- **Watched marks set outside a live playback webhook (e.g. watch history imported into Jellyfin/Emby from another source) were only ever caught at Episeerr startup** — `check_for_missed_watch_events()` already detects these correctly (it reads Jellyfin/Emby's own "played" state directly, not webhooks) and queues them for human review in the Pending Watch Events list, but it only ran once per restart. It now also re-runs on the same cadence as scheduled cleanup, so a long-running instance eventually surfaces these without needing a restart. Still never auto-replays anything - same human-review queue, same `reconcile_enabled` opt-in gate as before. From discussion #102. (`episeerr.py`)
+
 ## v4.0.4
 
 ### Other
