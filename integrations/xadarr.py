@@ -596,6 +596,7 @@ _neolink_token_cache = {"token": None, "fetched_at": 0.0}
 _GUIDE_SCHEDULE_TTL_SECONDS = 180
 _guide_schedule_cache = {"data": None, "at": 0.0}
 _movie_guide_cache = {"data": None, "at": 0.0}
+_watch_next_cache = {"data": None, "at": 0.0}
 
 # Neolink has no live-snapshot API (only event thumbnails), so camera grid tiles
 # would otherwise show a stale frame from whenever the last motion event fired.
@@ -3362,6 +3363,216 @@ class XadarrIntegration(ServiceIntegration):
             _movie_guide_cache["at"] = now_ts
             return jsonify(data)
 
+        def _watch_next():
+            """
+            "What to watch now", decided here once for every screen that shows it (Free My TV's
+            Up Next, Rendova's Media banners; Joe, 2026-10-26). Ordered lists, each item complete
+            (titles, ids, episode, label, images, lastWatchedAt), so clients only display:
+              upNext      shows watched in the last ACTIVE_DAYS with a downloaded next episode,
+                          most recently watched first
+              new         episodes and movies imported in the last NEW_DAYS, not watched yet,
+                          newest first, one per title
+              dontForget  a downloaded next episode, but last watched over ACTIVE_DAYS ago (or
+                          never), oldest first
+              airing      monitored, not downloaded, the next AIRING_DAYS (TV from 6 h ago),
+                          soonest first
+              movies      downloaded unwatched movies, newest first
+            Built from _sonarr_guide_schedule (now + lastWatchedAt) and _radarr_guide_schedule
+            (watched via Plex), plus Sonarr/Radarr history and calendars. Cached like them;
+            ?refresh=1 rebuilds (and refreshes those two as well).
+            """
+            ACTIVE_DAYS = 21   # watched within this many days = actively watching
+            NEW_DAYS = 3       # "new" = imported within this many days
+            AIRING_DAYS = 7    # "airing" = within the next this many days
+            import requests as _req
+            from datetime import timedelta as _td
+            from settings_db import get_sonarr_config, get_radarr_config
+
+            now_ts = time.time()
+            cached = _watch_next_cache.get("data")
+            if request.args.get("refresh") != "1" and cached is not None and (now_ts - _watch_next_cache.get("at", 0.0)) < _GUIDE_SCHEDULE_TTL_SECONDS:
+                return jsonify(cached)
+
+            def _json(resp):
+                if isinstance(resp, tuple):   # (response, error status)
+                    return {}
+                return resp.get_json(silent=True) or {}
+
+            guide = _json(_sonarr_guide_schedule()).get("shows") or []
+            movie_guide = _json(_radarr_guide_schedule())
+            now = datetime.now(timezone.utc)
+            local_now = datetime.now().astimezone()
+
+            def _iso(dt):
+                return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            def _parse(ts):
+                try:
+                    return datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                except Exception:
+                    return None
+
+            def _img(images, kind):
+                # Public https art (TMDB / TheTVDB), sized for TV cards and phone banners.
+                url = next((i.get("remoteUrl") for i in images or [] if i.get("coverType") == kind), None)
+                if not url or not url.startswith("https://"):
+                    return None
+                if "image.tmdb.org/t/p/original" in url:
+                    return url.replace("/t/p/original", "/t/p/w780" if kind == "fanart" else "/t/p/w342")
+                return url
+
+            def _ep_label(season, episode):
+                return f"S{season} E{episode}"
+
+            def _day_label(dt):
+                d = (dt.astimezone().date() - local_now.date()).days
+                return "Today" if d <= 0 else "Tomorrow" if d == 1 else dt.astimezone().strftime("%a")
+
+            # Sonarr / Radarr lists for ids and images (one call each).
+            s_cfg, r_cfg = get_sonarr_config() or {}, get_radarr_config() or {}
+            s_url, s_key = (s_cfg.get("url") or "").rstrip("/"), s_cfg.get("api_key") or ""
+            r_url, r_key = (r_cfg.get("url") or "").rstrip("/"), r_cfg.get("api_key") or ""
+            series_by_id, movies_by_id = {}, {}
+            try:
+                if s_url and s_key:
+                    for se in _req.get(f"{s_url}/api/v3/series", headers={"X-Api-Key": s_key}, timeout=20).json():
+                        series_by_id[se.get("id")] = se
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Sonarr series failed: {exc}")
+            try:
+                if r_url and r_key:
+                    for mv in _req.get(f"{r_url}/api/v3/movie", headers={"X-Api-Key": r_key}, timeout=20).json():
+                        movies_by_id[mv.get("id")] = mv
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Radarr movies failed: {exc}")
+            movie_by_tmdb = {m.get("tmdbId"): m for m in movies_by_id.values() if m.get("tmdbId")}
+
+            def _tv(series_id, season=None, episode=None, episode_title="", label="", when=None, last_watched=None, premiere=False):
+                se = series_by_id.get(series_id) or {}
+                return {
+                    "kind": "tv", "title": se.get("title", ""), "tmdbId": se.get("tmdbId") or None,
+                    "tvdbId": se.get("tvdbId") or None, "seriesId": series_id,
+                    "season": season, "episode": episode, "episodeTitle": episode_title or "",
+                    "label": label, "backdrop": _img(se.get("images"), "fanart"), "poster": _img(se.get("images"), "poster"),
+                    "lastWatchedAt": last_watched, "when": when, "premiere": premiere,
+                }
+
+            def _movie(m, label="", when=None):
+                return {
+                    "kind": "movie", "title": m.get("title", ""), "tmdbId": m.get("tmdbId") or None, "tvdbId": None,
+                    "radarrId": m.get("id"), "season": None, "episode": None, "episodeTitle": "",
+                    "label": label, "backdrop": _img(m.get("images"), "fanart"), "poster": _img(m.get("images"), "poster"),
+                    "lastWatchedAt": None, "when": when, "premiere": False, "year": m.get("year"),
+                }
+
+            # upNext / dontForget: shows with a downloaded next episode, split by last watched.
+            up_next, dont_forget = [], []
+            now_by_series = {}
+            for g in guide:
+                ep = g.get("now")
+                if not ep:
+                    continue
+                now_by_series[g.get("seriesId")] = (ep.get("season"), ep.get("episode"))
+                watched = _parse(g.get("lastWatchedAt")) if g.get("lastWatchedAt") else None
+                active = watched is not None and now - watched <= _td(days=ACTIVE_DAYS)
+                label = _ep_label(ep.get("season"), ep.get("episode"))
+                item = _tv(g.get("seriesId"), ep.get("season"), ep.get("episode"), ep.get("title", ""),
+                           label if active else f"Don't forget \u00b7 {label}", None, g.get("lastWatchedAt"))
+                if not item["title"]:
+                    item["title"] = g.get("title", "")
+                    item["tmdbId"] = item["tmdbId"] or g.get("tmdbId")
+                (up_next if active else dont_forget).append(item)
+            up_next.sort(key=lambda x: x["lastWatchedAt"] or "", reverse=True)
+            dont_forget.sort(key=lambda x: x["lastWatchedAt"] or "")   # never watched first, then oldest
+
+            # new: imports in the last NEW_DAYS that are still unwatched (at or after the show's "now").
+            new = []
+            since = _iso(now - _td(days=NEW_DAYS))
+            seen_titles = set()
+            try:
+                if s_url and s_key:
+                    hist = _req.get(f"{s_url}/api/v3/history/since", headers={"X-Api-Key": s_key}, timeout=20,
+                                    params={"date": since, "eventType": "downloadFolderImported", "includeEpisode": "true"}).json()
+                    for h in hist:
+                        ep = h.get("episode") or {}
+                        sid = h.get("seriesId")
+                        key = (ep.get("seasonNumber"), ep.get("episodeNumber"))
+                        if sid not in now_by_series or None in key or key < now_by_series[sid]:
+                            continue   # caught up, or already past this episode
+                        item = _tv(sid, key[0], key[1], ep.get("title", ""), "New \u00b7 " + _ep_label(*key), h.get("date"))
+                        new.append(item)
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Sonarr history failed: {exc}")
+            watched_movies = {m.get("tmdbId") for m in movie_guide.get("movies") or [] if m.get("watched")}
+            try:
+                if r_url and r_key:
+                    hist = _req.get(f"{r_url}/api/v3/history/since", headers={"X-Api-Key": r_key}, timeout=20,
+                                    params={"date": since, "eventType": "downloadFolderImported"}).json()
+                    for h in hist:
+                        m = movies_by_id.get(h.get("movieId"))
+                        if not m or m.get("tmdbId") in watched_movies or not m.get("hasFile"):
+                            continue
+                        new.append(_movie(m, "New movie", h.get("date")))
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Radarr history failed: {exc}")
+            new.sort(key=lambda x: x["when"] or "", reverse=True)
+            new_one = []
+            for x in new:   # newest first, one per title
+                if x["title"] in seen_titles:
+                    continue
+                seen_titles.add(x["title"])
+                new_one.append(x)
+
+            # airing: the next AIRING_DAYS, monitored, not downloaded.
+            airing = []
+            start, end = _iso(now - _td(hours=6)), _iso(now + _td(days=AIRING_DAYS))
+            try:
+                if s_url and s_key:
+                    cal = _req.get(f"{s_url}/api/v3/calendar", headers={"X-Api-Key": s_key}, timeout=20,
+                                   params={"start": start, "end": end, "unmonitored": "false"}).json()
+                    for e in cal:
+                        if e.get("hasFile") or not e.get("monitored", True) or e.get("seasonNumber", 0) == 0:
+                            continue
+                        at = _parse(e.get("airDateUtc"))
+                        premiere = e.get("episodeNumber") == 1
+                        airing.append(_tv(e.get("seriesId"), e.get("seasonNumber"), e.get("episodeNumber"), e.get("title", ""),
+                                          "Premiere" if premiere else (_day_label(at) if at else ""), e.get("airDateUtc"), premiere=premiere))
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Sonarr calendar failed: {exc}")
+            try:
+                if r_url and r_key:
+                    cal = _req.get(f"{r_url}/api/v3/calendar", headers={"X-Api-Key": r_key}, timeout=20,
+                                   params={"start": start, "end": end, "unmonitored": "false"}).json()
+                    for m in cal:
+                        if m.get("hasFile"):
+                            continue
+                        dates = [m.get(k) for k in ("digitalRelease", "physicalRelease", "inCinemas") if m.get(k)]
+                        dates = [d for d in dates if start <= d <= end]
+                        if not dates:
+                            continue
+                        # Release dates are calendar dates (00:00Z): label the date itself, not its local time.
+                        day = datetime.strptime(min(dates)[:10], "%Y-%m-%d").date()
+                        d = (day - local_now.date()).days
+                        airing.append(_movie(m, "Today" if d <= 0 else "Tomorrow" if d == 1 else day.strftime("%a"), min(dates)))
+            except Exception as exc:
+                logger.debug(f"[Xadarr] watch-next: Radarr calendar failed: {exc}")
+            airing.sort(key=lambda x: x["when"] or "")
+
+            # movies: downloaded, unwatched, newest first (the movie guide's order and Plex watched state).
+            movies = []
+            for g in movie_guide.get("movies") or []:
+                if g.get("watched"):
+                    continue
+                m = movie_by_tmdb.get(g.get("tmdbId")) or {"title": g.get("title"), "tmdbId": g.get("tmdbId"), "id": g.get("radarrId")}
+                movies.append(_movie(m, "Unwatched", g.get("lastAdded")))
+            movies.sort(key=lambda x: x["when"] or "", reverse=True)
+
+            data = {"upNext": up_next, "new": new_one, "dontForget": dont_forget, "airing": airing, "movies": movies,
+                    "updated": _iso(now)}
+            _watch_next_cache["data"] = data
+            _watch_next_cache["at"] = now_ts
+            return jsonify(data)
+
         # ── /api/episeerr/* aliases ───────────────────────────────────────────
         # The TV app routes Episeerr calls through $SYNC_SERVER_URL/api/episeerr/*.
         # xadarr-server proxies those to Episeerr's real endpoints; when Episeerr is
@@ -3478,6 +3689,10 @@ class XadarrIntegration(ServiceIntegration):
         @alias_bp.route("/radarr/guide-schedule", methods=["GET"])
         def alias_radarr_guide_schedule():
             return _radarr_guide_schedule()
+
+        @alias_bp.route("/watch-next", methods=["GET"])
+        def alias_watch_next():
+            return _watch_next()
 
         # ── Generic notifications (polled by NotificationPollManager at
         # {sync_server}/api/notify/recent — a top-level path, not nested under
