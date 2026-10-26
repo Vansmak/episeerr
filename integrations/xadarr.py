@@ -3059,6 +3059,21 @@ class XadarrIntegration(ServiceIntegration):
             _activity_watched: list = _load_json(_WATCHED_ACTIVITY_FILE, [])
             _completion_threshold = _get_completion_threshold() / 100.0
             watched_episodes_by_title: Dict[str, set] = {}
+            # Most recent watch activity per show (epoch seconds), from the same three sources, for
+            # every show -- not just caught-up ones. Exposed as "lastWatchedAt" so a client can tell
+            # shows being watched now from ones with an episode waiting for weeks (Free My TV's Up
+            # Next, Joe 2026-10-25). Kept apart from "lastPlayed", which Xadarr reads as "caught up".
+            last_watched_at: Dict[str, float] = {}
+
+            def _seen_at(series_title: str, ts) -> None:
+                try:
+                    if isinstance(ts, str):
+                        ts = datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+                    ts = float(ts or 0)
+                except Exception:
+                    return
+                if ts > last_watched_at.get(series_title, 0):
+                    last_watched_at[series_title] = ts
 
             def _watched_episodes(series_title: str) -> set:
                 if series_title in watched_episodes_by_title:
@@ -3067,9 +3082,11 @@ class XadarrIntegration(ServiceIntegration):
                 for ep in _plex_episodes(series_title):
                     if ep.get("viewCount", 0):
                         watched.add((ep.get("parentIndex"), ep.get("index")))
+                        _seen_at(series_title, ep.get("lastViewedAt"))
                 for record in _history_cache:
                     if record.get("event") not in ("progress", "stop", "finish") or record.get("title") != series_title:
                         continue
+                    _seen_at(series_title, record.get("timestamp"))
                     duration = record.get("durationMs") or 0
                     position = record.get("positionMs") or 0
                     if duration <= 0 or position / duration < _completion_threshold:
@@ -3080,6 +3097,7 @@ class XadarrIntegration(ServiceIntegration):
                 for ev in _activity_watched:
                     if ev.get("series_title") == series_title and ev.get("season") and ev.get("episode"):
                         watched.add((int(ev["season"]), int(ev["episode"])))
+                        _seen_at(series_title, ev.get("timestamp"))
                 watched_episodes_by_title[series_title] = watched
                 return watched
 
@@ -3173,6 +3191,10 @@ class XadarrIntegration(ServiceIntegration):
                     "now": None,
                     "next": None,
                     "lastPlayed": None,
+                    "lastWatchedAt": (
+                        datetime.fromtimestamp(last_watched_at[title], tz=timezone.utc).isoformat()
+                        if last_watched_at.get(title) else None
+                    ),
                 }
 
                 if now_ep is not None:
