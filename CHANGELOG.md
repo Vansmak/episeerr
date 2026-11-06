@@ -8,6 +8,8 @@
 
 ### 🐛 Bug Fixes (from episeerr_dev)
 
+- **Assigning a `seasons`-type rule to a pending request always searched Sonarr episode-by-episode, never as a season pack** — `_apply_rule_to_selection_core` (the "assign this rule to the whole show" shortcut on the Pending Requests page, used by Plex/Trakt watchlist intake) always sent `EpisodeSearch` with every monitored episode ID regardless of `get_type`. The equivalent initial-add path for a direct Sonarr `SeriesAdd` webhook (`apply_initial_rule_selection` in `episeerr_utils.py`) already correctly sends `SeasonSearch` for `seasons` rules — the two implementations had drifted apart, and only the webhook path got the season-pack branch. Pending-request assignment now sends one `SeasonSearch` per season covered by the rule's `get_count`, matching the webhook path. Not related to #99 (watch-triggered re-searches are still deliberately per-episode) — this only affects the initial grab when a request is assigned a rule. Reported as #105. (`episeerr.py`)
+
 - **Watched marks set outside a live playback webhook (e.g. watch history imported into Jellyfin/Emby from another source) were only ever caught at Episeerr startup** — `check_for_missed_watch_events()` already detects these correctly (it reads Jellyfin/Emby's own "played" state directly, not webhooks) and queues them for human review in the Pending Watch Events list, but it only ran once per restart. It now also re-runs on the same cadence as scheduled cleanup, so a long-running instance eventually surfaces these without needing a restart. Still never auto-replays anything - same human-review queue, same `reconcile_enabled` opt-in gate as before. From discussion #102. (`episeerr.py`)
 
 ## v4.0.4 (from episeerr_dev)
