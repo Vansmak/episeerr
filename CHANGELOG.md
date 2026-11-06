@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.6
+
+### 🐛 Bug Fixes
+
+- **Assigning a `seasons`-type rule to a pending request always searched Sonarr episode-by-episode, never as a season pack** — `_apply_rule_to_selection_core` (the "assign this rule to the whole show" shortcut on the Pending Requests page, used by Plex/Trakt watchlist intake) always sent `EpisodeSearch` with every monitored episode ID regardless of `get_type`. The equivalent initial-add path for a direct Sonarr `SeriesAdd` webhook (`apply_initial_rule_selection` in `episeerr_utils.py`) already correctly sends `SeasonSearch` for `seasons` rules — the two implementations had drifted apart, and only the webhook path got the season-pack branch. Pending-request assignment now sends one `SeasonSearch` per season covered by the rule's `get_count`, matching the webhook path. Not related to #99 (watch-triggered re-searches are still deliberately per-episode) — this only affects the initial grab when a request is assigned a rule. Reported as #105. (`episeerr.py`)
+
 ## v4.0.5
 
 ### 🐛 Bug Fixes
