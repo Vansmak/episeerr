@@ -5871,15 +5871,32 @@ def _apply_rule_to_selection_core(tmdb_id, rule_name):
                             f"for series {series_id}"
                         )
                         if _action_option == 'search':
-                            _srch_resp = http.post(
-                                f"{SONARR_URL}/api/v3/command",
-                                headers=_rule_headers,
-                                json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
-                            )
-                            if _srch_resp.ok:
-                                app.logger.info(f"Triggered episode search for series {series_id}")
+                            if _get_type == 'seasons':
+                                _to_monitor_set = set(_to_monitor)
+                                _season_nums = sorted({
+                                    ep.get('seasonNumber') for ep in _all_eps
+                                    if ep['id'] in _to_monitor_set
+                                })
+                                for _sn in _season_nums:
+                                    _srch_resp = http.post(
+                                        f"{SONARR_URL}/api/v3/command",
+                                        headers=_rule_headers,
+                                        json={"name": "SeasonSearch", "seriesId": series_id, "seasonNumber": _sn}
+                                    )
+                                    if _srch_resp.ok:
+                                        app.logger.info(f"Triggered season pack search for Season {_sn}, series {series_id}")
+                                    else:
+                                        app.logger.error(f"Season pack search failed for Season {_sn}: {_srch_resp.text}")
                             else:
-                                app.logger.error(f"Episode search failed: {_srch_resp.text}")
+                                _srch_resp = http.post(
+                                    f"{SONARR_URL}/api/v3/command",
+                                    headers=_rule_headers,
+                                    json={"name": "EpisodeSearch", "episodeIds": _to_monitor}
+                                )
+                                if _srch_resp.ok:
+                                    app.logger.info(f"Triggered episode search for series {series_id}")
+                                else:
+                                    app.logger.error(f"Episode search failed: {_srch_resp.text}")
                     else:
                         app.logger.error(f"Failed to monitor episodes: {_mon_resp.text}")
                 else:
