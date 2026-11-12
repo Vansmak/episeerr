@@ -746,6 +746,10 @@ docker logs episeerr | grep "Stored.*request"
    | **KEEP** | Episodes to retain | "1 episode" = keep only last watched |
    | **Action** | Monitor or Search | "Search" = actively download |
 
+   **GET has three types**, chosen from a dropdown: **Episodes** (a count of individual episodes ahead), **Seasons** (a count of whole seasons ahead), or **All** (every episode, nothing held back). KEEP works the same way and uses whichever type GET is set to.
+
+   **Prefetch next season (Seasons type only):** once GET is set to "Seasons," a **Prefetch next season** field appears. By default (`0`), the next season only starts downloading once you've finished every episode of the current one. Set it to a number, e.g. `2`, to start that download while you still have that many episodes left in the current season instead of waiting for the finale — the next season has a head start by the time you reach it. This field doesn't apply to Episodes or All types.
+
 4. **Optional Time-Based Cleanup:**
 
    | Setting | What It Does | Example |
@@ -1087,7 +1091,7 @@ Dormant: 90 days
 - After 14 days → Cleanup S2
 - Perfect for binging complete seasons
 
-**Prefetch next season early (optional):** by default, a Seasons-type rule only starts fetching the next season once you've watched the current one all the way through. Set **Prefetch next season** (shown on Create/Edit Rule once GET is set to "Seasons") to a number of episodes, e.g. `2`, to start that download while you still have 2 episodes left in the current season instead of waiting for the finale — the next season has a head start by the time you actually reach it. Defaults to `0` (wait for the finale, original behavior).
+A season_binger rule is a good candidate for **Prefetch next season** (see [Create Your First Rule](#create-your-first-rule)) — set it to a couple episodes so S3 has a head start before you finish the S2 finale.
 
 ---
 
