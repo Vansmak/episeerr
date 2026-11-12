@@ -626,7 +626,13 @@
             </div>
 
         </nav>
-        <div class="sidebar-version">v{{ app_version }}</div>
+        <div class="sidebar-version">
+            v{{ app_version }}
+            <a href="https://github.com/vansmak/episeerr/releases/latest" target="_blank" rel="noopener"
+               id="update-available-badge" class="badge bg-warning text-dark" style="display: none;">
+                <i class="fas fa-arrow-up"></i> Update
+            </a>
+        </div>
         <div class="sidebar-support"><a href="https://buymeacoffee.com/vansmak" target="_blank" rel="noopener" class="sidebar-support-link">☕ Support Episeerr</a></div>
     </aside>
 
@@ -1039,6 +1045,24 @@ function updatePendingBadge(requestCount, deletionCount) {
 // Check every 30 seconds
 setInterval(checkForNewRequests, 30000);
 document.addEventListener('DOMContentLoaded', checkForNewRequests);
+
+// Update-available badge (episeerr#108) - once per page load; the
+// backend itself caches the GitHub lookup for 6 hours, so no need to poll.
+function checkForUpdate() {
+    fetch('/api/check-update')
+        .then(response => response.json())
+        .then(data => {
+            if (data.update_available) {
+                const badge = document.getElementById('update-available-badge');
+                if (badge) {
+                    badge.style.display = 'inline-block';
+                    badge.title = `Update available: v${data.latest} (you have v${data.current})`;
+                }
+            }
+        })
+        .catch(error => console.debug('Update check failed:', error));
+}
+document.addEventListener('DOMContentLoaded', checkForUpdate);
 </script>
 
 {% block extra_js %}{% endblock %}
