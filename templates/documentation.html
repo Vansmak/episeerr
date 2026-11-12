@@ -932,10 +932,10 @@
             </div>
 
             <h5 class="mt-4"><i class="fas fa-cog text-warning me-2"></i>Configuring Dry Run Mode</h5>
-            <p>Dry run can be enabled at two levels:</p>
-            
+            <p>Dry run can be enabled at three levels:</p>
+
             <div class="row">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="card border-primary mb-3">
                         <div class="card-header bg-primary text-white">
                             <strong>Global Dry Run</strong>
@@ -947,8 +947,8 @@
                         </div>
                     </div>
                 </div>
-                
-                <div class="col-md-6">
+
+                <div class="col-md-4">
                     <div class="card border-success mb-3">
                         <div class="card-header bg-success text-white">
                             <strong>Per-Rule Dry Run</strong>
@@ -960,11 +960,24 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="col-md-4">
+                    <div class="card border-secondary mb-3">
+                        <div class="card-header bg-secondary text-white">
+                            <strong>Env Var Override</strong>
+                        </div>
+                        <div class="card-body">
+                            <p><strong>Location:</strong> <code>CLEANUP_DRY_RUN=true</code> in docker-compose</p>
+                            <p><strong>Effect:</strong> Forces dry run for ALL cleanup regardless of DB settings</p>
+                            <p class="mb-0"><strong>Use case:</strong> Lock dry run on so it can't be toggled off through the UI</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div class="alert alert-info">
                 <h6><i class="fas fa-lightbulb me-2"></i>How They Work Together</h6>
-                <p class="mb-0">If <strong>either</strong> global OR per-rule dry run is enabled, deletions are queued for approval. This gives you maximum flexibility - protect everything globally or test individual rules.</p>
+                <p class="mb-0">If <strong>any</strong> of the three — global, per-rule, or the <code>CLEANUP_DRY_RUN</code> env var — is enabled, deletions are queued for approval instead of running. This gives you maximum flexibility - protect everything globally or test individual rules.</p>
             </div>
 
             <h5 class="mt-4"><i class="fas fa-bell text-primary me-2"></i>Notifications</h5>
