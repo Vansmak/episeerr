@@ -5193,6 +5193,60 @@ def inject_service_urls():
     
     return {'services': services, 'app_version': __version__}
 
+
+# ── Update-available check (episeerr#108) ───────────────────────────────
+# Cached in-memory so the sidebar's background check doesn't hit GitHub's
+# API on every page load across every browser tab - same pattern as the
+# Sonarr tag cache in episeerr_utils.py.
+_LATEST_RELEASE_CACHE = {'version': None, 'checked_at': 0}
+_LATEST_RELEASE_CACHE_TTL = 6 * 3600  # 6 hours
+
+
+def _parse_version(v):
+    """'4.0.8' -> (4, 0, 8). Ignores any pre-release/build suffix. (0,0,0) if unparseable."""
+    m = re.match(r'^v?(\d+)\.(\d+)\.(\d+)', str(v or ''))
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def _fetch_latest_release_version():
+    """Latest non-prerelease GitHub release tag (GitHub's /releases/latest
+    endpoint already excludes pre-releases and drafts), cached for
+    _LATEST_RELEASE_CACHE_TTL. Returns None on any failure - a user with no
+    outbound internet to GitHub just never sees the update badge, nothing
+    else depends on this."""
+    now = time.time()
+    if _LATEST_RELEASE_CACHE['version'] and (now - _LATEST_RELEASE_CACHE['checked_at']) < _LATEST_RELEASE_CACHE_TTL:
+        return _LATEST_RELEASE_CACHE['version']
+    try:
+        resp = http.get(
+            'https://api.github.com/repos/vansmak/episeerr/releases/latest',
+            headers={'Accept': 'application/vnd.github+json'},
+            timeout=5,
+        )
+        if resp.ok:
+            tag = resp.json().get('tag_name', '')
+            if tag:
+                _LATEST_RELEASE_CACHE['version'] = tag.lstrip('vV')
+                _LATEST_RELEASE_CACHE['checked_at'] = now
+                return _LATEST_RELEASE_CACHE['version']
+    except Exception as e:
+        app.logger.debug(f"Could not check latest GitHub release: {e}")
+    return _LATEST_RELEASE_CACHE['version']
+
+
+@app.route('/api/check-update')
+def api_check_update():
+    """JSON: is a newer stable release available on GitHub? Used by the
+    sidebar to show a small update badge next to the version number."""
+    latest = _fetch_latest_release_version()
+    update_available = bool(latest) and _parse_version(latest) > _parse_version(__version__)
+    return jsonify({
+        'current': __version__,
+        'latest': latest,
+        'update_available': update_available,
+    })
+
+
 # UPDATE unassign_series() function
 
 @app.route('/unassign-series', methods=['POST'])
