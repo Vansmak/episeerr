@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### 📝 Documentation (from episeerr_dev)
+
+- **"Prefetch next season" was only documented inside an unrelated "Season Binger" example**, far from where GET/KEEP are actually explained in "Create Your First Rule" — nobody would find it there. Moved it there and added the missing explanation of GET's three types (Episodes/Seasons/All) themselves, which weren't spelled out anywhere. (`README.md`)
+- Fixed a dead README table-of-contents link (`#add-series-four-ways` → the actual anchor is `#adding-series`).
+- Documented the `CLEANUP_DRY_RUN` env var — live code wired into the Safety Status UI in v4.0.10, but never mentioned in README.md or the in-app Documentation page. Added as a third dry-run level alongside Global and Per-Rule in both. (`README.md`, `templates/documentation.html`)
+
 ### 🐛 Bug Fixes (Xadarr server)
 
 - **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
