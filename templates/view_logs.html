@@ -182,10 +182,14 @@ document.addEventListener('DOMContentLoaded', function() {
     container.scrollTop = container.scrollHeight;
     
     // Initialize tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
+    try {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    } catch (e) {
+        console.debug('Tooltip init skipped (Bootstrap JS unavailable):', e);
+    }
 });
 </script>
 {% endblock %}
