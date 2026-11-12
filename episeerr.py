@@ -3465,8 +3465,10 @@ def unified_search():
         config = load_config()
         for rule_name, details in config.get('rules', {}).items():
             if q in rule_name.lower():
-                get_c = details.get('get_count') or 'all'
-                keep_c = details.get('keep_count') or 'all'
+                get_c = details.get('get_count')
+                get_c = 'all' if get_c is None else get_c
+                keep_c = details.get('keep_count')
+                keep_c = 'all' if keep_c is None else keep_c
                 results.append({
                     'category': 'Rules',
                     'title': rule_name,
@@ -4229,6 +4231,15 @@ def _normalize_rule_payload(data, default_dry_run=False):
             return None
         return int(value)
 
+    def _int_or_default(value, default):
+        # `_int_or_none(value) or default` would also replace an explicit 0
+        # with default, since 0 is falsy in Python - 0 is a real, meaningful
+        # value for get_count/keep_count ("don't get"/"keep nothing", per the
+        # UI's own hint text), so only a genuinely blank field should fall
+        # back to default, not a submitted 0.
+        parsed = _int_or_none(value)
+        return default if parsed is None else parsed
+
     get_type = data.get('get_type') or 'episodes'
     keep_type = data.get('keep_type') or 'episodes'
 
@@ -4240,9 +4251,9 @@ def _normalize_rule_payload(data, default_dry_run=False):
     normalized = {
         'description': data.get('description') or '',
         'get_type': get_type,
-        'get_count': None if get_type == 'all' else (_int_or_none(data.get('get_count')) or 1),
+        'get_count': None if get_type == 'all' else _int_or_default(data.get('get_count'), 1),
         'keep_type': keep_type,
-        'keep_count': None if keep_type == 'all' else (_int_or_none(data.get('keep_count')) or 1),
+        'keep_count': None if keep_type == 'all' else _int_or_default(data.get('keep_count'), 1),
         'action_option': data.get('action_option') or 'monitor',
         'monitor_watched': bool(data.get('monitor_watched', False)),
         'grace_watched': _int_or_none(data.get('grace_watched')),
@@ -4256,7 +4267,7 @@ def _normalize_rule_payload(data, default_dry_run=False):
         'dry_run': bool(data.get('dry_run', default_dry_run)),
         # Only meaningful for get_type='seasons' (episeerr#105) - force 0 for
         # any other type so a stale value doesn't linger if get_type changes.
-        'season_prefetch_lead': (_int_or_none(data.get('season_prefetch_lead')) or 0) if get_type == 'seasons' else 0,
+        'season_prefetch_lead': _int_or_default(data.get('season_prefetch_lead'), 0) if get_type == 'seasons' else 0,
     }
     return normalized, None
 
