@@ -1,4 +1,4 @@
-__version__ = "4.0.6"
+__version__ = "4.0.7"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -549,19 +549,42 @@ def test_connection(service):
         elif service == 'tautulli':
             url = data.get('tautulli-url')
             api_key = data.get('tautulli-apikey')
-            
+
             if not url or not api_key:
                 return jsonify({'status': 'error', 'message': 'URL and API key are required'}), 400
-            
+
             response = http.get(f"{url}/api/v2",
                                   params={'apikey': api_key, 'cmd': 'get_server_info'},
                                   timeout=10)
             response.raise_for_status()
-            
+
             update_service_test_result('tautulli', 'default', 'success')
             return jsonify({'status': 'success', 'message': 'Connected to Tautulli successfully'})
-        
-        
+
+        elif service == 'tmdb':
+            api_key = (data.get('tmdb-apikey') or '').strip()
+
+            if not api_key:
+                return jsonify({'status': 'error', 'message': 'API key is required'}), 400
+
+            # Same v3/v4 token detection as get_tmdb_endpoint()
+            headers = {}
+            params = {}
+            if len(api_key) > 40:
+                headers['Authorization'] = f'Bearer {api_key}'
+            else:
+                params['api_key'] = api_key
+
+            response = http.get('https://api.themoviedb.org/3/configuration',
+                                  params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+
+            update_service_test_result('tmdb', 'default', 'success')
+            return jsonify({'status': 'success', 'message': 'Connected to TMDB successfully'})
+
+        else:
+            return jsonify({'status': 'error', 'message': f'No test available for {service}'}), 400
+
     except Exception as e:
         app.logger.error(f"Test connection error for {service}: {e}")
         update_service_test_result(service, 'default', 'failed')
@@ -5103,10 +5126,17 @@ def get_global_settings():
     try:
         import media_processor
         settings = media_processor.load_global_settings()
-        
+
+        # The CLEANUP_DRY_RUN env var also forces dry-run (media_processor's
+        # global_dry_run = dry_run_mode OR this env var) but isn't stored in
+        # settings, so the UI's safety status was blind to it - it could show
+        # "Live Mode: ACTIVE" while this var silently queued everything for
+        # approval instead (episeerr#106).
+        settings['cleanup_dry_run_env'] = os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true'
+
         # Get current disk space for display
         disk_info = media_processor.get_sonarr_disk_space()
-        
+
         return jsonify({
             "status": "success",
             "settings": settings,
