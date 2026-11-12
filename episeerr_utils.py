@@ -1223,7 +1223,11 @@ def apply_initial_rule_selection(series_id, series_title, rule_name, config, sta
                     logger.info(f"Monitoring all episodes from Season {starting_season} onward")
 
                 elif get_type == 'seasons':
-                    num_seasons = get_count or 1
+                    # get_count=0 must mean "don't get anything" (newly
+                    # reachable since a form submission of 0 no longer gets
+                    # silently rewritten to 1 at save time), not fall back to
+                    # 1 like `get_count or 1` did.
+                    num_seasons = get_count if get_count is not None else 1
                     episodes_to_monitor = [
                         ep['id'] for ep in all_episodes
                         if starting_season <= ep.get('seasonNumber') < (starting_season + num_seasons)
@@ -1232,7 +1236,7 @@ def apply_initial_rule_selection(series_id, series_title, rule_name, config, sta
 
                 else:  # episodes
                     try:
-                        num_episodes = get_count or 1
+                        num_episodes = get_count if get_count is not None else 1
                         episodes_to_monitor = [ep['id'] for ep in requested_season_episodes[:num_episodes]]
                         logger.info(f"Monitoring first {len(episodes_to_monitor)} episodes of Season {starting_season}")
                     except (ValueError, TypeError):
