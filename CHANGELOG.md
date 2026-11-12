@@ -8,6 +8,8 @@
 
 - **Even when `keep_count=0` for a `seasons`-type rule did get stored (e.g. hand-edited into config.json, or a legacy rule from before the above fix), it still behaved like Keep 1** — `find_episodes_leaving_keep_block()`'s seasons branch had the identical falsy-zero bug one level down (`keep_count if keep_count else 1`), so the current season was kept regardless of what was actually configured. Now correctly deletes the entire current season immediately too when Keep is 0, matching the "episodes" branch (which was already correct - its own equivalent variable was actually dead code, the real calculation already used the raw value directly). (`media_processor.py`, `episeerr.py`)
 
+- **A `get_count=0` rule reaching Sonarr via the direct `SeriesAdd` webhook path would still fetch 1 season/episode** — `apply_initial_rule_selection()` (the webhook-add path, as opposed to the Pending-Request path fixed in #105) had the identical `get_count or 1` bug, dormant until just now since 0 could never actually be saved before the fix above made it reachable. Caught by auditing every `get_count`/`keep_count` fallback in the codebase specifically because this release changes which values can now actually reach them. (`episeerr_utils.py`)
+
 ## v4.0.9
 
 ### ✨ New Features
