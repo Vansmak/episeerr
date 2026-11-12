@@ -303,7 +303,7 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
+{% block extra_js %}
 <script>
 function updateExplanation(type, count, targetId) {
     const explanation = document.getElementById(targetId);
@@ -364,12 +364,19 @@ function toggleKeepCount() {
 
 // Initialize Bootstrap tooltips and form state
 document.addEventListener('DOMContentLoaded', function() {
-    // Tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-    
+    // Tooltips - if Bootstrap's JS failed to load (CDN blocked, offline,
+    // network-level filtering), `bootstrap` is undefined and this throws;
+    // isolated in its own try/catch so that can never take the rest of this
+    // page's init (toggleGetCount/toggleKeepCount below) down with it.
+    try {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    } catch (e) {
+        console.debug('Tooltip init skipped (Bootstrap JS unavailable):', e);
+    }
+
     // Initialize form state
     toggleGetCount();
     toggleKeepCount();

@@ -309,12 +309,17 @@ document.addEventListener('DOMContentLoaded', function() {
     // Setup form submission
     document.getElementById('globalSettingsForm').addEventListener('submit', saveGlobalSettings);
     
-    // Initialize tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function (tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
-    });
-    
+    // Initialize tooltips - isolated in its own try/catch so a blocked/failed
+    // Bootstrap JS load can't take the rest of this page's init down with it.
+    try {
+        var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipTriggerList.forEach(function (tooltipTriggerEl) {
+            new bootstrap.Tooltip(tooltipTriggerEl);
+        });
+    } catch (e) {
+        console.debug('Tooltip init skipped (Bootstrap JS unavailable):', e);
+    }
+
     // Refresh status every 30 seconds
     schedulerStatusInterval = setInterval(() => {
         loadSchedulerStatus();
