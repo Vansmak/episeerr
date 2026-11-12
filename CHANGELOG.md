@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.9
+
+### ✨ New Features
+
+- **Update-available indicator** — the version number in the sidebar now checks GitHub's latest stable release in the background and shows a small "Update" badge (linking straight to the release page) when a newer version exists. Checked once per page load; the backend caches the GitHub lookup for 6 hours so this never hits GitHub's API more than necessary, and any failure (no outbound internet, rate limit, etc.) just means the badge doesn't show — nothing else depends on it. New `GET /api/check-update` endpoint. Requested in #108.
+
 ## v4.0.8
 
 ### ✨ New Features
