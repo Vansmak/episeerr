@@ -782,6 +782,8 @@ docker logs episeerr | grep "Stored.*request"
 [Example configuration for binge watcher]
 ```
 
+**Managing existing rules:** the Rules page has **Edit**, **Rename**, and **Delete** for every rule. Rename creates a new rule with all the same settings, moves every series currently assigned to the old rule over automatically (Sonarr tags and activity history included), and removes the old one — there's no need to manually recreate a rule and reassign its shows just to change its name.
+
 ---
 
 ### Adding Series
@@ -1103,6 +1105,8 @@ Dormant: 90 days
 - Keep all of S2, delete S1
 - After 14 days → Cleanup S2
 - Perfect for binging complete seasons
+
+**Prefetch next season early (optional):** by default, a Seasons-type rule only starts fetching the next season once you've watched the current one all the way through. Set **Prefetch next season** (shown on Create/Edit Rule once GET is set to "Seasons") to a number of episodes, e.g. `2`, to start that download while you still have 2 episodes left in the current season instead of waiting for the finale — the next season has a head start by the time you actually reach it. Defaults to `0` (wait for the finale, original behavior).
 
 ---
 
