@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.8
+
+### ✨ New Features
+
+- **Rename a rule** — previously the only way to "rename" a rule was to recreate it from scratch and manually reassign every series by hand, since the rule name doubles as the identity of its Sonarr tag (`episeerr-<rule-name>`) on every series currently assigned to it. New "Rename" button on the Rules page (and `POST /api/rules/<name>/rename` for native clients): the new name inherits every setting automatically, every currently-assigned series is moved over with its per-series activity data preserved and its Sonarr tag re-synced, the default-rule pointer is repointed first if the renamed rule was the default, and the old rule + its now-unused Sonarr tag are deleted. Built on the same bulk-reassignment path the Rules page's existing "assign series to rule" already used, rather than new machinery. Guards against renaming/renaming-to the reserved `select`/`default` tags. Requested in #107.
+
+  Live-testing this surfaced two real, pre-existing tag-sync bugs, both fixed as part of this work: (1) deleting a rule's Sonarr tag never invalidated `get_or_create_rule_tag_id()`'s 60-second tag cache, so renaming a rule and then renaming it back (or deleting a rule and recreating one under the same name) within that window would see the stale tag list, conclude the "new" tag already existed at its now-dead ID, and Sonarr's series PUT endpoint silently accepted the dangling reference instead of rejecting it. (2) `sync_rule_tag_to_sonarr()`'s tag-removal pass only ever stripped tags it could positively identify as `episeerr_*` by label — a tag ID that no longer exists in Sonarr at all looks identical to an unrelated user tag by that test, so once a dangling reference like the above existed, nothing ever removed it, even across repeated reconciliation. (`episeerr.py`, `episeerr_utils.py`)
+
+- **Prefetch the next season before the current one finishes** — a `get_type: seasons` rule only ever started fetching the next season once the current one was fully watched, so the download always began cold right as the viewer finished. New "Prefetch next season" field on Create/Edit Rule (only shown for the Seasons type), a plain episode count: with it set to 2, the next season starts fetching once only 2 episodes remain in the current one instead of waiting for the finale. Defaults to 0 (unchanged behavior). From discussion on #105.
+
 ## v4.0.7
 
 ### 🐛 Bug Fixes

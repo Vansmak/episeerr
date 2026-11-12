@@ -44,9 +44,17 @@
                                         </div>
                                         <div class="col-md-6" id="get_count_container">
                                             <label for="get_count" class="form-label">Count</label>
-                                            <input type="number" class="form-control" id="get_count" name="get_count" 
+                                            <input type="number" class="form-control" id="get_count" name="get_count"
                                                    min="0" value="1" required>
                                             <div class="form-text">0 = Don't get anything</div>
+                                        </div>
+                                    </div>
+                                    <div class="row mt-2" id="season_prefetch_lead_row" style="display: none;">
+                                        <div class="col-md-6">
+                                            <label for="season_prefetch_lead" class="form-label">Prefetch next season (episodes before the end)</label>
+                                            <input type="number" class="form-control" id="season_prefetch_lead" name="season_prefetch_lead"
+                                                   min="0" value="0">
+                                            <div class="form-text">0 = wait until the season finishes (default). E.g. 2 = start fetching the next season while 2 episodes remain in this one.</div>
                                         </div>
                                     </div>
                                     <div class="form-text mt-2">
@@ -72,7 +80,7 @@
                                         </div>
                                         <div class="col-md-6" id="keep_count_container">
                                             <label for="keep_count" class="form-label">Count</label>
-                                            <input type="number" class="form-control" id="keep_count" name="keep_count" 
+                                            <input type="number" class="form-control" id="keep_count" name="keep_count"
                                                    min="0" value="0" required>
                                         </div>
                                     </div>
@@ -270,7 +278,8 @@ function toggleGetCount() {
     const getType = document.getElementById('get_type').value;
     const getCountContainer = document.getElementById('get_count_container');
     const getCountInput = document.getElementById('get_count');
-    
+    const prefetchRow = document.getElementById('season_prefetch_lead_row');
+
     if (getType === 'all') {
         getCountContainer.style.display = 'none';
         getCountInput.required = false;
@@ -280,7 +289,11 @@ function toggleGetCount() {
         getCountInput.required = true;
         if (!getCountInput.value) getCountInput.value = '1';
     }
-    
+
+    if (prefetchRow) {
+        prefetchRow.style.display = (getType === 'seasons') ? 'flex' : 'none';
+    }
+
     updateExplanation(getType, getCountInput.value || 0, 'get_explanation');
 }
 

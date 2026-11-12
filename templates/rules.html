@@ -50,6 +50,11 @@
                                 <a href="/edit-rule/{{ rule_name }}" class="btn btn-outline-primary">
                                     <i class="fas fa-edit"></i> Edit
                                 </a>
+                                {% if rule_name.lower() not in ['select', 'default'] %}
+                                <button type="button" class="btn btn-outline-secondary" onclick="renameRule('{{ rule_name }}')">
+                                    <i class="fas fa-tag"></i>
+                                </button>
+                                {% endif %}
                                 {% if not config.default_rule or rule_name != config.default_rule %}
                                 <form method="POST" action="/delete-rule/{{ rule_name }}" style="display: inline;" onsubmit="return confirm('Delete {{ rule_name }}?');">
                                     <button type="submit" class="btn btn-outline-danger">
@@ -97,6 +102,11 @@
                         <a href="/edit-rule/{{ rule_name }}" class="btn btn-outline-primary btn-sm flex-fill">
                             <i class="fas fa-edit"></i> Edit
                         </a>
+                        {% if rule_name.lower() not in ['select', 'default'] %}
+                        <button type="button" class="btn btn-outline-secondary btn-sm flex-fill" onclick="renameRule('{{ rule_name }}')">
+                            <i class="fas fa-tag"></i> Rename
+                        </button>
+                        {% endif %}
                         {% if not config.default_rule or rule_name != config.default_rule %}
                         <form method="POST" action="/delete-rule/{{ rule_name }}" class="flex-fill" onsubmit="return confirm('Delete {{ rule_name }}?');">
                             <button type="submit" class="btn btn-outline-danger btn-sm w-100">
@@ -255,6 +265,26 @@ document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   renderView();
 });
+
+// ────────────────────────────────────────────────
+// Rename rule (episeerr#107) - new rule inherits the old one's settings,
+// every assigned series moves over, old rule + its Sonarr tag are deleted
+// ────────────────────────────────────────────────
+function renameRule(oldName) {
+  const newName = prompt(`Rename rule "${oldName}" to:`, oldName);
+  if (!newName || newName.trim() === '' || newName.trim() === oldName) return;
+
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = `/rename-rule/${encodeURIComponent(oldName)}`;
+  const input = document.createElement('input');
+  input.type = 'hidden';
+  input.name = 'new_name';
+  input.value = newName.trim();
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+}
 
 // ────────────────────────────────────────────────
 // Render table view only
