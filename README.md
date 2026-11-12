@@ -52,7 +52,7 @@ This project started as scratching my own itch - I wanted more granular series m
   - [Jellyseerr/Overseerr](#4-jellyseerroverseerr-webhook-optional)
 - [How to Use](#how-to-use)
   - [Create Your First Rule](#create-your-first-rule)
-  - [Add Series](#add-series-four-ways)
+  - [Adding Series](#adding-series)
   - [Episode Selection](#episode-selection)
   - [Selection Flow and Rule Picker](#selection-flow-and-rule-picker)
 - [Features Explained](#features-explained)
@@ -198,7 +198,15 @@ services:
       # - AUTH_USERNAME=admin
       # - AUTH_PASSWORD=your-password-here
       # - SECRET_KEY=generate-random-key  # Optional: auto-generated if not set
-      
+
+      # ============================================
+      # OPTIONAL - Safety
+      # ============================================
+      # Forces dry run for ALL cleanup (grace/keep/dormant), regardless of the
+      # DB-stored toggles on the Scheduler page. Useful for locking dry run on
+      # via compose so it can't be accidentally disabled through the UI.
+      # - CLEANUP_DRY_RUN=true
+
       # ============================================
       # OPTIONAL - Quick Links in Sidebar
       # ============================================
