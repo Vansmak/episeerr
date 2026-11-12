@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.7
+
+### 🐛 Bug Fixes
+
+- **`/api/test-connection/tmdb` always returned HTTP 500** — `test_connection(service)` falls through to legacy per-service handlers when no plugin integration is registered for `service`, but those only covered `sonarr` and `tautulli`; for `tmdb` the function fell off the end and returned `None`, which Flask can't turn into a response. Saving the TMDB key still worked (separate code path), so this was purely the Test Connection button misfiring — new users testing a correct key saw a 500 and assumed it was wrong. Added a `tmdb` branch (same v3/v4 token detection as `get_tmdb_endpoint()`, hits `/3/configuration`) plus a generic 400 fallback for any other unrecognized service, so this code path can't silently return `None` again. Reported with the exact cause and fix already diagnosed - thanks @arcanepanther! (`episeerr.py`, #109)
+
+- **Cleanup's Safety Status box could say "Live Mode: ACTIVE" while a `CLEANUP_DRY_RUN` env var silently queued every deletion for approval instead** — the global dry-run gate is actually `dry_run_mode` (DB, toggled on the Cleanup Scheduler page) OR'd with `CLEANUP_DRY_RUN` (an undocumented env var), but the Safety Status display only ever checked the DB value, so it had no way to reflect the env var overriding it. A user with `CLEANUP_DRY_RUN` set anywhere in their environment would see the UI promise live deletion while every run actually got queued instead - confusing with no visible cause. `/api/global-settings` now also reports `cleanup_dry_run_env`, and the Safety Status box shows "Global Dry Run: ENABLED (via CLEANUP_DRY_RUN env var)" when it's set, instead of the misleading live-mode message. Reported as #106. (`episeerr.py`, `templates/scheduler_admin.html`)
+
 ## v4.0.6
 
 ### 🐛 Bug Fixes
