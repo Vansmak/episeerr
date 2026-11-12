@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.11
+
+### 🐛 Bug Fixes
+
+- **Create Rule and Edit Rule's own JavaScript has never actually run, on any browser, ever** — both templates (plus Cleanup Logs and Dry Run Settings) put their page-specific `<script>` in a `{% block scripts %}`, but `base.html` only defines a matching placeholder for `{% block extra_js %}` — Jinja silently discards any child-template block with no matching parent block, so none of this content was ever inserted into the rendered page at all. In practice: the "Get N episode(s)/season(s)" explanation text under Get/Keep never updated, the Count field never hid itself for "All", tooltips never initialized, and the new "Prefetch next season" field added in v4.0.8 could never reveal itself when Seasons was selected — all silently dead code, not something that broke with any of today's other changes. Renamed all four to `{% block extra_js %}` to match what `base.html` actually serves. Caught chasing down why the prefetch field wasn't appearing on a real device after multiple live rebuilds ruled out every server-side explanation. (`templates/create_rule.html`, `templates/edit_rule.html`, `templates/cleanup_logs.html`, `templates/dry_run_settings.html`)
+
+- Also hardened the Bootstrap tooltip initialization on five pages (including the two above) to fail gracefully in its own try/catch instead of being able to take the rest of a page's init down with it if the Bootstrap CDN script ever fails to load (ad-blocker, offline, network filtering) — not the root cause of the above, but a reasonable defense found along the way. (`templates/create_rule.html`, `templates/edit_rule.html`, `templates/scheduler_admin.html`, `templates/documentation.html`, `templates/view_logs.html`)
+
 ## v4.0.10
 
 ### 🐛 Bug Fixes
