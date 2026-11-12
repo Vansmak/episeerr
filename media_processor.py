@@ -794,10 +794,16 @@ def unmonitor_episodes(episode_ids):
     if episode_ids:
         monitor_episodes(episode_ids, False)
 
-def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_type, get_count):
+def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_type, get_count,
+                                  season_prefetch_lead=0):
     """
     Fetch next episodes using dropdown system (get_type + get_count).
     Assumes linear watching only.
+
+    season_prefetch_lead (get_type='seasons' only, episeerr#105): instead of
+    waiting until the current season is fully watched, start fetching the
+    next season once only this many episodes remain in it. 0 (default)
+    preserves the original wait-for-finale behavior.
     """
     # get_count=0 means don't fetch anything
     if get_count == 0 and get_type != 'all':
@@ -826,8 +832,10 @@ def fetch_next_episodes_dropdown(series_id, season_number, episode_number, get_t
             
             # Get additional full seasons if needed
             seasons_to_get = get_count if get_count is not None else 1
-            if not remaining_current:
-                # Current season finished, get next X seasons
+            lead = season_prefetch_lead or 0
+            if not remaining_current or len(remaining_current) <= lead:
+                # Current season finished (or within the configured prefetch
+                # lead), get next X seasons
                 for season_offset in range(1, seasons_to_get + 1):
                     season_episodes = get_episode_details(series_id, season_number + season_offset)
                     next_episode_ids.extend([ep['id'] for ep in season_episodes])
@@ -1405,7 +1413,8 @@ def process_episodes_for_webhook(series_id, season_number, episode_number, rule,
         if not skip_rule_processing:
             # GET NEXT EPISODES using dropdown system
             next_episode_ids = fetch_next_episodes_dropdown(
-                series_id, season_number, episode_number, get_type, get_count
+                series_id, season_number, episode_number, get_type, get_count,
+                season_prefetch_lead=rule.get('season_prefetch_lead', 0)
             )
 
             if next_episode_ids:

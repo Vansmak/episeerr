@@ -809,11 +809,24 @@ def sync_rule_tag_to_sonarr(series_id, new_rule_name):
         # Get current tags
         current_tags = series.get('tags', [])
         updated_tags = []
-        
+
         # Remove all episeerr_* tags (except episeerr_select which needs special handling)
         for tag_id in current_tags:
+            # A tag_id entirely absent from a non-empty tag_mapping no longer
+            # exists in Sonarr at all - a dangling reference (e.g. a tag
+            # deleted out from under a series by a rename/delete-recreate
+            # race, since Sonarr's series PUT doesn't validate submitted tag
+            # IDs). Indistinguishable from "a real foreign tag" by label, so
+            # only strip it when tag_mapping actually came back with other
+            # real tags - an empty mapping more likely means the fetch itself
+            # failed, and wiping every tag on that guess would be worse than
+            # leaving a dangling one in place.
+            if tag_mapping and tag_id not in tag_mapping:
+                logger.info(f"Removing dangling tag ID {tag_id} from series {series_id} (no longer exists in Sonarr)")
+                continue
+
             tag_name = tag_mapping.get(tag_id, '').lower()
-            
+
             # Keep if:
             # - Not an episeerr_ tag (user tags like 1080p, anime, etc.)
             # - OR is episeerr_select (needs special handling in webhook, removed separately)
