@@ -1180,19 +1180,21 @@ def find_episodes_leaving_keep_block(all_episodes, keep_type, keep_count, last_w
             return []
             
         elif keep_type == "seasons":
-            # Keep X seasons, episodes from older seasons leave
-            seasons_to_keep = keep_count if keep_count else 1
+            # Keep X seasons, episodes from older seasons leave. keep_count=0
+            # must mean "keep nothing" (immediate delete after watching, per
+            # the UI's own explanation text) rather than silently falling back
+            # to 1 - `if keep_count else 1` treated 0 as falsy and kept the
+            # current season regardless, same falsy-zero bug class get_count
+            # elsewhere in this file already guards against.
+            seasons_to_keep = keep_count if keep_count is not None else 1
             cutoff_season = last_watched_season - seasons_to_keep + 1
-            
+
             episodes_leaving = [
-                ep for ep in all_episodes 
+                ep for ep in all_episodes
                 if ep['seasonNumber'] < cutoff_season and ep.get('hasFile')
             ]
-            
+
         else:  # episodes
-            # Keep X episodes, older episodes leave the keep block
-            episodes_to_keep = keep_count if keep_count else 1
-            
             # Sort episodes by season/episode number
             sorted_episodes = sorted(all_episodes, key=lambda ep: (ep['seasonNumber'], ep['episodeNumber']))
             

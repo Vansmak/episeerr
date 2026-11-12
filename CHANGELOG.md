@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.10
+
+### 🐛 Bug Fixes
+
+- **Submitting `0` for Get Count or Keep Count silently saved `1` instead** — `_normalize_rule_payload()` computed both as `_int_or_none(data.get(...)) or 1`, and Python treats `0` as falsy, so an explicit 0 (meant as "don't get anything" / "keep nothing", per the form's own hint text) was indistinguishable from a blank field and always fell back to 1. New `_int_or_default()` only falls back when the field is genuinely blank, not when it's `0`. A quick-search result's rule subtitle had the same bug showing "Keep all" for a real 0. Caught by a user question about what Keep 0 actually does - verified live via the real create-rule API that both fields now persist 0 correctly.
+
+- **Even when `keep_count=0` for a `seasons`-type rule did get stored (e.g. hand-edited into config.json, or a legacy rule from before the above fix), it still behaved like Keep 1** — `find_episodes_leaving_keep_block()`'s seasons branch had the identical falsy-zero bug one level down (`keep_count if keep_count else 1`), so the current season was kept regardless of what was actually configured. Now correctly deletes the entire current season immediately too when Keep is 0, matching the "episodes" branch (which was already correct - its own equivalent variable was actually dead code, the real calculation already used the raw value directly). (`media_processor.py`, `episeerr.py`)
+
+- **A `get_count=0` rule reaching Sonarr via the direct `SeriesAdd` webhook path would still fetch 1 season/episode** — `apply_initial_rule_selection()` (the webhook-add path, as opposed to the Pending-Request path fixed in #105) had the identical `get_count or 1` bug, dormant until just now since 0 could never actually be saved before the fix above made it reachable. Caught by auditing every `get_count`/`keep_count` fallback in the codebase specifically because this release changes which values can now actually reach them. (`episeerr_utils.py`)
+
 ## v4.0.9
 
 ### ✨ New Features
