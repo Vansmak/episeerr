@@ -440,10 +440,15 @@ async function loadReconcileStatus() {
 
 function updateSafetyStatusFromGlobal(settings) {
     const safetyDiv = document.getElementById('safety-status');
-    
+
     let html = '<small>';
-    
-    if (settings.dry_run_mode) {
+
+    if (settings.cleanup_dry_run_env) {
+        html += '<div class="alert alert-success alert-sm p-2 mb-2">';
+        html += '<i class="fas fa-shield-alt me-1"></i><strong>Global Dry Run: ENABLED (via CLEANUP_DRY_RUN env var)</strong><br>';
+        html += 'No files will be deleted system-wide - this overrides the toggle below. Unset CLEANUP_DRY_RUN to allow live deletion.';
+        html += '</div>';
+    } else if (settings.dry_run_mode) {
         html += '<div class="alert alert-success alert-sm p-2 mb-2">';
         html += '<i class="fas fa-shield-alt me-1"></i><strong>Global Dry Run: ENABLED</strong><br>';
         html += 'No files will be deleted system-wide';
@@ -454,7 +459,7 @@ function updateSafetyStatusFromGlobal(settings) {
         html += 'Cleanup will delete files unless overridden';
         html += '</div>';
     }
-    
+
     html += '</small>';
     safetyDiv.innerHTML = html;
 }
