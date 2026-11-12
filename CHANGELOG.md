@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.12
+
+### 📝 Documentation
+
+- **"Prefetch next season" was only documented inside an unrelated "Season Binger" example**, far from where GET/KEEP are actually explained in "Create Your First Rule" — nobody would find it there. Moved it there and added the missing explanation of GET's three types (Episodes/Seasons/All) themselves, which weren't spelled out anywhere. (`README.md`)
+- Fixed a dead README table-of-contents link (`#add-series-four-ways` → the actual anchor is `#adding-series`).
+- Documented the `CLEANUP_DRY_RUN` env var — live code wired into the Safety Status UI in v4.0.10, but never mentioned in README.md or the in-app Documentation page. Added as a third dry-run level alongside Global and Per-Rule in both. (`README.md`, `templates/documentation.html`)
+
 ## v4.0.11
 
 ### 🐛 Bug Fixes
