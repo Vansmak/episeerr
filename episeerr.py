@@ -1,4 +1,4 @@
-__version__ = "4.0.7"
+__version__ = "4.0.8"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -4214,6 +4214,7 @@ def _form_to_rule_dict(form):
         'release_keep_on_finale': 'release_keep_on_finale' in form,
         'unmonitor_on_series_ended': 'unmonitor_on_series_ended' in form,
         'always_have': form.get('always_have', '').strip(),
+        'season_prefetch_lead': form.get('season_prefetch_lead', '').strip(),
     }
 
 
@@ -4253,6 +4254,9 @@ def _normalize_rule_payload(data, default_dry_run=False):
         'unmonitor_on_series_ended': bool(data.get('unmonitor_on_series_ended', False)),
         'always_have': always_have,
         'dry_run': bool(data.get('dry_run', default_dry_run)),
+        # Only meaningful for get_type='seasons' (episeerr#105) - force 0 for
+        # any other type so a stale value doesn't linger if get_type changes.
+        'season_prefetch_lead': (_int_or_none(data.get('season_prefetch_lead')) or 0) if get_type == 'seasons' else 0,
     }
     return normalized, None
 
@@ -4377,6 +4381,14 @@ def _cleanup_rule_tag_from_sonarr(rule_name):
             app.logger.warning(f"Could not delete tag from Sonarr: {delete_resp.status_code}")
     except Exception as e:
         app.logger.warning(f"Could not delete tag from Sonarr: {str(e)}")
+    finally:
+        # get_or_create_rule_tag_id()'s 60s tag cache doesn't know this tag is
+        # gone otherwise - a rename-then-rename-back (or delete-then-recreate
+        # a rule under the same name) within that window would see the stale
+        # list, conclude the "new" tag already exists at this now-dead ID, and
+        # Sonarr's series PUT silently accepts the dangling reference instead
+        # of rejecting it (live-confirmed testing rename's round-trip).
+        episeerr_utils.invalidate_tags_cache()
 
     return tag_removed
 
@@ -4385,7 +4397,7 @@ _RULE_FIELD_NAMES = (
     'description', 'get_type', 'get_count', 'keep_type', 'keep_count',
     'action_option', 'monitor_watched', 'grace_watched', 'grace_unwatched',
     'dormant_days', 'grace_scope', 'keep_pilot', 'release_keep_on_finale',
-    'unmonitor_on_series_ended', 'always_have', 'dry_run',
+    'unmonitor_on_series_ended', 'always_have', 'dry_run', 'season_prefetch_lead',
 )
 
 
@@ -4544,6 +4556,119 @@ def api_delete_rule(rule_name):
     tag_removed = _cleanup_rule_tag_from_sonarr(rule_name)
 
     return jsonify({'success': True, 'tag_cleaned_up': tag_removed})
+
+
+def _check_rule_renameable(config, old_name, new_name):
+    """Returns an error message if old_name can't be renamed to new_name, else None."""
+    if old_name not in config['rules']:
+        return f"Rule '{old_name}' not found"
+    if old_name.lower() in ('select', 'default'):
+        return f"Cannot rename special tag '{old_name}'"
+    if not new_name:
+        return "New rule name is required"
+    if new_name == old_name:
+        return "New name is the same as the current name"
+    if new_name in config['rules']:
+        return f"Rule '{new_name}' already exists"
+    if new_name.lower() in ('select', 'default'):
+        return f"'{new_name}' is a reserved name and can't be used for a rule"
+    return None
+
+
+def _rename_rule(config, old_name, new_name):
+    """
+    Rename a rule to new_name: creates new_name with old_name's settings
+    copied over, mass-reassigns every series currently under old_name to it
+    (preserving per-series activity data and syncing Sonarr tags, via the
+    same path as a manual bulk reassignment), repoints default_rule if
+    old_name was the default, then deletes old_name and cleans up its
+    now-unused Sonarr tag (episeerr#107 - true in-place rename would mean
+    the same retag-every-series work anyway, so this just automates it
+    instead of a user manually recreating the rule and reassigning by hand).
+
+    Returns (preserved_count, tag_sync_success, tag_sync_failed).
+    """
+    old_rule = config['rules'][old_name]
+    # Only copy fields old_rule actually has - a key that's genuinely absent
+    # (common on older rules predating a newer field) must stay absent on the
+    # new rule too, not become an explicit None. dict.get(key, default) only
+    # falls back to default when the key is MISSING, not when it's present
+    # with value None, so baking in an explicit None here would silently
+    # flip any "rule.get(field, True)"-style default from True to falsy.
+    new_rule = {field: old_rule[field] for field in _RULE_FIELD_NAMES if field in old_rule}
+    new_rule['series'] = {}
+    config['rules'][new_name] = new_rule
+
+    was_default = (config.get('default_rule') == old_name)
+    if was_default:
+        config['default_rule'] = new_name
+
+    save_config(config)
+    _ensure_rule_tag(new_name)
+
+    series_ids = list(old_rule.get('series', {}).keys())
+    preserved_count = tag_sync_success = tag_sync_failed = 0
+    if series_ids:
+        config = load_config()
+        preserved_count, tag_sync_success, tag_sync_failed = _assign_series_ids_to_rule(
+            config, new_name, series_ids
+        )
+
+    config = load_config()
+    del config['rules'][old_name]
+    save_config(config)
+    _cleanup_rule_tag_from_sonarr(old_name)
+
+    return preserved_count, tag_sync_success, tag_sync_failed
+
+
+@app.route('/rename-rule/<rule_name>', methods=['POST'])
+def rename_rule(rule_name):
+    """Rename a rule: new rule inherits its settings, every assigned series is moved over."""
+    config = load_config()
+    new_name = request.form.get('new_name', '').strip()
+    error = _check_rule_renameable(config, rule_name, new_name)
+    if error:
+        return redirect(url_for('rules_page', message=error))
+
+    series_count = len(config['rules'][rule_name].get('series', {}))
+    preserved_count, tag_sync_success, tag_sync_failed = _rename_rule(config, rule_name, new_name)
+
+    message = f"Renamed '{rule_name}' to '{new_name}'"
+    if series_count > 0:
+        message += f" ({series_count} series moved"
+        if preserved_count > 0:
+            message += f", activity data preserved for {preserved_count}"
+        message += ")"
+    if tag_sync_failed > 0:
+        message += f" - {tag_sync_failed} tag syncs failed"
+
+    return redirect(url_for('rules_page', message=message))
+
+
+@app.route('/api/rules/<rule_name>/rename', methods=['POST'])
+def api_rename_rule(rule_name):
+    """JSON: rename a rule. Body: {new_name}."""
+    config = load_config()
+    data = request.get_json(silent=True) or {}
+    new_name = str(data.get('new_name', '')).strip()
+    error = _check_rule_renameable(config, rule_name, new_name)
+    if error:
+        status = 404 if 'not found' in error else 400
+        return jsonify({'success': False, 'error': error}), status
+
+    series_count = len(config['rules'][rule_name].get('series', {}))
+    preserved_count, tag_sync_success, tag_sync_failed = _rename_rule(config, rule_name, new_name)
+
+    return jsonify({
+        'success': True,
+        'old_name': rule_name,
+        'new_name': new_name,
+        'series_moved': series_count,
+        'activity_preserved': preserved_count,
+        'tag_sync_success': tag_sync_success,
+        'tag_sync_failed': tag_sync_failed,
+    })
 
 
 def _assign_series_ids_to_rule(config, rule_name, series_ids):
