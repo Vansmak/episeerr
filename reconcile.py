@@ -363,3 +363,130 @@ def check_delay_tagged_series():
         logger.error(f"[reconcile] Unexpected error in delay-tag check: {exc}", exc_info=True)
         summary['errors'].append(str(exc))
         return summary
+
+
+# How long after Sonarr adds a series the auto-assign fallback still applies
+# the rule's full initial selection (unmonitor + monitor/search the rule's
+# first episodes). Older stragglers are only assigned to the rule, so a show
+# someone has already been watching for days doesn't get its monitoring reset.
+AUTO_ASSIGN_APPLY_WINDOW_HOURS = 24
+
+
+def _parse_ts(value):
+    """ISO-8601 (Sonarr 'added', our own isoformat()) -> aware datetime, or None."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        # Sonarr can emit 7 fractional digits, which older fromisoformat rejects
+        try:
+            head, _, tail = str(value).partition('.')
+            dt = datetime.fromisoformat(head.replace('Z', '') + '+00:00')
+        except ValueError:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def check_unassigned_new_series():
+    """Fallback for 'Auto-assign new series to default rule' (episeerr#110).
+
+    Auto-assign normally happens in the live SeriesAdd webhook. If that
+    webhook never reaches Episeerr (not configured, "On Series Add" not
+    ticked, wrong URL, Episeerr down), the series silently stays Unassigned.
+    This sweep catches those: any Sonarr series with no episeerr tag, not
+    tracked under any rule, and added to Sonarr *after* auto-assign was turned
+    on, gets assigned to the default rule. Series that predate the toggle are
+    left alone - leaving a show unassigned is a legitimate choice.
+
+    Runs at startup and every scheduler tick. Skipped while automation_held.
+    """
+    from media_processor import load_global_settings, save_global_settings, load_config
+    from episeerr_utils import (
+        SONARR_URL, get_sonarr_headers, get_tag_mapping, resolve_rule_from_tags,
+        cancel_queued_downloads_for_series, apply_initial_rule_selection,
+        ensure_series_tracked_under_rule, unmonitor_series,
+    )
+
+    summary = {'ran': False, 'assigned': 0, 'errors': []}
+    try:
+        settings = load_global_settings()
+        if not settings.get('auto_assign_new_series', False):
+            return summary
+        if settings.get('automation_held', False):
+            logger.info("[reconcile] Skipping auto-assign sweep - automation is held")
+            return summary
+
+        enabled_at = _parse_ts(settings.get('auto_assign_enabled_at'))
+        if enabled_at is None:
+            # Installs that turned auto-assign on before this timestamp existed:
+            # start the clock now so only series added from here on are swept.
+            settings['auto_assign_enabled_at'] = datetime.now(timezone.utc).isoformat()
+            save_global_settings(settings)
+            logger.info("[reconcile] Auto-assign sweep: recorded enable time, will catch series added from now on")
+            summary['ran'] = True
+            return summary
+
+        config = load_config()
+        default_rule = config.get('default_rule', 'default')
+        if default_rule not in config.get('rules', {}):
+            logger.warning(f"[reconcile] Auto-assign sweep: default rule '{default_rule}' not found - skipping")
+            return summary
+
+        tracked = set()
+        for rule in config.get('rules', {}).values():
+            tracked.update(str(sid) for sid in (rule.get('series') or {}).keys())
+
+        headers = get_sonarr_headers()
+        resp = http.get(f"{SONARR_URL}/api/v3/series", headers=headers, timeout=30)
+        resp.raise_for_status()
+        tag_mapping = get_tag_mapping()
+        now = datetime.now(timezone.utc)
+
+        assigned = 0
+        for series in resp.json():
+            series_id = series.get('id')
+            if series_id is None or str(series_id) in tracked:
+                continue
+            added = _parse_ts(series.get('added'))
+            if added is None or added <= enabled_at:
+                continue
+            rule_name, is_select = resolve_rule_from_tags(series.get('tags') or [], tag_mapping, config)
+            if rule_name or is_select:
+                continue  # tagged - the webhook/delay paths own it
+
+            title = series.get('title', 'Unknown')
+            try:
+                age_hours = (now - added).total_seconds() / 3600
+                if age_hours <= AUTO_ASSIGN_APPLY_WINDOW_HOURS:
+                    logger.info(
+                        f"[reconcile] '{title}' was added {age_hours:.1f}h ago without a SeriesAdd webhook "
+                        f"reaching Episeerr - auto-assigning to '{default_rule}' and applying its initial selection. "
+                        f"Check the Sonarr webhook has 'On Series Add' enabled."
+                    )
+                    cancel_queued_downloads_for_series(series_id)
+                    unmonitor_series(series_id, headers)
+                    apply_initial_rule_selection(series_id, title, default_rule, config, starting_season=1)
+                else:
+                    logger.info(
+                        f"[reconcile] '{title}' was added {age_hours:.1f}h ago and never assigned - "
+                        f"assigning to '{default_rule}' (monitoring left as-is)"
+                    )
+                    ensure_series_tracked_under_rule(series_id, default_rule, config)
+                assigned += 1
+                tracked.add(str(series_id))
+                config = load_config()
+            except Exception as exc:
+                logger.error(f"[reconcile] Auto-assign failed for '{title}': {exc}")
+                summary['errors'].append(f"{title}: {exc}")
+
+        if assigned:
+            logger.info(f"[reconcile] Auto-assigned {assigned} series to '{default_rule}'")
+        summary.update(ran=True, assigned=assigned)
+        return summary
+    except Exception as exc:
+        logger.error(f"[reconcile] Unexpected error in auto-assign sweep: {exc}", exc_info=True)
+        summary['errors'].append(str(exc))
+        return summary

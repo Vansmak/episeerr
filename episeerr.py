@@ -1350,6 +1350,9 @@ class OCDarrScheduler:
                 # ran" signal, safe to act on directly (automation_held
                 # still gates this internally).
                 reconcile.check_delay_tagged_series()
+                # Auto-assign fallback for series whose SeriesAdd webhook
+                # never arrived (episeerr#110).
+                reconcile.check_unassigned_new_series()
             except Exception as e:
                 print(f"Startup reconcile check error: {e}")
         threading.Thread(target=_startup_reconcile_check, daemon=True).start()
@@ -1383,6 +1386,16 @@ class OCDarrScheduler:
                         reconcile.check_for_missed_watch_events()
                     except Exception as reconcile_err:
                         print(f"Periodic reconcile check error: {reconcile_err}")
+
+                # Auto-assign fallback (episeerr#110): cheap (one Sonarr
+                # series list), so it runs every tick rather than waiting for
+                # the cleanup interval - a missed SeriesAdd webhook is picked
+                # up within ~10 minutes.
+                try:
+                    import reconcile
+                    reconcile.check_unassigned_new_series()
+                except Exception as assign_err:
+                    print(f"Auto-assign sweep error: {assign_err}")
 
                 # Daily aired-but-not-downloaded notification check
                 hours_since_aired = (current_time - self.last_aired_check) / 3600
@@ -5378,6 +5391,16 @@ def update_global_settings():
             'automation_held': bool(automation_held),
             'reconcile_enabled': bool(reconcile_enabled),
         }
+
+        # Remember when auto-assign was switched on so the fallback sweep
+        # (reconcile.check_unassigned_new_series, episeerr#110) only picks up
+        # series added after that, never shows left unassigned on purpose.
+        previous = media_processor.load_global_settings()
+        if settings['auto_assign_new_series']:
+            if previous.get('auto_assign_new_series') and previous.get('auto_assign_enabled_at'):
+                settings['auto_assign_enabled_at'] = previous['auto_assign_enabled_at']
+            else:
+                settings['auto_assign_enabled_at'] = datetime.now(timezone.utc).isoformat()
 
         media_processor.save_global_settings(settings)
         try:
