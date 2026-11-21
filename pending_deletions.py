@@ -394,6 +394,66 @@ def clear_all_pending_deletions():
         logger.info("Cleared all pending deletions")
 
 
+def remove_episodes_from_pending(episode_ids):
+    """Drop these episodes from the queue (e.g. they were just deleted live).
+    Empty seasons/series are removed too. Returns how many entries went."""
+    ids = {int(e) for e in episode_ids if e is not None}
+    if not ids:
+        return 0
+    with pending_lock:
+        pending_list = load_pending_deletions()
+        removed = 0
+        for series in pending_list:
+            for season_data in series['seasons'].values():
+                before = len(season_data['episodes'])
+                season_data['episodes'] = [ep for ep in season_data['episodes'] if ep['episode_id'] not in ids]
+                removed += before - len(season_data['episodes'])
+            series['seasons'] = {k: v for k, v in series['seasons'].items() if v['episodes']}
+        if removed:
+            pending_list = [s for s in pending_list if s['seasons']]
+            save_pending_deletions(pending_list)
+            logger.info(f"Removed {removed} entries from pending deletions")
+        return removed
+
+
+def prune_stale_pending_deletions(fetch_series_episodes):
+    """Remove queue entries whose file is already gone (episeerr#106).
+
+    Entries queued while dry run was on stay in the queue until someone
+    approves or rejects them - switching dry run off doesn't process them. If
+    the file was since deleted (live cleanup, Sonarr, manually) or replaced by
+    an upgrade, the entry is meaningless and just makes it look like deletion
+    never ran. fetch_series_episodes(series_id) -> Sonarr episode list.
+    Returns the number of entries removed.
+    """
+    with pending_lock:
+        snapshot = load_pending_deletions()
+
+    stale = []
+    for series in snapshot:
+        entries = [ep for sd in series['seasons'].values() for ep in sd['episodes']]
+        if not entries:
+            continue
+        try:
+            current = {e.get('id'): e for e in (fetch_series_episodes(series['series_id']) or [])}
+        except Exception as e:
+            logger.warning(f"Could not check pending deletions for {series.get('series_title')}: {e}")
+            continue
+        if not current:
+            continue  # Sonarr unreachable or series gone - don't guess
+        for ep in entries:
+            live = current.get(ep['episode_id'])
+            queued_file = ((ep.get('episode_data') or {}).get('episodeFile') or {}).get('id')
+            if live is None or not live.get('hasFile'):
+                stale.append(ep['episode_id'])
+            elif queued_file and live.get('episodeFileId') and live['episodeFileId'] != queued_file:
+                stale.append(ep['episode_id'])
+
+    if stale:
+        logger.info(f"Pruning {len(stale)} pending deletion(s) whose files no longer exist")
+    return remove_episodes_from_pending(stale)
+
+
 def get_episode_ids_for_series(series_id):
     """Get all episode IDs for a series"""
     with pending_lock:

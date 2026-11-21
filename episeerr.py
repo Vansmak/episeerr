@@ -1669,7 +1669,19 @@ def view_pending_deletions():
     import pending_deletions
     summary = pending_deletions.get_pending_deletions_summary()
     movie_summary = pending_deletions.get_pending_movies_summary()
-    return render_template('pending_deletions.html', summary=summary, movie_summary=movie_summary)
+    # Is cleanup currently live? If so, anything here was queued earlier (while
+    # a dry run was on) and won't be processed on its own (episeerr#106).
+    live_mode = False
+    try:
+        import media_processor
+        settings = media_processor.load_global_settings()
+        env_dry = os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true'
+        rule_dry = any(r.get('dry_run', False) for r in load_config().get('rules', {}).values())
+        live_mode = not (settings.get('dry_run_mode', False) or env_dry or rule_dry)
+    except Exception:
+        pass
+    return render_template('pending_deletions.html', summary=summary,
+                           movie_summary=movie_summary, live_mode=live_mode)
 
 
 @app.route('/pending-deletions/approve', methods=['POST'])
