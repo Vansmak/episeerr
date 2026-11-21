@@ -75,6 +75,36 @@ SONARR_API_KEY = sonarr_config.get('api_key') if sonarr_config else None
 tmdb_service = get_service('tmdb', 'default')
 TMDB_API_KEY = tmdb_service['api_key'] if tmdb_service else os.getenv('TMDB_API_KEY')
 app.config['TMDB_API_KEY'] = TMDB_API_KEY
+_tmdb_key_checked_at = time.time()
+
+
+def _refresh_tmdb_api_key():
+    """Pick up a TMDB key saved (or changed) in Settings without a restart.
+
+    TMDB_API_KEY used to be read once at import, so configuring it through the
+    Setup page left every TMDB-backed feature (Pending Season/Episode
+    Selections, search, season details) failing until the container restarted
+    (episeerr#73). Re-read from the settings DB at most every 10 seconds.
+    """
+    global TMDB_API_KEY, _tmdb_key_checked_at
+    now = time.time()
+    if now - _tmdb_key_checked_at < 10:
+        return
+    _tmdb_key_checked_at = now
+    try:
+        svc = get_service('tmdb', 'default')
+        key = (svc or {}).get('api_key') or os.getenv('TMDB_API_KEY')
+    except Exception:
+        return
+    if key != TMDB_API_KEY:
+        TMDB_API_KEY = key
+        app.config['TMDB_API_KEY'] = key
+        app.logger.info("TMDB API key %s", "updated from settings" if key else "removed")
+
+
+@app.before_request
+def _refresh_tmdb_api_key_hook():
+    _refresh_tmdb_api_key()
 if app.config['TMDB_API_KEY']:
     app.logger.info("TMDB_API_KEY is set - request system will function normally")
 else:
@@ -6506,7 +6536,8 @@ def get_pending_requests():
             "count": len(pending_requests)
         })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Error loading pending requests: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"Could not load pending requests ({type(e).__name__}: {e}) - check episeerr.log"}), 500
 
 @app.route('/api/delete-request/<request_id>', methods=['POST'])
 def delete_request(request_id):
