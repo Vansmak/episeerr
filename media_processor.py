@@ -3,7 +3,7 @@ import re
 import sys
 import requests
 import logging
-from logging.handlers import RotatingFileHandler
+from log_handlers import SelfHealingRotatingFileHandler, SelfHealingFileHandler
 import json
 import shutil
 import time
@@ -78,7 +78,7 @@ missing_logger.handlers.clear()  # Clear any inherited handlers
 missing_logger.propagate = False  # Prevent propagation to root logger
 
 # Add file handler for missing logger
-missing_handler = logging.FileHandler(MISSING_LOG_PATH)  # /app/logs/missing.log
+missing_handler = SelfHealingFileHandler(MISSING_LOG_PATH)  # /app/logs/missing.log
 missing_handler.setLevel(logging.INFO)
 missing_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 missing_logger.addHandler(missing_handler)
@@ -101,7 +101,7 @@ def setup_cleanup_logging():
     cleanup_logger.propagate = False  # Prevent propagation to root logger
     
     # File handler for cleanup-specific log
-    cleanup_file_handler = RotatingFileHandler(
+    cleanup_file_handler = SelfHealingRotatingFileHandler(
         CLEANUP_LOG_PATH,  # /app/logs/cleanup.log
         maxBytes=5*1024*1024,  # 5 MB
         backupCount=5,
@@ -112,7 +112,7 @@ def setup_cleanup_logging():
     cleanup_file_handler.setFormatter(cleanup_formatter)
     
     # File handler for main app log (with CLEANUP prefix)
-    main_file_handler = RotatingFileHandler(
+    main_file_handler = SelfHealingRotatingFileHandler(
         LOG_PATH,  # /app/logs/app.log
         maxBytes=10*1024*1024,  # 10 MB
         backupCount=3,

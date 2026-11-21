@@ -16,7 +16,7 @@ import threading
 import shutil
 from threading import Lock
 from functools import lru_cache
-from logging.handlers import RotatingFileHandler
+from log_handlers import SelfHealingRotatingFileHandler
 import requests
 import episeerr_utils
 from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url, http
@@ -1450,7 +1450,7 @@ def setup_cleanup_logging():
     cleanup_logger = logging.getLogger('cleanup')
     cleanup_logger.setLevel(logging.INFO)
     cleanup_logger.handlers.clear()
-    main_file_handler = RotatingFileHandler(
+    main_file_handler = SelfHealingRotatingFileHandler(
         LOG_PATH,
         maxBytes=10*1024*1024,
         backupCount=3,
@@ -1459,7 +1459,7 @@ def setup_cleanup_logging():
     main_file_handler.setLevel(logging.INFO)
     main_file_formatter = logging.Formatter('%(asctime)s - CLEANUP - %(levelname)s - %(message)s')
     main_file_handler.setFormatter(main_file_formatter)
-    cleanup_file_handler = RotatingFileHandler(
+    cleanup_file_handler = SelfHealingRotatingFileHandler(
         CLEANUP_LOG_PATH,
         maxBytes=5*1024*1024,
         backupCount=5,
