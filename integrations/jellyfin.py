@@ -115,8 +115,8 @@ class JellyfinIntegration(ServiceIntegration):
                 'name': 'poll_interval',
                 'label': 'Poll Interval (seconds)',
                 'type': 'number',
-                'default': 900,
-                'help_text': 'For polling mode. Recommended: 900 (15 min)'
+                'default': 120,
+                'help_text': 'For polling mode. Recommended: 120 (2 min) — a longer interval risks missing short episodes entirely if autoplay advances before a poll catches 50%'
             },
             {
                 'name': 'trigger_percentage',
@@ -336,7 +336,7 @@ class JellyfinIntegration(ServiceIntegration):
         if not config:
             return
         
-        poll_interval = int(config.get('poll_interval', 900))
+        poll_interval = int(config.get('poll_interval', 120))
         trigger_percentage = config.get('trigger_percentage', 50.0)
         
         logger.info(f"🔄 Starting Jellyfin polling for session {session_id}")
@@ -908,7 +908,7 @@ class JellyfinIntegration(ServiceIntegration):
                     
                     config = integration.get_config()
                     trigger_percentage = config.get('trigger_percentage', 50.0) if config else 50.0
-                    poll_interval = int(config.get('poll_interval', 900)) if config else 900
+                    poll_interval = int(config.get('poll_interval', 120)) if config else 120
                     
                     return jsonify({
                         'status': 'success',

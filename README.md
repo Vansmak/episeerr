@@ -142,13 +142,13 @@ services:
 
       # Option B: Jellyfin (choose mode A or B in /setup, not via env vars)
       #   Webhook URL: http://<episeerr>:5002/api/integration/jellyfin/webhook
-      #   Notification type: PlaybackProgress (real-time) or Session Start (polling)
+      #   Notification type: PlaybackProgress (real-time) or Playback Start (polling)
       #
       # - JELLYFIN_URL=http://your-jellyfin:8096
       # - JELLYFIN_API_KEY=your_jellyfin_api_key
       # - JELLYFIN_USER_ID=your_username
       # - JELLYFIN_TRIGGER_PERCENTAGE=50.0   # polling mode
-      # - JELLYFIN_POLL_INTERVAL=900          # polling mode
+      # - JELLYFIN_POLL_INTERVAL=120           # polling mode
       # - JELLYFIN_TRIGGER_MIN=50.0           # real-time mode
       # - JELLYFIN_TRIGGER_MAX=55.0           # real-time mode
 
@@ -601,13 +601,13 @@ Jellyfin sends a webhook on every progress update. Episeerr fires once when prog
 
 #### **Mode B: Webhook-Triggered Polling (Recommended)**
 
-Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Sessions` API every 15 minutes until the trigger percentage is hit. The webhook fires once instead of continuously, so this is the recommended default.
+Jellyfin sends a webhook on playback start. Episeerr then polls the Jellyfin `/Sessions` API every 2 minutes until the trigger percentage is hit. The webhook fires once per episode instead of continuously, so this is the recommended default.
 
 **Webhook Setup:**
 1. **Jellyfin** → Dashboard → Plugins → Webhooks → Add Generic Destination
 2. **Configure:**
    - **Webhook URL:** `http://your-episeerr:5002/api/integration/jellyfin/webhook`
-   - **Notification Type:** Select **"Session Start"** and **"Playback Stop"**
+   - **Notification Type:** Select **"Playback Start"** and **"Playback Stop"** — not "Session Start": Jellyfin only fires that once per client connection, not per episode, so back-to-back playback in the same session never re-triggers polling
    - **User Filter:** Your username
    - **Item Type:** ✅ Episodes **AND** ✅ Movies — without Movies checked, movie watch dates are not recorded in real-time
    - **Add Request Header:** Key: **Content-Type** (hyphen, not underscore), Value: **application/json** — required or Jellyfin's webhook will not be accepted
@@ -618,7 +618,7 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
 - JELLYFIN_API_KEY=your_api_key
 - JELLYFIN_USER_ID=your_username  # REQUIRED
 - JELLYFIN_TRIGGER_PERCENTAGE=50.0
-- JELLYFIN_POLL_INTERVAL=900  # seconds (15 minutes)
+- JELLYFIN_POLL_INTERVAL=120  # seconds (2 minutes)
 ```
 
 ---
@@ -628,7 +628,7 @@ Jellyfin sends a webhook on session start. Episeerr then polls the Jellyfin `/Se
 | Option | Best For | Processing | Jellyfin Webhooks Needed |
 |--------|----------|------------|--------------------------|
 | **A: PlaybackProgress (Advanced)** | Immediate triggering, tolerant of webhook spam | Immediate at 50–55% | PlaybackProgress (continuous) |
-| **B: Webhook-Triggered Polling (Recommended)** | Most users | Up to 15-min delay | Session Start (one-shot) |
+| **B: Webhook-Triggered Polling (Recommended)** | Most users | Up to 2-min delay | Playback Start (one-shot) + Playback Stop |
 
 **Test it:**
 ```bash

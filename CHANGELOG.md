@@ -1,5 +1,12 @@
 # Changelog
 
+## v4.0.13
+
+### 🐛 Bug Fixes
+
+- **Jellyfin polling mode's recommended webhook setting never reliably started polling** — README told users to enable "Session Start" + "Playback Stop", but Jellyfin only fires `SessionStart` once per client connection, not per episode, so watching a second episode back-to-back in the same Jellyfin session/app instance never re-triggered polling. The code already handled `PlaybackStart` identically to `SessionStart` (no behavior difference), so this was a docs-only fix: now recommends "Playback Start" + "Playback Stop", matching what `templates/documentation.html` already said. (episeerr#113, `README.md`)
+- **Default Jellyfin poll interval (900s/15min) could silently skip short episodes entirely under autoplay** — `poll_session()` bails out without ever processing the original episode the moment it sees the episode has changed (i.e. autoplay advanced), with no catch-up. Any episode shorter than ~30 minutes played with autoplay on risked finishing and advancing before a 15-minute poll ever got a chance to see it cross the 50% trigger. Lowered the default to 120s/2min, comfortably inside that window for virtually any episode length. (episeerr#113, `integrations/jellyfin.py`, `README.md`)
+
 ## v4.0.12
 
 ### 📝 Documentation
