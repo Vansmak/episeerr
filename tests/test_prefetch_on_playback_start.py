@@ -6,44 +6,64 @@ completion-triggered step (keep-window deletion, finale release, sequential
 advance, series-ended unmonitor, unmonitor-current). The watched event must
 still do all of it.
 
-Runs standalone: python test_prefetch_on_playback_start.py
+Runs standalone: python3 tests/test_prefetch_on_playback_start.py
+
+media_processor's external deps (Flask app, settings DB, HTTP) are stubbed only
+for the duration of its import, via patch.dict on sys.modules, so other test
+modules in the same run still see the real modules.
 """
+import os
 import sys
+import tempfile
 import types
 from unittest import mock
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def _stub_module(name, **attrs):
+_TMP = tempfile.mkdtemp(prefix='episeerr_issue62_prefetch_test_')
+for _var, _name in (('LOG_PATH', 'app.log'), ('MISSING_LOG_PATH', 'missing.log'),
+                    ('CLEANUP_LOG_PATH', 'cleanup.log')):
+    os.environ.setdefault(_var, os.path.join(_TMP, _name))
+
+
+def _stub(name, **attrs):
     mod = types.ModuleType(name)
     for k, v in attrs.items():
         setattr(mod, k, v)
-    sys.modules[name] = mod
     return mod
 
 
 def _load_media_processor():
-    """Import media_processor with its external deps stubbed out."""
-    _stub_module('dotenv', load_dotenv=lambda *a, **k: None)
-    _stub_module('requests',
-                 get=mock.MagicMock(), put=mock.MagicMock(),
-                 post=mock.MagicMock(), delete=mock.MagicMock(),
-                 Session=mock.MagicMock())
-    _stub_module('pending_deletions', PendingDeletions=mock.MagicMock())
-    _stub_module('servarr_utils')
-    _stub_module('episeerr',
-                 normalize_url=lambda u: (u or '').rstrip('/'),
-                 load_config=lambda: {'rules': {}},
-                 save_config=lambda c: None,
-                 load_global_settings=lambda: {})
-    _stub_module('episeerr_utils',
-                 reconcile_series_drift=lambda sid, cfg, series_data=None: (None, False),
-                 http=mock.MagicMock())
-    _stub_module('logging_config', main_logger=mock.MagicMock())
-    _stub_module('settings_db',
-                 get_sonarr_config=lambda: {'url': 'http://sonarr:8989', 'api_key': 'x'},
-                 get_service=lambda *a, **k: None)
-    import media_processor
-    return media_processor
+    """Import media_processor with its external deps stubbed out, scoped to the import only."""
+    stubs = {
+        'dotenv': _stub('dotenv', load_dotenv=lambda *a, **k: None),
+        'requests': _stub('requests',
+                           get=mock.MagicMock(), put=mock.MagicMock(),
+                           post=mock.MagicMock(), delete=mock.MagicMock(),
+                           Session=mock.MagicMock()),
+        'pending_deletions': _stub('pending_deletions', PendingDeletions=mock.MagicMock()),
+        'servarr_utils': _stub('servarr_utils'),
+        'episeerr': _stub('episeerr',
+                          normalize_url=lambda u: (u or '').rstrip('/'),
+                          load_config=lambda: {'rules': {}},
+                          save_config=lambda c: None,
+                          load_global_settings=lambda: {}),
+        'episeerr_utils': _stub('episeerr_utils',
+                                reconcile_series_drift=lambda sid, cfg, series_data=None: (None, False),
+                                http=mock.MagicMock()),
+        'logging_config': _stub('logging_config', main_logger=mock.MagicMock()),
+        'settings_db': _stub('settings_db',
+                             get_sonarr_config=lambda: {'url': 'http://sonarr:8989', 'api_key': 'x'},
+                             get_service=lambda *a, **k: None),
+    }
+    saved = sys.modules.pop('media_processor', None)
+    with mock.patch.dict(sys.modules, stubs):
+        import media_processor
+        mod = media_processor
+    sys.modules.pop('media_processor', None)
+    if saved is not None:
+        sys.modules['media_processor'] = saved
+    return mod
 
 
 mp = _load_media_processor()
