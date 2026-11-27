@@ -483,6 +483,33 @@ def _xw_plex_configured() -> bool:
         return False
 
 
+_xw_plex_last_ok = {"ok": False}
+
+
+def _xw_plex_watchlist_ok() -> bool:
+    """True when the most recent Plex watchlist fetch ran against a configured Plex and succeeded."""
+    return _xw_plex_last_ok["ok"]
+
+
+def _xw_remove_from_plex_watchlist(tmdb_id: int, media_type: str) -> None:
+    """Best-effort: drop a TMDB id from the real Plex watchlist (Xadarr remove)."""
+    try:
+        from settings_db import get_plex_config
+        from integrations.plex import PlexIntegration
+        cfg = get_plex_config()
+        if not cfg or not cfg.get("api_key"):
+            return
+        plex = PlexIntegration()
+        want = "show" if media_type in ("tv", "show", "series") else "movie"
+        for raw in plex.fetch_watchlist(cfg["api_key"]):
+            if str(raw.get("tmdb_id")) == str(tmdb_id) and (raw.get("type") == "show") == (want == "show"):
+                ok, detail = plex.remove_from_watchlist(cfg["api_key"], str(raw.get("rating_key")))
+                logger.info(f"[Xadarr] Plex watchlist remove tmdb {tmdb_id}: {ok} {detail[:80]}")
+                return
+    except Exception as exc:
+        logger.warning(f"[Xadarr] Plex watchlist remove failed for tmdb {tmdb_id}: {exc}")
+
+
 def _xw_fetch_plex_watchlist_items() -> list:
     """
     Live Plex watchlist, mapped into the same item shape watchlistByProfile
@@ -496,10 +523,13 @@ def _xw_fetch_plex_watchlist_items() -> list:
     try:
         from settings_db import get_plex_config
         from integrations.plex import PlexIntegration
+        _xw_plex_last_ok["ok"] = False
         plex_cfg = get_plex_config()
         if not plex_cfg or not plex_cfg.get("api_key"):
             return []
-        raw_items = PlexIntegration().fetch_watchlist(plex_cfg["api_key"])
+        _plex = PlexIntegration()
+        raw_items = _plex.fetch_watchlist(plex_cfg["api_key"])
+        _xw_plex_last_ok["ok"] = bool(getattr(_plex, "last_fetch_ok", False))
     except Exception as exc:
         logger.error(f"[Xadarr] Plex watchlist fetch failed: {exc}")
         return []
@@ -1303,7 +1333,7 @@ class XadarrIntegration(ServiceIntegration):
             (not an error) whenever Plex isn't configured or the fetch fails.
             """
             items = _xw_fetch_plex_watchlist_items()
-            return jsonify([
+            resp = jsonify([
                 {
                     "id": it["tmdbId"],
                     "tmdbId": it["tmdbId"],
@@ -1314,7 +1344,11 @@ class XadarrIntegration(ServiceIntegration):
                     "addedAt": it["addedAt"],
                 }
                 for it in items
-            ]), 200
+            ])
+            # Tells Xadarr this list is authoritative (Plex configured + fetched), so the
+            # app replaces its local cache with it rather than falling back to stale data.
+            resp.headers["X-Plex-Watchlist"] = "ok" if _xw_plex_watchlist_ok() else "unavailable"
+            return resp, 200
 
         # ── GET /settings ─────────────────────────────────────────────────────
         @bp.route("/settings", methods=["GET"])
@@ -2253,6 +2287,8 @@ class XadarrIntegration(ServiceIntegration):
             _xw_set_watchlist(blob, wl)
             _xw_trakt_watchlist_push(blob, item_id, _xw_norm_media(media_type), add=False)
             _xw_save_blob(blob)
+            threading.Thread(target=_xw_remove_from_plex_watchlist,
+                             args=(item_id, media_type), daemon=True).start()
             return jsonify({"ok": True})
 
         # ── Continue watching ─────────────────────────────────────────────────

@@ -522,6 +522,7 @@ class PlexIntegration(ServiceIntegration):
     def fetch_watchlist(self, api_key: str) -> List[Dict]:
         """Fetch Plex watchlist with GUID parsing for TMDB/TVDB IDs"""
         items = []
+        self.last_fetch_ok = False  # lets callers tell "empty watchlist" from "fetch failed"
         try:
             response = http.get(
                 'https://discover.provider.plex.tv/library/sections/watchlist/all?includeGuids=1',
@@ -565,6 +566,7 @@ class PlexIntegration(ServiceIntegration):
                 
                 items.append(item)
             
+            self.last_fetch_ok = True
             logger.info(f"Fetched {len(items)} watchlist items ({sum(1 for i in items if i['type'] == 'show')} TV, {sum(1 for i in items if i['type'] == 'movie')} movies)")
             
         except Exception as e:
