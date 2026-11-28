@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Bug Fixes (from episeerr_dev)
+
+- **Rule rename was a bare tag icon next to Edit/Delete on the Rules table, popping a browser `prompt()`** — out of place next to the icon it used, and easy to overlook as a rename control at all. Moved into Edit Rule itself: a pencil-icon toggle next to the rule name reveals an inline field + Save/Cancel, submitting to the same `/rename-rule/<name>` route. No backend change - `_rename_rule()`'s tag-sync/series-reassignment logic is untouched. (episeerr#115, `templates/edit_rule.html`, `templates/rules.html`)
+
 ## v4.0.14
 
 ### 🐛 Bug Fixes
