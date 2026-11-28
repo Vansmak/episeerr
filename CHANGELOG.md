@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.16
+
+### 🐛 Bug Fixes
+
+- **Docker sidebar logged an ERROR on every page load when the Docker integration was never configured** — `DockerIntegration._get_full_config()` always fell back to the default local socket path even when `get_service('docker')` returned nothing at all, so `/api/docker/media-containers` (called unconditionally by `base.html` on every page) tried to hit a socket that was never mounted, logging `Docker list error: [Errno 2] No such file or directory` every time and tripping log-based alerting (Dozzle, Loki, etc.) on installs that never touched the integration. Now only assumes the default socket when the service has actually been saved/enabled. (episeerr#116, `integrations/docker.py`)
+
 ## v4.0.15
 
 ### 🐛 Bug Fixes
