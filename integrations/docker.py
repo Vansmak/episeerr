@@ -307,7 +307,14 @@ class DockerIntegration(ServiceIntegration):
         """Returns (host, stack_name, container_filter)"""
         try:
             from settings_db import get_service
-            svc = get_service('docker') or {}
+            svc = get_service('docker')
+            if svc is None:
+                # Docker integration never configured/enabled - no socket is
+                # known to be mounted, so don't guess one. Previously fell
+                # back to the default local socket even here, so every page
+                # load hit a non-existent path and logged an ERROR regardless
+                # of whether Docker was ever set up (episeerr#116).
+                return '', '', ''
             config = svc.get('config') or {}
             # docker_host stored in config (new). Fall back to legacy svc['url'] or default socket.
             host = config.get('docker_host') or svc.get('url') or 'unix:///var/run/docker.sock'
@@ -316,7 +323,7 @@ class DockerIntegration(ServiceIntegration):
             filter_str = config.get('container_filter', '').strip()
             return host, stack, filter_str
         except Exception:
-            return 'unix:///var/run/docker.sock', '', ''
+            return '', '', ''
 
     def _get_filter_config(self) -> Tuple[str, str]:
         """Returns (stack_name, container_filter) only"""
