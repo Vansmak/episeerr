@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### ✨ New Features (from episeerr_dev)
+
+- **Rules page now shows each rule's most recent Get/download action** — "Got S2E6 for Stick · 2h ago" shown inline per rule, reusing the existing series→rule mapping and `searches.json` activity log (no new storage). First step toward Rules being the visible, living showcase of what Episeerr actually does, rather than a dry management table. Scoped to Gets only for now. (`activity_storage.py`, `episeerr.py`, `templates/rules.html`)
+
 ### 🐛 Bug Fixes (from episeerr_dev)
 
 - **Docker sidebar logged an ERROR on every page load when the Docker integration was never configured** — `DockerIntegration._get_full_config()` always fell back to the default local socket path even when `get_service('docker')` returned nothing at all, so `/api/docker/media-containers` (called unconditionally by `base.html` on every page) tried to hit a socket that was never mounted, logging `Docker list error: [Errno 2] No such file or directory` every time and tripping log-based alerting (Dozzle, Loki, etc.) on installs that never touched the integration. Now only assumes the default socket when the service has actually been saved/enabled. (episeerr#116, `integrations/docker.py`)

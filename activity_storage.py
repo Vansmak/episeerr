@@ -192,12 +192,68 @@ def _get_last_event(filepath):
     try:
         if not os.path.exists(filepath):
             return None
-        
+
         with open(filepath, 'r') as f:
             events = json.load(f)
-        
+
         return events[0] if events else None
-        
+
     except Exception as e:
         logger.error(f"Failed to read activity log: {e}")
         return None
+
+
+def _format_time_ago(timestamp):
+    """Plain server-side relative time, e.g. '2h ago' - no JS needed for a static page render."""
+    seconds = max(0, int(time.time()) - int(timestamp or 0))
+    if seconds < 60:
+        return 'just now'
+    if seconds < 3600:
+        return f'{seconds // 60}m ago'
+    if seconds < 86400:
+        return f'{seconds // 3600}h ago'
+    return f'{seconds // 86400}d ago'
+
+
+def get_last_search_per_rule(config):
+    """
+    Most recent Get/search action for each rule, keyed by rule_name
+    (episeerr#115 follow-up - Rules page as the living showcase of what
+    Episeerr actually does, rather than a dry management table).
+
+    Reuses the same series_id -> rule_name join dashboard.py's activity
+    feed already does, just grouped by rule instead of flattened into one
+    timeline. Returns {} on any error - this is cosmetic, never worth
+    failing the Rules page over.
+    """
+    try:
+        series_rule = {}
+        for rule_name, rule_data in (config or {}).get('rules', {}).items():
+            for sid in (rule_data.get('series') or {}).keys():
+                try:
+                    series_rule[int(sid)] = rule_name
+                except (TypeError, ValueError):
+                    continue
+
+        if not os.path.exists(SEARCHES_FILE):
+            return {}
+
+        with open(SEARCHES_FILE, 'r') as f:
+            events = json.load(f)
+
+        last_action = {}
+        for ev in events:
+            rule_name = series_rule.get(ev.get('series_id'))
+            if not rule_name:
+                continue
+            existing = last_action.get(rule_name)
+            if existing is None or ev.get('timestamp', 0) > existing.get('timestamp', 0):
+                last_action[rule_name] = ev
+
+        for ev in last_action.values():
+            ev['time_ago'] = _format_time_ago(ev.get('timestamp'))
+
+        return last_action
+    except Exception as e:
+        logger.error(f"Failed to compute per-rule activity: {e}")
+        return {}
