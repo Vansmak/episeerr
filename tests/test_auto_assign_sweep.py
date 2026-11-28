@@ -24,11 +24,13 @@ import episeerr_utils  # noqa: E402
 
 
 class FakeResponse:
-    def __init__(self, json_data):
+    def __init__(self, json_data, raise_exc=None):
         self._json = json_data
+        self._raise_exc = raise_exc
 
     def raise_for_status(self):
-        pass
+        if self._raise_exc:
+            raise self._raise_exc
 
     def json(self):
         return self._json
@@ -72,11 +74,19 @@ class AutoAssignSweepTestCase(unittest.TestCase):
             'other': {'series': {}},
         }}
 
-    def _run(self, series_list, settings=None, config=None, rule=(None, False)):
+    def _run(self, series_list, settings=None, config=None, rule=(None, False),
+             tags=(), tag_fetch_raises=False):
         self._install(settings or self._settings(), config or self._config())
+
+        def fake_get(url, headers=None, timeout=None):
+            if url.endswith('/api/v3/tag'):
+                if tag_fetch_raises:
+                    return FakeResponse([], raise_exc=RuntimeError('tag fetch failed'))
+                return FakeResponse([{'id': t_id, 'label': label} for t_id, label in tags])
+            return FakeResponse(series_list)
+
         with patch.object(episeerr_utils, 'get_sonarr_headers', return_value={}), \
-             patch.object(episeerr_utils, 'get_tag_mapping', return_value={}), \
-             patch.object(episeerr_utils.http, 'get', return_value=FakeResponse(series_list)), \
+             patch.object(episeerr_utils.http, 'get', side_effect=fake_get), \
              patch.object(episeerr_utils, 'resolve_rule_from_tags', return_value=rule), \
              patch.object(episeerr_utils, 'cancel_queued_downloads_for_series') as cancel, \
              patch.object(episeerr_utils, 'unmonitor_series') as unmon, \
@@ -136,6 +146,22 @@ class AutoAssignSweepTestCase(unittest.TestCase):
         series = [{'id': 11, 'title': 'Tagged', 'tags': [3], 'added': _iso(NOW - timedelta(hours=1))}]
         summary, _, _, apply, track = self._run(series, rule=('other', False))
         self.assertEqual(summary['assigned'], 0)
+        apply.assert_not_called()
+        track.assert_not_called()
+
+    def test_tag_fetch_failure_aborts_without_assigning(self):
+        # A series that already carries a real rule tag (or episeerr_select,
+        # awaiting a manual choice) must never be reassigned just because
+        # Sonarr's tag list failed to fetch on this tick.
+        series = [{'id': 12, 'title': 'AlreadyTagged', 'tags': [3],
+                   'added': _iso(NOW - timedelta(hours=1))}]
+        summary, cancel, unmon, apply, track = self._run(
+            series, tag_fetch_raises=True, rule=('other', False))
+        self.assertFalse(summary['ran'])
+        self.assertEqual(summary['assigned'], 0)
+        self.assertTrue(summary['errors'])
+        cancel.assert_not_called()
+        unmon.assert_not_called()
         apply.assert_not_called()
         track.assert_not_called()
 
