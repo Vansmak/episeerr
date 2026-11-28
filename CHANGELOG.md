@@ -1,37 +1,41 @@
 # Changelog
 
-## Unreleased
+## v4.0.14
 
-### 🐛 Bug Fixes (from episeerr_dev)
+### 🐛 Bug Fixes
+
+- **Auto-assign new series silently did nothing if the Sonarr SeriesAdd webhook never reached Episeerr** (not configured, "On Series Add" unticked, wrong URL, Episeerr down at add time) — the live webhook was the only path that ever applied it. New `reconcile.check_unassigned_new_series()` sweep, run at startup and every scheduler tick: any untagged, untracked Sonarr series added after auto-assign was turned on gets assigned to the default rule (full initial selection if added within the last 24h, otherwise just tracked — an old show someone's already watching doesn't get its monitoring reset). (episeerr#110, `reconcile.py`)
+- **That same sweep could misfire if Sonarr's tag list failed to fetch on a given tick** — a transient `/api/v3/tag` error returned an empty tag mapping indistinguishable from "this series genuinely has no tags," so an already-tagged series (e.g. `episeerr_select`, awaiting a manual rule choice, or a real rule tag not yet reflected in config) could get its downloads cancelled and reassigned to the default rule based on nothing but a flaky API call. The tag fetch now raises on failure like the series-list fetch beside it, aborting that tick entirely instead of guessing. (episeerr#110, `reconcile.py`)
+- **Pending Deletions entries queued while dry-run was on never cleared** — turning dry-run off didn't process them, and a later live delete of the same episode didn't remove the queue entry either, so the list just grew forever and looked like deletion wasn't working. Live deletes now drop matching queue entries, each cleanup run prunes entries whose file is gone or was replaced, and the page explains in live mode that anything still listed was queued earlier and needs approve/reject. (episeerr#106, `pending_deletions.py`, `episeerr.py`, `templates/pending_deletions.html`)
+- **Deleted log files stayed empty until restart** — file handlers kept writing to the open (deleted) file descriptor, invisible at its old path. New `log_handlers.py` reopens the file (recreating the `logs` folder if needed) once the path no longer matches what's open. (episeerr#111, `log_handlers.py`, `logging_config.py`, `Dockerfile`)
+- **A `TMDB_API_KEY` saved in Settings after startup was ignored until restart** — it was only ever read once at import, so every TMDB-backed feature (including Pending Season/Episode Selections) kept failing against a stale or missing key. Now re-read from the settings DB, throttled to once per 10s. Pending-requests failures also now surface the real exception/HTTP status instead of a bare "Unknown error". (episeerr#73, `media_processor.py`, `episeerr.py`)
+
+## v4.0.13
+
+### 🐛 Bug Fixes
 
 - **Jellyfin polling mode's recommended webhook setting never reliably started polling** — README told users to enable "Session Start" + "Playback Stop", but Jellyfin only fires `SessionStart` once per client connection, not per episode, so watching a second episode back-to-back in the same Jellyfin session/app instance never re-triggered polling. The code already handled `PlaybackStart` identically to `SessionStart` (no behavior difference), so this was a docs-only fix: now recommends "Playback Start" + "Playback Stop", matching what `templates/documentation.html` already said. (episeerr#113, `README.md`)
 - **Default Jellyfin poll interval (900s/15min) could silently skip short episodes entirely under autoplay** — `poll_session()` bails out without ever processing the original episode the moment it sees the episode has changed (i.e. autoplay advanced), with no catch-up. Any episode shorter than ~30 minutes played with autoplay on risked finishing and advancing before a 15-minute poll ever got a chance to see it cross the 50% trigger. Lowered the default to 120s/2min, comfortably inside that window for virtually any episode length. (episeerr#113, `integrations/jellyfin.py`, `README.md`)
 
-### 📝 Documentation (from episeerr_dev)
+## v4.0.12
+
+### 📝 Documentation
 
 - **"Prefetch next season" was only documented inside an unrelated "Season Binger" example**, far from where GET/KEEP are actually explained in "Create Your First Rule" — nobody would find it there. Moved it there and added the missing explanation of GET's three types (Episodes/Seasons/All) themselves, which weren't spelled out anywhere. (`README.md`)
 - Fixed a dead README table-of-contents link (`#add-series-four-ways` → the actual anchor is `#adding-series`).
 - Documented the `CLEANUP_DRY_RUN` env var — live code wired into the Safety Status UI in v4.0.10, but never mentioned in README.md or the in-app Documentation page. Added as a third dry-run level alongside Global and Per-Rule in both. (`README.md`, `templates/documentation.html`)
 
-### 🐛 Bug Fixes (Xadarr server)
+## v4.0.11
 
-- **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
-
-### ✨ New Features (from episeerr_dev)
-
-- **Update-available indicator** — the version number in the sidebar now checks GitHub's latest stable release in the background and shows a small "Update" badge (linking straight to the release page) when a newer version exists. Checked once per page load; the backend caches the GitHub lookup for 6 hours so this never hits GitHub's API more than necessary, and any failure (no outbound internet, rate limit, etc.) just means the badge doesn't show — nothing else depends on it. New `GET /api/check-update` endpoint. Requested in #108.
-
-- **Rename a rule** — previously the only way to "rename" a rule was to recreate it from scratch and manually reassign every series by hand, since the rule name doubles as the identity of its Sonarr tag (`episeerr-<rule-name>`) on every series currently assigned to it. New "Rename" button on the Rules page (and `POST /api/rules/<name>/rename` for native clients): the new name inherits every setting automatically, every currently-assigned series is moved over with its per-series activity data preserved and its Sonarr tag re-synced, the default-rule pointer is repointed first if the renamed rule was the default, and the old rule + its now-unused Sonarr tag are deleted. Built on the same bulk-reassignment path the Rules page's existing "assign series to rule" already used, rather than new machinery. Guards against renaming/renaming-to the reserved `select`/`default` tags. Requested in #107.
-
-  Live-testing this surfaced two real, pre-existing tag-sync bugs, both fixed as part of this work: (1) deleting a rule's Sonarr tag never invalidated `get_or_create_rule_tag_id()`'s 60-second tag cache, so renaming a rule and then renaming it back (or deleting a rule and recreating one under the same name) within that window would see the stale tag list, conclude the "new" tag already existed at its now-dead ID, and Sonarr's series PUT endpoint silently accepted the dangling reference instead of rejecting it. (2) `sync_rule_tag_to_sonarr()`'s tag-removal pass only ever stripped tags it could positively identify as `episeerr_*` by label — a tag ID that no longer exists in Sonarr at all looks identical to an unrelated user tag by that test, so once a dangling reference like the above existed, nothing ever removed it, even across repeated reconciliation. (`episeerr.py`, `episeerr_utils.py`)
-
-- **Prefetch the next season before the current one finishes** — a `get_type: seasons` rule only ever started fetching the next season once the current one was fully watched, so the download always began cold right as the viewer finished. New "Prefetch next season" field on Create/Edit Rule (only shown for the Seasons type), a plain episode count: with it set to 2, the next season starts fetching once only 2 episodes remain in the current one instead of waiting for the finale. Defaults to 0 (unchanged behavior). From discussion on #105.
-
-### 🐛 Bug Fixes (from episeerr_dev)
+### 🐛 Bug Fixes
 
 - **Create Rule and Edit Rule's own JavaScript has never actually run, on any browser, ever** — both templates (plus Cleanup Logs and Dry Run Settings) put their page-specific `<script>` in a `{% block scripts %}`, but `base.html` only defines a matching placeholder for `{% block extra_js %}` — Jinja silently discards any child-template block with no matching parent block, so none of this content was ever inserted into the rendered page at all. In practice: the "Get N episode(s)/season(s)" explanation text under Get/Keep never updated, the Count field never hid itself for "All", tooltips never initialized, and the new "Prefetch next season" field added in v4.0.8 could never reveal itself when Seasons was selected — all silently dead code, not something that broke with any of today's other changes. Renamed all four to `{% block extra_js %}` to match what `base.html` actually serves. Caught chasing down why the prefetch field wasn't appearing on a real device after multiple live rebuilds ruled out every server-side explanation. (`templates/create_rule.html`, `templates/edit_rule.html`, `templates/cleanup_logs.html`, `templates/dry_run_settings.html`)
 
 - Also hardened the Bootstrap tooltip initialization on five pages (including the two above) to fail gracefully in its own try/catch instead of being able to take the rest of a page's init down with it if the Bootstrap CDN script ever fails to load (ad-blocker, offline, network filtering) — not the root cause of the above, but a reasonable defense found along the way. (`templates/create_rule.html`, `templates/edit_rule.html`, `templates/scheduler_admin.html`, `templates/documentation.html`, `templates/view_logs.html`)
+
+## v4.0.10
+
+### 🐛 Bug Fixes
 
 - **Submitting `0` for Get Count or Keep Count silently saved `1` instead** — `_normalize_rule_payload()` computed both as `_int_or_none(data.get(...)) or 1`, and Python treats `0` as falsy, so an explicit 0 (meant as "don't get anything" / "keep nothing", per the form's own hint text) was indistinguishable from a blank field and always fell back to 1. New `_int_or_default()` only falls back when the field is genuinely blank, not when it's `0`. A quick-search result's rule subtitle had the same bug showing "Keep all" for a real 0. Caught by a user question about what Keep 0 actually does - verified live via the real create-rule API that both fields now persist 0 correctly.
 
@@ -39,11 +43,43 @@
 
 - **A `get_count=0` rule reaching Sonarr via the direct `SeriesAdd` webhook path would still fetch 1 season/episode** — `apply_initial_rule_selection()` (the webhook-add path, as opposed to the Pending-Request path fixed in #105) had the identical `get_count or 1` bug, dormant until just now since 0 could never actually be saved before the fix above made it reachable. Caught by auditing every `get_count`/`keep_count` fallback in the codebase specifically because this release changes which values can now actually reach them. (`episeerr_utils.py`)
 
+## v4.0.9
+
+### ✨ New Features
+
+- **Update-available indicator** — the version number in the sidebar now checks GitHub's latest stable release in the background and shows a small "Update" badge (linking straight to the release page) when a newer version exists. Checked once per page load; the backend caches the GitHub lookup for 6 hours so this never hits GitHub's API more than necessary, and any failure (no outbound internet, rate limit, etc.) just means the badge doesn't show — nothing else depends on it. New `GET /api/check-update` endpoint. Requested in #108.
+
+## v4.0.8
+
+### ✨ New Features
+
+- **Rename a rule** — previously the only way to "rename" a rule was to recreate it from scratch and manually reassign every series by hand, since the rule name doubles as the identity of its Sonarr tag (`episeerr-<rule-name>`) on every series currently assigned to it. New "Rename" button on the Rules page (and `POST /api/rules/<name>/rename` for native clients): the new name inherits every setting automatically, every currently-assigned series is moved over with its per-series activity data preserved and its Sonarr tag re-synced, the default-rule pointer is repointed first if the renamed rule was the default, and the old rule + its now-unused Sonarr tag are deleted. Built on the same bulk-reassignment path the Rules page's existing "assign series to rule" already used, rather than new machinery. Guards against renaming/renaming-to the reserved `select`/`default` tags. Requested in #107.
+
+  Live-testing this surfaced two real, pre-existing tag-sync bugs, both fixed as part of this work: (1) deleting a rule's Sonarr tag never invalidated `get_or_create_rule_tag_id()`'s 60-second tag cache, so renaming a rule and then renaming it back (or deleting a rule and recreating one under the same name) within that window would see the stale tag list, conclude the "new" tag already existed at its now-dead ID, and Sonarr's series PUT endpoint silently accepted the dangling reference instead of rejecting it. (2) `sync_rule_tag_to_sonarr()`'s tag-removal pass only ever stripped tags it could positively identify as `episeerr_*` by label — a tag ID that no longer exists in Sonarr at all looks identical to an unrelated user tag by that test, so once a dangling reference like the above existed, nothing ever removed it, even across repeated reconciliation. (`episeerr.py`, `episeerr_utils.py`)
+
+- **Prefetch the next season before the current one finishes** — a `get_type: seasons` rule only ever started fetching the next season once the current one was fully watched, so the download always began cold right as the viewer finished. New "Prefetch next season" field on Create/Edit Rule (only shown for the Seasons type), a plain episode count: with it set to 2, the next season starts fetching once only 2 episodes remain in the current one instead of waiting for the finale. Defaults to 0 (unchanged behavior). From discussion on #105.
+
+## v4.0.7
+
+### 🐛 Bug Fixes
+
 - **`/api/test-connection/tmdb` always returned HTTP 500** — `test_connection(service)` falls through to legacy per-service handlers when no plugin integration is registered for `service`, but those only covered `sonarr` and `tautulli`; for `tmdb` the function fell off the end and returned `None`, which Flask can't turn into a response. Saving the TMDB key still worked (separate code path), so this was purely the Test Connection button misfiring — new users testing a correct key saw a 500 and assumed it was wrong. Added a `tmdb` branch (same v3/v4 token detection as `get_tmdb_endpoint()`, hits `/3/configuration`) plus a generic 400 fallback for any other unrecognized service, so this code path can't silently return `None` again. Reported with the exact cause and fix already diagnosed - thanks @arcanepanther! (`episeerr.py`, #109)
 
 - **Cleanup's Safety Status box could say "Live Mode: ACTIVE" while a `CLEANUP_DRY_RUN` env var silently queued every deletion for approval instead** — the global dry-run gate is actually `dry_run_mode` (DB, toggled on the Cleanup Scheduler page) OR'd with `CLEANUP_DRY_RUN` (an undocumented env var), but the Safety Status display only ever checked the DB value, so it had no way to reflect the env var overriding it. A user with `CLEANUP_DRY_RUN` set anywhere in their environment would see the UI promise live deletion while every run actually got queued instead - confusing with no visible cause. `/api/global-settings` now also reports `cleanup_dry_run_env`, and the Safety Status box shows "Global Dry Run: ENABLED (via CLEANUP_DRY_RUN env var)" when it's set, instead of the misleading live-mode message. Reported as #106. (`episeerr.py`, `templates/scheduler_admin.html`)
 
+## v4.0.6
+
+### 🐛 Bug Fixes
+
 - **Assigning a `seasons`-type rule to a pending request always searched Sonarr episode-by-episode, never as a season pack** — `_apply_rule_to_selection_core` (the "assign this rule to the whole show" shortcut on the Pending Requests page, used by Plex/Trakt watchlist intake) always sent `EpisodeSearch` with every monitored episode ID regardless of `get_type`. The equivalent initial-add path for a direct Sonarr `SeriesAdd` webhook (`apply_initial_rule_selection` in `episeerr_utils.py`) already correctly sends `SeasonSearch` for `seasons` rules — the two implementations had drifted apart, and only the webhook path got the season-pack branch. Pending-request assignment now sends one `SeasonSearch` per season covered by the rule's `get_count`, matching the webhook path. Not related to #99 (watch-triggered re-searches are still deliberately per-episode) — this only affects the initial grab when a request is assigned a rule. Reported as #105. (`episeerr.py`)
+
+## v4.0.5
+
+### 🐛 Bug Fixes (Xadarr server)
+
+- **A stale Xadarr device could overwrite newer favourites/settings on the server** — `PUT /api/integration/xadarr/settings` accepted any payload that passed the syncVersion check, so a device pushing its old snapshot (2026-10-10: the SHIELD replaced a corrected favourites list with stale channel ids) won. The endpoint now enforces the Xadarr sync contract, newer wins and never older: a payload whose `updatedAt` is older than the stored one is rejected with 409 (the app pulls and retries), and per profile, favourites with an older `favoritesUpdatedAt` than the stored ones are kept while the rest of the write goes through. Every accepted or rejected write is logged with the caller IP and favourite count. Pairs with Xadarr v2.15. (`integrations/xadarr.py`)
+
+### 🐛 Bug Fixes (from episeerr_dev)
 
 - **Watched marks set outside a live playback webhook (e.g. watch history imported into Jellyfin/Emby from another source) were only ever caught at Episeerr startup** — `check_for_missed_watch_events()` already detects these correctly (it reads Jellyfin/Emby's own "played" state directly, not webhooks) and queues them for human review in the Pending Watch Events list, but it only ran once per restart. It now also re-runs on the same cadence as scheduled cleanup, so a long-running instance eventually surfaces these without needing a restart. Still never auto-replays anything - same human-review queue, same `reconcile_enabled` opt-in gate as before. From discussion #102. (`episeerr.py`)
 

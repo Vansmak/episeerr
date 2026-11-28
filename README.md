@@ -208,6 +208,14 @@ services:
       # - CLEANUP_DRY_RUN=true
 
       # ============================================
+      # OPTIONAL - Safety
+      # ============================================
+      # Forces dry run for ALL cleanup (grace/keep/dormant), regardless of the
+      # DB-stored toggles on the Scheduler page. Useful for locking dry run on
+      # via compose so it can't be accidentally disabled through the UI.
+      # - CLEANUP_DRY_RUN=true
+
+      # ============================================
       # OPTIONAL - Quick Links in Sidebar
       # ============================================
       - CUSTOMAPP_URL=http://192.168.1.100:8080

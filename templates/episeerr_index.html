@@ -113,7 +113,10 @@ function loadPendingRequests() {
     fetch('/api/pending-requests', {
         method: 'GET'
     })
-    .then(response => response.json())
+    .then(response => response.json().catch(() => ({
+        success: false,
+        error: `Server returned HTTP ${response.status} (not JSON) - check episeerr.log`
+    })))
     .then(data => {
         document.getElementById('loading-indicator').style.display = 'none';
         
