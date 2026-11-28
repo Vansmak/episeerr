@@ -4,6 +4,8 @@
 
 ### 🐛 Bug Fixes (from episeerr_dev)
 
+- **Docker sidebar logged an ERROR on every page load when the Docker integration was never configured** — `DockerIntegration._get_full_config()` always fell back to the default local socket path even when `get_service('docker')` returned nothing at all, so `/api/docker/media-containers` (called unconditionally by `base.html` on every page) tried to hit a socket that was never mounted, logging `Docker list error: [Errno 2] No such file or directory` every time and tripping log-based alerting (Dozzle, Loki, etc.) on installs that never touched the integration. Now only assumes the default socket when the service has actually been saved/enabled. (episeerr#116, `integrations/docker.py`)
+
 - **Rule rename was a bare tag icon next to Edit/Delete on the Rules table, popping a browser `prompt()`** — out of place next to the icon it used, and easy to overlook as a rename control at all. Moved into Edit Rule itself: a pencil-icon toggle next to the rule name reveals an inline field + Save/Cancel, submitting to the same `/rename-rule/<name>` route. No backend change - `_rename_rule()`'s tag-sync/series-reassignment logic is untouched. (episeerr#115, `templates/edit_rule.html`, `templates/rules.html`)
 
 ## v4.0.14
