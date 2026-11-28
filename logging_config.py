@@ -1,7 +1,8 @@
 """Centralized Logging Configuration for Episeerr"""
 import os
 import logging
-from logging.handlers import RotatingFileHandler
+from log_handlers import SelfHealingRotatingFileHandler
+
 
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 VALID_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
@@ -19,7 +20,7 @@ def setup_main_logger(name='episeerr'):
     logger.setLevel(LOG_LEVEL_INT)
     logger.handlers.clear()
     
-    file_handler = RotatingFileHandler(MAIN_LOG, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+    file_handler = SelfHealingRotatingFileHandler(MAIN_LOG, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setLevel(LOG_LEVEL_INT)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     

@@ -1,4 +1,4 @@
-__version__ = "3.8.7"
+__version__ = "4.0.12"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -16,7 +16,7 @@ import threading
 import shutil
 from threading import Lock
 from functools import lru_cache
-from logging.handlers import RotatingFileHandler
+from log_handlers import SelfHealingRotatingFileHandler
 import requests
 import episeerr_utils
 from episeerr_utils import EPISEERR_DEFAULT_TAG_ID, EPISEERR_SELECT_TAG_ID, normalize_url, http
@@ -75,6 +75,36 @@ SONARR_API_KEY = sonarr_config.get('api_key') if sonarr_config else None
 tmdb_service = get_service('tmdb', 'default')
 TMDB_API_KEY = tmdb_service['api_key'] if tmdb_service else os.getenv('TMDB_API_KEY')
 app.config['TMDB_API_KEY'] = TMDB_API_KEY
+_tmdb_key_checked_at = time.time()
+
+
+def _refresh_tmdb_api_key():
+    """Pick up a TMDB key saved (or changed) in Settings without a restart.
+
+    TMDB_API_KEY used to be read once at import, so configuring it through the
+    Setup page left every TMDB-backed feature (Pending Season/Episode
+    Selections, search, season details) failing until the container restarted
+    (episeerr#73). Re-read from the settings DB at most every 10 seconds.
+    """
+    global TMDB_API_KEY, _tmdb_key_checked_at
+    now = time.time()
+    if now - _tmdb_key_checked_at < 10:
+        return
+    _tmdb_key_checked_at = now
+    try:
+        svc = get_service('tmdb', 'default')
+        key = (svc or {}).get('api_key') or os.getenv('TMDB_API_KEY')
+    except Exception:
+        return
+    if key != TMDB_API_KEY:
+        TMDB_API_KEY = key
+        app.config['TMDB_API_KEY'] = key
+        app.logger.info("TMDB API key %s", "updated from settings" if key else "removed")
+
+
+@app.before_request
+def _refresh_tmdb_api_key_hook():
+    _refresh_tmdb_api_key()
 if app.config['TMDB_API_KEY']:
     app.logger.info("TMDB_API_KEY is set - request system will function normally")
 else:
@@ -1350,6 +1380,9 @@ class OCDarrScheduler:
                 # ran" signal, safe to act on directly (automation_held
                 # still gates this internally).
                 reconcile.check_delay_tagged_series()
+                # Auto-assign fallback for series whose SeriesAdd webhook
+                # never arrived (episeerr#110).
+                reconcile.check_unassigned_new_series()
             except Exception as e:
                 print(f"Startup reconcile check error: {e}")
         threading.Thread(target=_startup_reconcile_check, daemon=True).start()
@@ -1383,6 +1416,17 @@ class OCDarrScheduler:
                         reconcile.check_for_missed_watch_events()
                     except Exception as reconcile_err:
                         print(f"Periodic reconcile check error: {reconcile_err}")
+
+                # Auto-assign fallback (episeerr#110): cheap (one Sonarr
+                # series list), so it runs every tick rather than waiting for
+                # the cleanup interval - a missed SeriesAdd webhook is picked
+                # up within ~10 minutes.
+                try:
+                    import reconcile
+                    reconcile.check_unassigned_new_series()
+                except Exception as assign_err:
+                    print(f"Auto-assign sweep error: {assign_err}")
+
 
                 # Daily aired-but-not-downloaded notification check
                 hours_since_aired = (current_time - self.last_aired_check) / 3600
@@ -1450,7 +1494,7 @@ def setup_cleanup_logging():
     cleanup_logger = logging.getLogger('cleanup')
     cleanup_logger.setLevel(logging.INFO)
     cleanup_logger.handlers.clear()
-    main_file_handler = RotatingFileHandler(
+    main_file_handler = SelfHealingRotatingFileHandler(
         LOG_PATH,
         maxBytes=10*1024*1024,
         backupCount=3,
@@ -1459,7 +1503,7 @@ def setup_cleanup_logging():
     main_file_handler.setLevel(logging.INFO)
     main_file_formatter = logging.Formatter('%(asctime)s - CLEANUP - %(levelname)s - %(message)s')
     main_file_handler.setFormatter(main_file_formatter)
-    cleanup_file_handler = RotatingFileHandler(
+    cleanup_file_handler = SelfHealingRotatingFileHandler(
         CLEANUP_LOG_PATH,
         maxBytes=5*1024*1024,
         backupCount=5,
@@ -1656,7 +1700,25 @@ def view_pending_deletions():
     import pending_deletions
     summary = pending_deletions.get_pending_deletions_summary()
     movie_summary = pending_deletions.get_pending_movies_summary()
-    return render_template('pending_deletions.html', summary=summary, movie_summary=movie_summary)
+    # Is cleanup currently live? If so, anything here was queued earlier (while
+    # a dry run was on) and won't be processed on its own (episeerr#106).
+    live_mode = False
+    try:
+        import media_processor
+        settings = media_processor.load_global_settings()
+        env_dry = os.getenv('CLEANUP_DRY_RUN', 'false').lower() == 'true'
+        # Per-rule dry_run only suppresses the "live" banner if EVERY rule is
+        # dry - one dry rule among several live ones still means some cleanup
+        # is deleting for real right now, which is exactly what the banner is
+        # meant to warn about (episeerr#106 follow-up: a single any() here
+        # hid the banner for the whole page even with other rules live).
+        rules = list(load_config().get('rules', {}).values())
+        all_rules_dry = bool(rules) and all(r.get('dry_run', False) for r in rules)
+        live_mode = not (settings.get('dry_run_mode', False) or env_dry or all_rules_dry)
+    except Exception:
+        pass
+    return render_template('pending_deletions.html', summary=summary,
+                           movie_summary=movie_summary, live_mode=live_mode)
 
 
 @app.route('/pending-deletions/approve', methods=['POST'])
@@ -5379,6 +5441,16 @@ def update_global_settings():
             'reconcile_enabled': bool(reconcile_enabled),
         }
 
+        # Remember when auto-assign was switched on so the fallback sweep
+        # (reconcile.check_unassigned_new_series, episeerr#110) only picks up
+        # series added after that, never shows left unassigned on purpose.
+        previous = media_processor.load_global_settings()
+        if settings['auto_assign_new_series']:
+            if previous.get('auto_assign_new_series') and previous.get('auto_assign_enabled_at'):
+                settings['auto_assign_enabled_at'] = previous['auto_assign_enabled_at']
+            else:
+                settings['auto_assign_enabled_at'] = datetime.now(timezone.utc).isoformat()
+
         media_processor.save_global_settings(settings)
         try:
             cleanup_scheduler.update_interval_from_settings()
@@ -6471,7 +6543,8 @@ def get_pending_requests():
             "count": len(pending_requests)
         })
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        app.logger.error(f"Error loading pending requests: {e}", exc_info=True)
+        return jsonify({"success": False, "error": f"Could not load pending requests ({type(e).__name__}: {e}) - check episeerr.log"}), 500
 
 @app.route('/api/delete-request/<request_id>', methods=['POST'])
 def delete_request(request_id):

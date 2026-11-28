@@ -23,6 +23,16 @@
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 
+    {% if live_mode %}
+    <div class="alert alert-info" role="alert">
+        <i class="fas fa-info-circle me-1"></i>
+        Dry run is off, so new cleanups delete files directly. The episodes below were queued
+        <strong>earlier, while a dry run was on</strong>. Turning dry run off doesn't process them -
+        approve or reject them here. Entries whose files are already gone are cleared automatically
+        on the next cleanup run.
+    </div>
+    {% endif %}
+
     <!-- Bulk Action Buttons -->
     <div class="mb-3">
         <button class="btn btn-success" onclick="approveSelected()">
