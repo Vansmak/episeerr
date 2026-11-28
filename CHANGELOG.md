@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.14
+
+### 🐛 Bug Fixes
+
+- **Auto-assign new series silently did nothing if the Sonarr SeriesAdd webhook never reached Episeerr** (not configured, "On Series Add" unticked, wrong URL, Episeerr down at add time) — the live webhook was the only path that ever applied it. New `reconcile.check_unassigned_new_series()` sweep, run at startup and every scheduler tick: any untagged, untracked Sonarr series added after auto-assign was turned on gets assigned to the default rule (full initial selection if added within the last 24h, otherwise just tracked — an old show someone's already watching doesn't get its monitoring reset). (episeerr#110, `reconcile.py`)
+- **That same sweep could misfire if Sonarr's tag list failed to fetch on a given tick** — a transient `/api/v3/tag` error returned an empty tag mapping indistinguishable from "this series genuinely has no tags," so an already-tagged series (e.g. `episeerr_select`, awaiting a manual rule choice, or a real rule tag not yet reflected in config) could get its downloads cancelled and reassigned to the default rule based on nothing but a flaky API call. The tag fetch now raises on failure like the series-list fetch beside it, aborting that tick entirely instead of guessing. (episeerr#110, `reconcile.py`)
+- **Pending Deletions entries queued while dry-run was on never cleared** — turning dry-run off didn't process them, and a later live delete of the same episode didn't remove the queue entry either, so the list just grew forever and looked like deletion wasn't working. Live deletes now drop matching queue entries, each cleanup run prunes entries whose file is gone or was replaced, and the page explains in live mode that anything still listed was queued earlier and needs approve/reject. (episeerr#106, `pending_deletions.py`, `episeerr.py`, `templates/pending_deletions.html`)
+- **Deleted log files stayed empty until restart** — file handlers kept writing to the open (deleted) file descriptor, invisible at its old path. New `log_handlers.py` reopens the file (recreating the `logs` folder if needed) once the path no longer matches what's open. (episeerr#111, `log_handlers.py`, `logging_config.py`, `Dockerfile`)
+- **A `TMDB_API_KEY` saved in Settings after startup was ignored until restart** — it was only ever read once at import, so every TMDB-backed feature (including Pending Season/Episode Selections) kept failing against a stale or missing key. Now re-read from the settings DB, throttled to once per 10s. Pending-requests failures also now surface the real exception/HTTP status instead of a bare "Unknown error". (episeerr#73, `media_processor.py`, `episeerr.py`)
+
 ## v4.0.13
 
 ### 🐛 Bug Fixes

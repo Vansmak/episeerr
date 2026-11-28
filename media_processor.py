@@ -3,7 +3,7 @@ import re
 import sys
 import requests
 import logging
-from logging.handlers import RotatingFileHandler
+from log_handlers import SelfHealingRotatingFileHandler, SelfHealingFileHandler
 import json
 import shutil
 import time
@@ -78,7 +78,7 @@ missing_logger.handlers.clear()  # Clear any inherited handlers
 missing_logger.propagate = False  # Prevent propagation to root logger
 
 # Add file handler for missing logger
-missing_handler = logging.FileHandler(MISSING_LOG_PATH)  # /app/logs/missing.log
+missing_handler = SelfHealingFileHandler(MISSING_LOG_PATH)  # /app/logs/missing.log
 missing_handler.setLevel(logging.INFO)
 missing_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 missing_logger.addHandler(missing_handler)
@@ -101,7 +101,7 @@ def setup_cleanup_logging():
     cleanup_logger.propagate = False  # Prevent propagation to root logger
     
     # File handler for cleanup-specific log
-    cleanup_file_handler = RotatingFileHandler(
+    cleanup_file_handler = SelfHealingRotatingFileHandler(
         CLEANUP_LOG_PATH,  # /app/logs/cleanup.log
         maxBytes=5*1024*1024,  # 5 MB
         backupCount=5,
@@ -112,7 +112,7 @@ def setup_cleanup_logging():
     cleanup_file_handler.setFormatter(cleanup_formatter)
     
     # File handler for main app log (with CLEANUP prefix)
-    main_file_handler = RotatingFileHandler(
+    main_file_handler = SelfHealingRotatingFileHandler(
         LOG_PATH,  # /app/logs/app.log
         maxBytes=10*1024*1024,  # 10 MB
         backupCount=3,
@@ -2458,6 +2458,21 @@ def _get_episode_file_sizes(series_id):
         return {}
 
 
+def _drop_deleted_from_pending(episodes, deleted_file_ids):
+    """A live delete makes any queued (dry-run era) entry for the same episode
+    stale - remove it so the Pending Deletions page doesn't keep showing it
+    (episeerr#106)."""
+    if not deleted_file_ids:
+        return
+    try:
+        from pending_deletions import remove_episodes_from_pending
+        remove_episodes_from_pending(
+            ep.get('id') for ep in episodes if ep.get('episodeFileId') in deleted_file_ids
+        )
+    except Exception as e:
+        logger.warning(f"Could not update pending deletions after live delete: {e}")
+
+
 def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep Rule", rule_dry_run=False, rule_name=None, force=False):
     """
     Direct deletion for Keep rule - real-time webhook cleanup.
@@ -2527,6 +2542,7 @@ def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep 
     headers = {'X-Api-Key': SONARR_API_KEY}
     successful_deletes = 0
     failed_deletes = []
+    deleted_file_ids = set()
 
     for episode_file_id in episode_file_ids:
         try:
@@ -2534,11 +2550,13 @@ def delete_episodes_immediately(episodes, series_id, series_title, reason="Keep 
             response = http.delete(url, headers=headers)
             response.raise_for_status()
             successful_deletes += 1
+            deleted_file_ids.add(episode_file_id)
             logger.info(f"✅ Deleted episode file ID: {episode_file_id}")
         except Exception as err:
             failed_deletes.append(episode_file_id)
             logger.error(f"❌ Failed to delete episode file {episode_file_id}: {err}")
 
+    _drop_deleted_from_pending(episodes, deleted_file_ids)
     logger.info(f"📊 Keep rule deletion: {successful_deletes} successful, {len(failed_deletes)} failed")
     if failed_deletes:
         logger.error(f"❌ Failed deletes: {failed_deletes}")
@@ -2623,6 +2641,7 @@ def delete_episodes_in_sonarr_with_logging(
     headers = {'X-Api-Key': SONARR_API_KEY}
     successful_deletes = 0
     failed_deletes = []
+    deleted_file_ids = set()
 
     for episode_file_id in episode_file_ids:
         try:
@@ -2630,11 +2649,13 @@ def delete_episodes_in_sonarr_with_logging(
             response = http.delete(url, headers=headers)
             response.raise_for_status()
             successful_deletes += 1
+            deleted_file_ids.add(episode_file_id)
             cleanup_logger.info(f"✅ Deleted episode file ID: {episode_file_id}")
         except Exception as err:
             failed_deletes.append(episode_file_id)
             cleanup_logger.error(f"❌ Failed to delete episode file {episode_file_id}: {err}")
 
+    _drop_deleted_from_pending(episodes, deleted_file_ids)
     cleanup_logger.info(f"📊 Deletion summary: {successful_deletes} successful, {len(failed_deletes)} failed")
     if failed_deletes:
         cleanup_logger.error(f"❌ Failed deletes: {failed_deletes}")
@@ -3716,7 +3737,17 @@ def run_unified_cleanup():
         
         global_settings = load_global_settings()
         storage_min_gb = global_settings.get('global_storage_min_gb')
-        
+
+        # Clear queue entries whose files are already gone (episeerr#106) -
+        # before the storage gate, so it happens even when no cleanup is needed.
+        try:
+            from pending_deletions import prune_stale_pending_deletions
+            pruned = prune_stale_pending_deletions(fetch_all_episodes)
+            if pruned:
+                cleanup_logger.info(f"🧹 Removed {pruned} stale pending deletion(s) - files already gone")
+        except Exception as prune_err:
+            cleanup_logger.warning(f"Could not prune pending deletions: {prune_err}")
+
         # Check storage gate
         if storage_min_gb:
             # Storage gate is SET - check if we need to clean

@@ -34,6 +34,7 @@ COPY dashboard.py .
 COPY webhooks.py .
 COPY settings_db.py .
 COPY logging_config.py .
+COPY log_handlers.py .
 COPY reconcile.py .
 COPY pending_watch_events.py .
 COPY integrations/ integrations/
