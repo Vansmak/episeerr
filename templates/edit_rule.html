@@ -6,8 +6,24 @@
 <div class="row justify-content-center">
     <div class="col-md-10">
         <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-edit me-2"></i>Edit Rule: {{ rule_name.replace('_', ' ').title() }}</h5>
+            <div class="card-header d-flex align-items-center flex-wrap gap-2">
+                <h5 class="mb-0">
+                    <i class="fas fa-edit me-2"></i>Edit Rule:
+                    <span id="ruleNameDisplay">{{ rule_name.replace('_', ' ').title() }}</span>
+                </h5>
+                {% if rule_name.lower() not in ['select', 'default'] %}
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="renameToggleBtn"
+                        onclick="toggleRenameRule()" title="Rename this rule">
+                    <i class="fas fa-pencil-alt"></i>
+                </button>
+                <form method="POST" action="/rename-rule/{{ rule_name }}"
+                      class="d-none align-items-center gap-2" id="renameRuleForm">
+                    <input type="text" class="form-control form-control-sm" name="new_name"
+                           id="newRuleNameInput" value="{{ rule_name }}" style="max-width: 220px;" required>
+                    <button type="submit" class="btn btn-sm btn-primary">Save</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleRenameRule()">Cancel</button>
+                </form>
+                {% endif %}
             </div>
             <div class="card-body">
                 <form method="POST">
@@ -305,6 +321,31 @@
 
 {% block extra_js %}
 <script>
+// Rename rule (episeerr#115) - inline, in place of the Rules table's old
+// bare tag-icon-button + browser prompt(), which users found out of place
+function toggleRenameRule() {
+    const display = document.getElementById('ruleNameDisplay');
+    const toggleBtn = document.getElementById('renameToggleBtn');
+    const form = document.getElementById('renameRuleForm');
+    const input = document.getElementById('newRuleNameInput');
+    if (!form) return;
+
+    const isOpen = !form.classList.contains('d-none');
+    if (isOpen) {
+        form.classList.add('d-none');
+        form.classList.remove('d-flex');
+        display.classList.remove('d-none');
+        toggleBtn.classList.remove('d-none');
+    } else {
+        display.classList.add('d-none');
+        toggleBtn.classList.add('d-none');
+        form.classList.remove('d-none');
+        form.classList.add('d-flex');
+        input.focus();
+        input.select();
+    }
+}
+
 function updateExplanation(type, count, targetId) {
     const explanation = document.getElementById(targetId);
     if (!explanation) return;
