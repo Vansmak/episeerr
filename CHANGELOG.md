@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.17
+
+### ✨ New Features
+
+- **Rules page now shows each rule's most recent Get/download action** — "Got S2E6 for Stick · 2h ago" shown inline per rule, reusing the existing series→rule mapping and `searches.json` activity log (no new storage). First step toward Rules being the visible, living showcase of what Episeerr actually does, rather than a dry management table. Scoped to Gets only for now. (`activity_storage.py`, `episeerr.py`, `templates/rules.html`)
+
 ## v4.0.16
 
 ### 🐛 Bug Fixes

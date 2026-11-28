@@ -23,6 +23,7 @@
                     <th>Rule Name</th>
                     <th>Description</th>
                     <th>Series Count</th>
+                    <th>Last Activity</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -46,6 +47,17 @@
                             {% endif %}
                         </td>
                         <td>
+                            {% set last = last_action_per_rule.get(rule_name) if last_action_per_rule else None %}
+                            {% if last %}
+                            <small class="text-muted">
+                                <i class="fas fa-download me-1"></i>Got S{{ last.season }}E{{ last.episode }} for {{ last.series_title }}
+                                <span class="text-body-tertiary">&middot; {{ last.time_ago }}</span>
+                            </small>
+                            {% else %}
+                            <small class="text-muted">&mdash;</small>
+                            {% endif %}
+                        </td>
+                        <td>
                             <div class="btn-group btn-group-sm">
                                 <a href="/edit-rule/{{ rule_name }}" class="btn btn-outline-primary">
                                     <i class="fas fa-edit"></i> Edit
@@ -63,7 +75,7 @@
                     {% endfor %}
                 {% else %}
                     <tr>
-                        <td colspan="4" class="text-center py-5">
+                        <td colspan="5" class="text-center py-5">
                             <p class="text-muted">No rules configured</p>
                         </td>
                     </tr>
@@ -92,7 +104,15 @@
                     {% if rule_details.description %}
                     <p class="card-text text-muted small mb-3">{{ rule_details.description }}</p>
                     {% endif %}
-                    
+
+                    {% set last = last_action_per_rule.get(rule_name) if last_action_per_rule else None %}
+                    {% if last %}
+                    <p class="card-text text-muted small mb-3">
+                        <i class="fas fa-download me-1"></i>Got S{{ last.season }}E{{ last.episode }} for {{ last.series_title }}
+                        <span class="text-body-tertiary">&middot; {{ last.time_ago }}</span>
+                    </p>
+                    {% endif %}
+
                     <div class="d-flex gap-2">
                         <a href="/edit-rule/{{ rule_name }}" class="btn btn-outline-primary btn-sm flex-fill">
                             <i class="fas fa-edit"></i> Edit

@@ -1,4 +1,4 @@
-__version__ = "4.0.16"
+__version__ = "4.0.17"
 from flask import Flask, render_template, request, redirect, url_for, jsonify, session
 import subprocess
 import os
@@ -1556,11 +1556,15 @@ def rules_page():
         series['assigned_rule'] = rules_mapping.get(str(series['id']), 'None')
     
     all_series.sort(key=lambda x: x.get('title', '').lower())
-    
-    return render_template('rules.html', 
+
+    import activity_storage
+    last_action_per_rule = activity_storage.get_last_search_per_rule(config)
+
+    return render_template('rules.html',
                          config=config,
                          all_series=all_series,
-                         SONARR_URL=sonarr_url)
+                         SONARR_URL=sonarr_url,
+                         last_action_per_rule=last_action_per_rule)
 # Add this route to provide rules list for the sidebar
 @app.route('/api/rules-list')
 def api_rules_list():
